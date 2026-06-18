@@ -1,0 +1,48 @@
+{
+  "_metadata": {
+    "major_version": 1,
+    "minor_version": 1
+  },
+  "display_information": {
+    "name": "Gemini AI Agent Backend",
+    "description": "Production-ready serverless AI Agent powered by Express and Gemini 2.5 Flash.",
+    "background_color": "#0d1117",
+    "long_description": "A secure, serverless Slack AI Agent utilizing an Express and Node.js architecture optimized for Google Cloud Run. This backend integrates the official high-performance Gemini 2.5-flash SDK, resolves Slack's 3-second rapid response rules instantly, prevents bot retry storms/loop feedback, and validates cryptographic signatures securely."
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "Gemini Agent",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mention",
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "chat:write"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://ais-pre-kawwjfy2r3vvrrcymajnyi-15858572775.us-east1.run.app/api/slack/events",
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}
