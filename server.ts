@@ -65,29 +65,61 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
+// Authentication middleware for administrative views (Option A: Password protection)
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD?.trim();
+
+const requireDashboardAuth = (req: any, res: any, next: any) => {
+  if (!DASHBOARD_PASSWORD) {
+    // If DASHBOARD_PASSWORD is not set in env, allow open access
+    return next();
+  }
+  
+  const authHeader = req.headers['authorization'];
+  let receivedPassword = '';
+  
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    receivedPassword = authHeader.substring(7).trim();
+  } else {
+    const headerPass = req.headers['x-dashboard-password'];
+    if (headerPass) {
+       receivedPassword = (Array.isArray(headerPass) ? headerPass[0] : headerPass).trim();
+    }
+  }
+
+  if (receivedPassword === DASHBOARD_PASSWORD) {
+    return next();
+  }
+
+  return res.status(401).json({ 
+    error: 'Unauthorized',
+    dashboardPasswordRequired: true
+  });
+};
+
 // API Status endpoint
-app.get('/api/status', (req, res) => {
+app.get('/api/status', requireDashboardAuth, (req, res) => {
   res.json({
     geminiApiKeyConfigured: !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'),
     slackBotTokenConfigured: !!(process.env.SLACK_BOT_TOKEN && process.env.SLACK_BOT_TOKEN !== 'MY_SLACK_BOT_TOKEN'),
     slackSigningSecretConfigured: !!(process.env.SLACK_SIGNING_SECRET && process.env.SLACK_SIGNING_SECRET !== 'MY_SIGNING_SECRET'),
-    appUrl: process.env.APP_URL || 'http://localhost:3000'
+    appUrl: process.env.APP_URL || 'http://localhost:3000',
+    dashboardPasswordRequired: !!DASHBOARD_PASSWORD
   });
 });
 
 // Retrieve latest logs
-app.get('/api/logs', (req, res) => {
+app.get('/api/logs', requireDashboardAuth, (req, res) => {
   res.json({ logs });
 });
 
 // Clear logs
-app.post('/api/logs/clear', (req, res) => {
+app.post('/api/logs/clear', requireDashboardAuth, (req, res) => {
   logs.length = 0;
   res.json({ success: true });
 });
 
 // Webhook simulation handler
-app.post('/api/slack/test', async (req: any, res: any) => {
+app.post('/api/slack/test', requireDashboardAuth, async (req: any, res: any) => {
   try {
     const { text, channel, user, generateInvalidSignature, timestampOffsetSeconds } = req.body;
     

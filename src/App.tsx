@@ -86,6 +86,12 @@ export default function App() {
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [clearingLogs, setClearingLogs] = useState(false);
 
+  // Authenticated gateway states
+  const [dashboardPassword, setDashboardPassword] = useState<string>(() => localStorage.getItem('dashboard_password') || '');
+  const [authRequired, setAuthRequired] = useState<boolean>(false);
+  const [passwordInput, setPasswordInput] = useState<string>('');
+  const [authError, setAuthError] = useState<string>('');
+
   // Simulator values
   const [simText, setSimText] = useState('Draft an elevator pitch for a serverless startup using the 5 Whys framework.');
   const [simChannel, setSimChannel] = useState('C061EG9SL');
@@ -102,14 +108,35 @@ export default function App() {
   } | null>(null);
 
   // Fetch API Status
-  const fetchStatus = async () => {
+  const fetchStatus = async (currentPassword?: string) => {
     setLoadingStatus(true);
+    const passToUse = currentPassword !== undefined ? currentPassword : dashboardPassword;
     try {
-      const res = await fetch('/api/status');
+      const headers: HeadersInit = {};
+      if (passToUse) {
+        headers['Authorization'] = `Bearer ${passToUse}`;
+      }
+      const res = await fetch('/api/status', { headers });
+      
+      if (res.status === 401) {
+        setAuthRequired(true);
+        setStatus(null);
+        if (currentPassword !== undefined) {
+          setAuthError('Invalid password. Please check your configuration and try again.');
+        }
+        return;
+      }
+
       const text = await res.text();
       try {
         const data = JSON.parse(text);
+        setAuthRequired(false);
         setStatus(data);
+        if (currentPassword !== undefined) {
+          setDashboardPassword(currentPassword);
+          localStorage.setItem('dashboard_password', currentPassword);
+          setAuthError('');
+        }
       } catch (e) {
         console.warn('API restarting, received non-JSON status');
       }
@@ -123,7 +150,17 @@ export default function App() {
   // Fetch logs
   const fetchLogs = async () => {
     try {
-      const res = await fetch('/api/logs');
+      const headers: HeadersInit = {};
+      if (dashboardPassword) {
+        headers['Authorization'] = `Bearer ${dashboardPassword}`;
+      }
+      const res = await fetch('/api/logs', { headers });
+      
+      if (res.status === 401) {
+        setAuthRequired(true);
+        return;
+      }
+
       const text = await res.text();
       try {
         const data = JSON.parse(text);
@@ -142,7 +179,19 @@ export default function App() {
   const handleClearLogs = async () => {
     setClearingLogs(true);
     try {
-      await fetch('/api/logs/clear', { method: 'POST' });
+      const headers: HeadersInit = {};
+      if (dashboardPassword) {
+        headers['Authorization'] = `Bearer ${dashboardPassword}`;
+      }
+      const res = await fetch('/api/logs/clear', { 
+        method: 'POST',
+        headers 
+      });
+      if (res.status === 401) {
+        alert('Unauthorized action. Please reauthenticate.');
+        setAuthRequired(true);
+        return;
+      }
       setLogs([]);
       setSelectedLog(null);
     } catch (e) {
@@ -157,9 +206,13 @@ export default function App() {
     setSimProgress('sending');
     setSimResult(null);
     try {
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
+      if (dashboardPassword) {
+        headers['Authorization'] = `Bearer ${dashboardPassword}`;
+      }
       const res = await fetch('/api/slack/test', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           text: simText,
           channel: simChannel,
@@ -168,6 +221,13 @@ export default function App() {
           timestampOffsetSeconds: simReplayAttack ? -360 : 0, // -360 seconds (6 minutes) triggers replay blocker
         }),
       });
+
+      if (res.status === 401) {
+        alert('Unauthorized simulator access. Please reauthenticate.');
+        setAuthRequired(true);
+        setSimProgress('fail');
+        return;
+      }
 
       if (res.ok) {
         const data = await res.json();
@@ -202,7 +262,90 @@ export default function App() {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [dashboardPassword]);
+
+  if (authRequired) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center font-sans p-6">
+        <div className="max-w-md w-full bg-slate-950 border border-slate-800 rounded-2xl p-8 shadow-2xl relative overflow-hidden">
+          {/* Decorative glowing backdrops */}
+          <div className="absolute top-0 left-1/4 w-32 h-32 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute bottom-0 right-1/4 w-32 h-32 bg-pink-500/5 rounded-full blur-3xl pointer-events-none" />
+
+          <div className="flex flex-col items-center text-center relative z-10 font-sans">
+            <div className="p-4 bg-indigo-500/10 text-indigo-400 rounded-full mb-5 border border-indigo-500/20 shadow-inner">
+              <Lock className="w-8 h-8" id="auth-lock-icon" />
+            </div>
+
+            <h1 className="text-xl font-bold tracking-tight text-white mb-2 font-sans">
+              Dashboard is Secured
+            </h1>
+            <p className="text-xs text-slate-400 max-w-sm mb-6 leading-relaxed">
+              Administrative actions, log inspections, and event simulators are password protected. Please authenticate to gain dashboard access.
+            </p>
+
+            <form 
+              onSubmit={(e) => {
+                e.preventDefault();
+                setAuthError('');
+                fetchStatus(passwordInput);
+              }}
+              className="w-full space-y-4 text-left"
+            >
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-1.5 font-sans">
+                  Dashboard Access Password
+                </label>
+                <input 
+                  type="password"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="Enter your DASHBOARD_PASSWORD"
+                  className="w-full bg-slate-900 border border-slate-800 text-white rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 font-mono transition"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              {authError && (
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-sans">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loadingStatus}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition shadow-lg shadow-indigo-600/10 hover:shadow-indigo-600/25 flex items-center justify-center gap-2 text-sm"
+              >
+                {loadingStatus ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin font-sans" />
+                    <span>Verifying...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Unlock Dashboard</span>
+                    <ArrowRight className="w-4 h-4 font-sans" />
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="mt-8 border-t border-slate-800/80 pt-5 w-full text-left font-sans">
+              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                <Settings className="w-3.5 h-3.5" /> Setting Up Credentials
+              </h4>
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                Configure lock security by adding the <code className="text-slate-300 font-mono bg-slate-900 px-1 py-0.5 rounded text-[10px]">DASHBOARD_PASSWORD</code> variable to your backend environment secrets. If left unconfigured, public access is permitted.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans transition-colors duration-200">
@@ -229,8 +372,8 @@ export default function App() {
             {/* Gemini Check */}
             <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium ${
               status?.geminiApiKeyConfigured 
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
-                : 'bg-amber-50 text-amber-700 border-amber-200'
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+              : 'bg-amber-50 text-amber-700 border-amber-200'
             }`}>
               <div className={`w-1.5 h-1.5 rounded-full ${status?.geminiApiKeyConfigured ? 'bg-emerald-500' : 'bg-amber-400'}`} />
               <span className="font-mono">GEMINI_API_KEY</span>
@@ -239,8 +382,8 @@ export default function App() {
             {/* Slack Token Check */}
             <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium ${
               status?.slackBotTokenConfigured 
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
-                : 'bg-amber-50 text-amber-700 border-amber-200 font-mono'
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+              : 'bg-amber-50 text-amber-700 border-amber-200 font-mono'
             }`}>
               <div className={`w-1.5 h-1.5 rounded-full ${status?.slackBotTokenConfigured ? 'bg-emerald-500' : 'bg-amber-400'}`} />
               <span className="font-mono">SLACK_BOT_TOKEN</span>
@@ -249,8 +392,8 @@ export default function App() {
             {/* Slack Signing Secret Check */}
             <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-medium ${
               status?.slackSigningSecretConfigured 
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
-                : 'bg-slate-50 text-slate-700 border-slate-200'
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+              : 'bg-slate-50 text-slate-700 border-slate-200'
             }`}>
               <div className={`w-1.5 h-1.5 rounded-full ${status?.slackSigningSecretConfigured ? 'bg-emerald-500' : 'bg-slate-400'}`} />
               <span className="font-mono">SLACK_SIGNING_SECRET</span>
@@ -258,14 +401,31 @@ export default function App() {
 
             {/* Refresh Status */}
             <button 
-              onClick={fetchStatus} 
+              onClick={() => fetchStatus()} 
               disabled={loadingStatus}
-              className="p-1.5 text-slate-400 hover:text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition-all"
+              className="p-1.5 text-slate-400 hover:text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition-all flex items-center justify-center"
               title="Refresh configuration status"
               id="refresh-secrets-status"
             >
               <RefreshCw className={`w-4 h-4 ${loadingStatus ? 'animate-spin text-slate-600' : ''}`} />
             </button>
+
+            {/* Lock Session */}
+            {dashboardPassword && (
+              <button 
+                onClick={() => {
+                  setDashboardPassword('');
+                  localStorage.removeItem('dashboard_password');
+                  setAuthRequired(true);
+                  setStatus(null);
+                }}
+                className="p-1.5 text-rose-500 hover:text-white hover:bg-rose-500 bg-rose-50 border border-rose-200 rounded-lg transition-all flex items-center justify-center"
+                title="Lock Dashboard Session"
+                id="lock-dashboard-session"
+              >
+                <Lock className="w-4 h-4" />
+              </button>
+            )}
           </div>
 
         </div>
