@@ -84,10 +84,17 @@ export default function App() {
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [logs, setLogs] = useState<SlackEventLog[]>([]);
   const [selectedLog, setSelectedLog] = useState<SlackEventLog | null>(null);
-  const [activeTab, setActiveTab] = useState<'simulator' | 'guide'>('simulator');
+  const [activeTab, setActiveTab] = useState<'simulator' | 'guide' | 'runs'>('simulator');
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [clearingLogs, setClearingLogs] = useState(false);
   const [updatingModel, setUpdatingModel] = useState(false);
+
+  // Agent Runs States
+  const [runs, setRuns] = useState<any[]>([]);
+  const [loadingRuns, setLoadingRuns] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [runTrace, setRunTrace] = useState<any>(null);
+  const [loadingTrace, setLoadingTrace] = useState(false);
 
   // Authenticated gateway states
   const [dashboardPassword, setDashboardPassword] = useState<string>(() => localStorage.getItem('dashboard_password') || '');
@@ -286,6 +293,61 @@ export default function App() {
       setSimProgress('fail');
     }
   };
+
+  // Fetch Agent Runs
+  const fetchRuns = async () => {
+    setLoadingRuns(true);
+    try {
+      const headers: HeadersInit = {};
+      if (dashboardPassword) {
+        headers['Authorization'] = `Bearer ${dashboardPassword}`;
+      }
+      const res = await fetch('/api/agent/runs', { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setRuns(data);
+      }
+    } catch (e) {
+      console.error('Error fetching runs:', e);
+    } finally {
+      setLoadingRuns(false);
+    }
+  };
+
+  const fetchRunTrace = async (id: string) => {
+    setLoadingTrace(true);
+    try {
+      const headers: HeadersInit = {};
+      if (dashboardPassword) {
+        headers['Authorization'] = `Bearer ${dashboardPassword}`;
+      }
+      const res = await fetch(`/api/agent/runs/${id}`, { headers });
+      if (res.ok) {
+        const data = await res.json();
+        setRunTrace(data);
+      }
+    } catch (e) {
+      console.error('Error fetching run trace:', e);
+    } finally {
+      setLoadingTrace(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'runs') {
+      fetchRuns();
+      const interval = setInterval(fetchRuns, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [activeTab, dashboardPassword]);
+
+  useEffect(() => {
+    if (selectedRunId) {
+      fetchRunTrace(selectedRunId);
+    } else {
+      setRunTrace(null);
+    }
+  }, [selectedRunId, dashboardPassword]);
 
   // Poll status and logs
   useEffect(() => {
@@ -497,6 +559,18 @@ export default function App() {
             >
               <BookOpen className="w-4 h-4" />
               Slack Production Guide
+            </button>
+            <button
+              onClick={() => setActiveTab('runs')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 text-sm font-medium rounded-lg transition-all ${
+                activeTab === 'runs' 
+                  ? 'bg-slate-900 text-white shadow-xs' 
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+              id="tab-runs"
+            >
+              <Activity className="w-4 h-4" />
+              Agent Runs
             </button>
           </div>
 
@@ -883,6 +957,110 @@ export default function App() {
                 </div>
               </div>
 
+            </div>
+          )}
+
+          {/* TAB 3: Agent Runs */}
+          {activeTab === 'runs' && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col transition-all overflow-hidden h-[calc(100vh-160px)]">
+              <div className="p-4 border-b border-slate-100 flex items-center justify-between shrink-0 bg-slate-50">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-slate-500" />
+                  <h2 className="text-sm font-semibold text-slate-800">Agent Runs / Database Status</h2>
+                </div>
+                {!status?.databaseConfigured ? (
+                   <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-rose-100 text-rose-700">No SQL DB Connected</span>
+                ) : !status?.databaseAvailable ? (
+                   <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-amber-100 text-amber-700">DB Offline</span>
+                ) : (
+                   <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-emerald-100 text-emerald-700 border border-emerald-200/50 flex gap-1 items-center">
+                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse border border-emerald-400"></span> DB Connected
+                   </span>
+                )}
+              </div>
+              
+              {!status?.databaseConfigured && (
+                <div className="p-8 text-center text-slate-500">
+                  SQL database is not configured. Start the project database by setting <code>DATABASE_URL</code> or <code>CLOUD_SQL_CONNECTION_NAME</code> in the secrets panel.
+                </div>
+              )}
+
+              {status?.databaseConfigured && status?.databaseAvailable && (
+                <div className="flex-1 flex overflow-hidden">
+                  {/* Left list */}
+                  <div className="w-64 border-r border-slate-100 flex flex-col bg-white overflow-y-auto">
+                    {loadingRuns && runs.length === 0 ? (
+                      <div className="p-4 text-xs text-slate-400 text-center">Loading runs...</div>
+                    ) : runs.length === 0 ? (
+                      <div className="p-4 text-xs text-slate-400 text-center">No runs recorded yet.</div>
+                    ) : (
+                      runs.map((r, i) => (
+                        <button 
+                          key={r.id || i}
+                          onClick={() => setSelectedRunId(r.id)}
+                          className={`p-3 text-left border-b border-slate-50 hover:bg-slate-50 transition ${selectedRunId === r.id ? 'bg-indigo-50/50 border-indigo-100' : ''}`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold font-mono text-slate-700">Run {r.id.substring(0, 8)}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold
+                              ${r.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 
+                                r.status === 'failed' ? 'bg-rose-100 text-rose-700' : 
+                                'bg-indigo-100 text-indigo-700'}
+                            `}>
+                              {r.status}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-1 truncate">
+                            {new Date(r.created_at).toLocaleString()}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  {/* Right trace view */}
+                  <div className="flex-1 overflow-y-auto p-4 bg-slate-50/50 pb-8">
+                    {selectedRunId ? (
+                      loadingTrace ? (
+                        <div className="text-xs text-center text-slate-500 pt-8">Loading trace for {selectedRunId.substring(0, 8)}...</div>
+                      ) : runTrace ? (
+                        <div className="space-y-4">
+                          <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200">
+                             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Goal Context</h3>
+                             <div className="text-sm font-medium text-slate-800">{runTrace.goal?.title || 'Unknown Goal'}</div>
+                             <div className="text-xs text-slate-500 mt-1 bg-slate-50 p-2 rounded whitespace-pre-wrap">{runTrace.goal?.original_instruction || 'No original instruction'}</div>
+                          </div>
+
+                          {runTrace.auditEvents?.length > 0 && (
+                            <div>
+                               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-6 mb-3 ml-1">Audit Events</h3>
+                               <div className="space-y-2">
+                                 {runTrace.auditEvents.map((evt: any, i: number) => (
+                                   <div key={i} className="bg-white p-3 border border-slate-100 rounded shadow-sm text-xs">
+                                     <div className="flex justify-between items-center mb-1 border-b border-slate-50 pb-1">
+                                       <span className="font-bold text-slate-700">{evt.type}</span>
+                                       <span className="text-slate-400 font-mono text-[10px]">{new Date(evt.created_at).toLocaleTimeString()}</span>
+                                     </div>
+                                     <div className="text-slate-600 font-medium">{evt.summary}</div>
+                                     <pre className="mt-2 text-[10px] text-slate-500 bg-slate-50 p-1.5 rounded overflow-x-auto whitespace-pre-wrap max-h-32">
+                                       {JSON.stringify(evt.payload, null, 2)}
+                                     </pre>
+                                   </div>
+                                 ))}
+                               </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-center text-rose-500 pt-8">Failed to load trace</div>
+                      )
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-xs text-slate-400 font-medium pb-12">
+                        Select a run on the left to view database trace
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

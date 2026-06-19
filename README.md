@@ -30,7 +30,10 @@ Every incoming message is analyzed in real-time by the active model engine to de
 * `DATA_ANALYTICS`: SQL queries, metric dumps, or log summaries.
 * `ADMIN_ALERT`: System breaches, security concerns, or failovers.
 
-### 4. 🧵 Stateful Conversation Thread Memory
+### 4. 🗄️ Durable SQL Agent Core Extensibility
+If configured with `CLOUD_SQL_CONNECTION_NAME` or `DATABASE_URL`, the backend automatically shifts from lightweight memory cache bridging to a durable relational agent data store. Task-like intents (`TASKS_AND_TODO`, `ADMIN_ALERT`, `DATA_ANALYTICS`) trigger strict schemas that persist structured **Agent Goals**, execution traces, step logs, tool invocations, and workspace-scoped memory buffers securely.
+
+### 5. 🧵 Stateful Conversation Thread Memory
 Maintains up to the last 20 conversational turns per unique thread context (dynamically keyed on channel/thread hash values) so interactions feel natural, context-aware, and continuous.
 
 ---
@@ -39,6 +42,7 @@ Maintains up to the last 20 conversational turns per unique thread context (dyna
 
 The companion management UI gives you absolute control over your live agentic ecosystem:
 - **Model Control Panel**: Toggle live model switches on the fly.
+- **Agent Runs & SQL Trace**: Navigate and drill-down into durable agent goal logs inside an integrated trace UI (if SQL is mounted).
 - **Cognition Latency Tracking**: View granular millisecond statistics for each background task.
 - **Pipeline Event Logs**: Track cryptographic signature states, resolved conversation keys, and dynamic class confidence rates.
 - **Simulator Gateway**: Test agent responses through a mock environment before publishing to a live Slack channel.

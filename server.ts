@@ -6,6 +6,7 @@ import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { router as apiRoutes } from "./src/server/routes.js";
+import { runMigrations } from "./src/server/storage/migrations.js";
 
 dotenv.config();
 
@@ -51,6 +52,17 @@ app.use('/api', apiRoutes);
 
 // Configure Vite middleware or static paths based on environment
 async function initServer() {
+  try {
+    if (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) {
+      await runMigrations();
+    } else {
+      console.log('No SQL configuration found (DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST). Skipping database migrations.');
+    }
+  } catch (err) {
+    console.error('Failed to run database migrations:', err);
+    // Continuing without crashing so simulation/API status endpoints remain active with DB unavailable status.
+  }
+
   if (process.env.NODE_ENV !== "production") {
     console.log(`[Vite Dev] Hosting express full-stack server with Vite middleware mode...`);
     const vite = await createViteServer({

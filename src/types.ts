@@ -25,6 +25,7 @@ export interface SlackEventLog {
   processingTimeMs?: number; // Background task latency recording
   threadKey?: string;        // Resolved thread identification key
   threadHistoryCount?: number; // Size of thread history recalled
+  runId?: string;            // Agent durable run id
 }
 
 export interface ThreadMessage {

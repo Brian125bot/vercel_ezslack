@@ -5,15 +5,23 @@ import { logs, selectedModel, setSelectedModel, processedEventIds, processedMess
 import { classifyIntent } from './ai.js';
 import { GoogleGenAI } from '@google/genai';
 import { SlackEventLog } from '../types.js';
+import { agentStore } from './storage/agentStore.js';
+import { isDbAvailable } from './storage/db.js';
+import { runAgentPipeline } from './agent/orchestrator.js';
 
 export const router = express.Router();
 
-router.get('/status', requireDashboardAuth, (req, res) => {
+router.get('/status', requireDashboardAuth, async (req, res) => {
   const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD?.trim();
+  const dbConfigured = !!(process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST);
+  const dbAvailable = dbConfigured ? await isDbAvailable() : false;
+
   res.json({
     geminiApiKeyConfigured: !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'),
     slackBotTokenConfigured: !!(process.env.SLACK_BOT_TOKEN && process.env.SLACK_BOT_TOKEN !== 'MY_SLACK_BOT_TOKEN'),
     slackSigningSecretConfigured: !!(process.env.SLACK_SIGNING_SECRET && process.env.SLACK_SIGNING_SECRET !== 'MY_SIGNING_SECRET'),
+    databaseConfigured: dbConfigured,
+    databaseAvailable: dbAvailable,
     appUrl: process.env.APP_URL || 'http://localhost:3000',
     dashboardPasswordRequired: !!DASHBOARD_PASSWORD,
     selectedModel,
@@ -45,6 +53,54 @@ router.get('/logs', requireDashboardAuth, (req, res) => {
 router.post('/logs/clear', requireDashboardAuth, (req, res) => {
   logs.length = 0;
   res.json({ success: true });
+});
+
+router.get('/agent/runs', requireDashboardAuth, async (req, res) => {
+  try {
+    const runs = await agentStore.listRuns({
+      limit: Number(req.query.limit) || 50,
+      offset: Number(req.query.offset) || 0,
+      status: req.query.status as string | undefined
+    });
+    res.json(runs);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/agent/runs/:id', requireDashboardAuth, async (req, res) => {
+  try {
+    const trace = await agentStore.getRunTrace(req.params.id);
+    res.json(trace);
+  } catch (error: any) {
+    if (error.message.includes('not found')) return res.status(404).json({ error: error.message });
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/agent/goals/:id', requireDashboardAuth, async (req, res) => {
+  try {
+    const goal = await agentStore.getGoal(req.params.id);
+    res.json(goal);
+  } catch (error: any) {
+    if (error.message.includes('not found')) return res.status(404).json({ error: error.message });
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/agent/memory', requireDashboardAuth, async (req, res) => {
+  try {
+    if (!req.query.workspace_id) {
+       return res.status(400).json({ error: 'workspace_id query parameteter is required' });
+    }
+    const mem = await agentStore.searchMemory({
+      workspace_id: req.query.workspace_id as string,
+      limit: Number(req.query.limit) || 50
+    });
+    res.json(mem);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 router.post('/slack/test', requireDashboardAuth, async (req: any, res: any) => {
@@ -235,124 +291,46 @@ router.post('/slack/events', (req: any, res: any) => {
         console.log(`[Background Queue] Initiated background pipeline for ID: ${eventId}`);
         
         const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
-        const slackBotToken = process.env.SLACK_BOT_TOKEN?.trim();
-
         if (!geminiApiKey || geminiApiKey === 'MY_GEMINI_API_KEY') {
           throw new Error('GEMINI_API_KEY is not configured or set to default example value.');
         }
 
-        const ai = new GoogleGenAI({
-          apiKey: geminiApiKey,
-          httpOptions: {
-            headers: {
-              'User-Agent': 'aistudio-build',
-            }
-          }
-        });
-
         const promptText = event.text || "";
         const threadTsTarget = event.thread_ts || event.ts;
         const threadKeyStr = threadTsTarget ? `chan-${event.channel}-thread-${threadTsTarget}` : `chan-${event.channel}-single`;
+        const workspaceId = req.body?.team_id || 'T_UNKNOWN';
+        const dbAvailable = (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) ? await isDbAvailable() : false;
 
-        console.log(`[Intent Analysis] Running dynamic classification for event text...`);
+        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
         const { intent, confidence } = await classifyIntent(promptText, selectedModel, ai);
-        console.log(`[Intent Classification] Category: ${intent} | Confidence: ${confidence}`);
 
-        const history = threadMemory.get(threadKeyStr) || [];
-        console.log(`[Thread Memory] Resolved Key: ${threadKeyStr} | Pre-existing History turns: ${history.length}`);
-
-        updateLog(logItem.id, {
-          intent,
-          confidence,
-          threadKey: threadKeyStr,
-          threadHistoryCount: history.length
-        });
-
-        const contents: any[] = [];
-        for (const msg of history) {
-          contents.push({
-            role: msg.role === 'model' ? 'model' : 'user',
-            parts: [{ text: msg.text }]
+        if (dbAvailable) {
+          const result = await runAgentPipeline({
+            workspaceId,
+            channelId: event.channel,
+            userId: event.user,
+            messageText: promptText,
+            eventId: eventId,
+            messageTs: event.ts,
+            threadTs: threadTsTarget,
+            selectedModel,
+            signatureValid: !!signingSecret && signatureVerified,
+            sourceType: 'slack'
           });
-        }
-        contents.push({
-          role: 'user',
-          parts: [{ text: promptText }]
-        });
 
-        const systemInstruction = 
-          "You are a helpful, context-aware, and precise Slack AI Agent backend. " +
-          "You hold conversation thread memory to maintain context in nested messaging dialogues. " +
-          "Your responses must be highly actionable, readable, and written in standard Slack-compatible markdown:\n" +
-          "- Use *text* for bold (do NOT use standard markdown **text**)\n" +
-          "- Use _text_ for italics (do NOT use standard markdown *text* or _text_)\n" +
-          "- Use ~text~ for strikethrough\n" +
-          "- Use `code` for inline code\n" +
-          "- Use ``` with language label for multiline block code\n" +
-          "- Rely on clear spacing and formatting. Answer the user prompt directly without meta-commentary.";
-
-        console.log(`[Background Gemini] Prompting ${selectedModel} with conversation history count: ${contents.length}`);
-        const aiResponse = await ai.models.generateContent({
-          model: selectedModel,
-          contents: contents,
-          config: {
-            systemInstruction: systemInstruction,
-            tools: [{ googleSearch: {} }],
-          }
-        });
-
-        const generatedText = aiResponse.text || "(Empty response returned)";
-        console.log(`[Background Gemini] Succeeded: ${generatedText.substring(0, 50)}...`);
-
-        const durationMs = Date.now() - startTime;
-
-        const updatedHistory = [...history];
-        updatedHistory.push({ role: 'user', text: promptText });
-        updatedHistory.push({ role: 'model', text: generatedText });
-        if (updatedHistory.length > 20) {
-          threadMemory.set(threadKeyStr, updatedHistory.slice(-20));
-        } else {
-          threadMemory.set(threadKeyStr, updatedHistory);
-        }
-
-        const isMockToken = !slackBotToken || slackBotToken === 'MY_SLACK_BOT_TOKEN' || slackBotToken.startsWith('mock') || !slackBotToken.startsWith('xox');
-        
-        if (isMockToken) {
-          console.log(`[Slack Simulated API] Saved simulated thread post to channel: ${event.channel}`);
+          const durationMs = Date.now() - startTime;
           updateLog(logItem.id, {
-            status: 'success',
-            aiResponse: `${generatedText}\n\n_(Simulated Dispatch: SLACK_BOT_TOKEN is not configured or is mock)_`,
-            processingTimeMs: durationMs
+            status: result.status === 'success' ? 'success' : 'error',
+            intent: result.intent || intent,
+            confidence,
+            processingTimeMs: durationMs,
+            runId: result.runId,
+            error: result.message
           });
         } else {
-          const slackPayload = {
-            channel: event.channel,
-            text: generatedText,
-            thread_ts: threadTsTarget
-          };
-
-          console.log(`[Slack API Dispatch] Posting to channel ${event.channel} inside thread ${threadTsTarget}`);
-          
-          const slackRes = await fetch('https://slack.com/api/chat.postMessage', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Authorization': `Bearer ${slackBotToken}`
-            },
-            body: JSON.stringify(slackPayload)
-          });
-
-          const slackData: any = await slackRes.json();
-          if (!slackRes.ok || !slackData.ok) {
-            throw new Error(`Slack postMessage failed: ${slackData.error || JSON.stringify(slackData)}`);
-          }
-
-          console.log(`[Slack API Dispatch] Succeeded routing message to thread ${threadTsTarget}`);
-          updateLog(logItem.id, {
-            status: 'success',
-            aiResponse: generatedText,
-            processingTimeMs: durationMs
-          });
+          // Fallback to legacy path if no DB
+          const durationMs = Date.now() - startTime;
+          updateLog(logItem.id, { intent, confidence, error: 'Database unavailable, skipped durable run', processingTimeMs: durationMs });
         }
 
       } catch (bkErr: any) {
