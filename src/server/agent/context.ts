@@ -1,85 +1,72 @@
-/**
- * Context Assembly for the planner (W2-B).
- *
- * Pulls together the information the planner needs to plan with knowledge rather than blind:
- *   - thread history (recent conversation in the originating Slack thread)
- *   - relevant memory snippets (memory.search)
- *   - prior step outputs from this run's trace
- *   - replan feedback from the previous loop iteration
- */
 import { agentStore } from '../storage/agentStore.js';
-import { threadMemory } from '../state.js';
-import type { AgentGoal, AgentRun } from '../storage/types.js';
+import type { AgentRunTrace, AgentRun, AgentGoal } from '../storage/types.js';
 import type { PlanningContext } from './types.js';
+import { threadMemory } from '../state.js';
 
-export interface AssembleContextArgs {
-  goal: AgentGoal;
-  run: AgentRun;
-  workspaceId: string;
-  channelId: string;
-  userId: string;
-  threadTs?: string;
-  replanFeedback?: string;
-}
+export async function assembleContext(goal: AgentGoal, run: AgentRun): Promise<PlanningContext> {
+  const workspaceId = goal.workspace_id;
+  const channelId = goal.source_channel_id;
+  const userId = goal.created_by_user_id;
 
-export async function assembleContext(args: AssembleContextArgs): Promise<PlanningContext> {
-  const { goal, run, workspaceId, channelId, userId, threadTs, replanFeedback } = args;
-
-  // 1. Thread history (best-effort; in-memory store keyed the same way handlers key it).
-  const threadKey = threadTs ? `chan-${channelId}-thread-${threadTs}` : `chan-${channelId}-single`;
-  const history = (threadMemory.get(threadKey) || []).slice(-10).map((m) => ({ role: m.role, text: m.text }));
-
-  // 2. Relevant memory snippets.
-  let memorySnippets: string[] = [];
-  try {
-    const records = await agentStore.searchMemory({ workspace_id: workspaceId, user_id: userId, channel_id: channelId, limit: 8 });
-    memorySnippets = records.map((r) => r.content).filter(Boolean);
-  } catch (err) {
-    // Memory is advisory context; never fail planning because search failed.
-    memorySnippets = [];
+  // Retrieve thread history
+  let threadHistory: any[] = [];
+  if (channelId) {
+    const threadKeyStr = goal.source_thread_ts ? `chan-${channelId}-thread-${goal.source_thread_ts}` : `chan-${channelId}-single`;
+    threadHistory = threadMemory.get(threadKeyStr) || [];
   }
 
-  // 3. Prior step outputs from this run (so replans can build on what already happened).
-  let priorStepOutputs: { title: string; output: string }[] = [];
-  try {
-    const steps = await agentStore.getStepsForRun(run.id);
-    priorStepOutputs = steps
-      .filter((s) => s.status === 'succeeded' && s.output)
-      .map((s) => ({ title: s.title, output: typeof s.output === 'string' ? s.output : JSON.stringify(s.output) }));
-  } catch {
-    priorStepOutputs = [];
+  // Retrieve relevant memory
+  let memoryRecords: any[] = [];
+  if (channelId && userId) {
+    const records = await agentStore.searchMemory({
+      workspace_id: workspaceId,
+      user_id: userId,
+      channel_id: channelId,
+      limit: 10
+    });
+    memoryRecords = records;
   }
+
+  // Retrieve prior steps
+  const priorSteps = await agentStore.getStepsForRun(run.id);
 
   return {
-    threadHistory: history,
-    memorySnippets,
-    priorStepOutputs,
-    replanFeedback,
+    goal: goal.title + "\\n" + goal.original_instruction,
+    threadHistory,
+    memoryRecords,
+    priorSteps,
+    feedback: run.failure_reason || undefined
   };
 }
 
-/** Render the assembled context into a compact prompt block for the planner. */
 export function renderContextForPrompt(ctx: PlanningContext): string {
-  const parts: string[] = [];
-  if (ctx.threadHistory.length) {
-    parts.push(
-      'Recent thread conversation:\n' +
-        ctx.threadHistory.map((m) => `- ${m.role}: ${m.text}`).join('\n')
-    );
+  let dump = `<context>\n`;
+  dump += `Goal: ${ctx.goal}\n`;
+  if (ctx.feedback) dump += `Feedback from previous run: ${ctx.feedback}\n`;
+  
+  if (ctx.memoryRecords.length > 0) {
+    dump += `\nMemory:\n`;
+    for (const mem of ctx.memoryRecords) {
+      dump += `- ${mem.kind}: ${mem.content}\n`;
+    }
   }
-  if (ctx.memorySnippets.length) {
-    parts.push('Relevant memory:\n' + ctx.memorySnippets.map((m) => `- ${m}`).join('\n'));
+
+  if (ctx.threadHistory.length > 0) {
+    dump += `\nChat History:\n`;
+    for (const msg of ctx.threadHistory) {
+      dump += `${msg.role}: ${msg.text}\n`;
+    }
   }
-  if (ctx.priorStepOutputs.length) {
-    parts.push(
-      'Outputs already produced in this run (do not redo these):\n' +
-        ctx.priorStepOutputs.map((s) => `- ${s.title}: ${s.output}`).join('\n')
-    );
+
+  if (ctx.priorSteps.length > 0) {
+    dump += `\nPrior Steps Execution:\n`;
+    for (const step of ctx.priorSteps) {
+      dump += `- [${step.status}] ${step.title}\n`;
+      if (step.output) dump += `  Output: ${JSON.stringify(step.output)}\n`;
+      if (step.error) dump += `  Error: ${step.error}\n`;
+    }
   }
-  if (ctx.replanFeedback) {
-    parts.push(
-      `IMPORTANT — the previous attempt did NOT satisfy the goal. Revise the plan to address this feedback:\n${ctx.replanFeedback}`
-    );
-  }
-  return parts.length ? parts.join('\n\n') : 'No additional context available.';
+
+  dump += `</context>`;
+  return dump;
 }

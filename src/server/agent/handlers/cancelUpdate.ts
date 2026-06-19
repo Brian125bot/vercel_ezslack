@@ -2,6 +2,8 @@ import { agentStore } from '../../storage/agentStore.js';
 import { slackReplyInThreadTool } from '../../tools/slack.js';
 import type { AgentPipelineInput, AgentPipelineResult, ToolExecutionContext } from '../types.js';
 
+import { finalizeRun } from '../finalize.js';
+
 export async function handleCancelOrUpdate(
   input: AgentPipelineInput,
   context: ToolExecutionContext
@@ -23,16 +25,7 @@ export async function handleCancelOrUpdate(
 
     // Cancel all active runs in this channel for now
     for (const run of activeRuns) {
-      await agentStore.updateRunStatus(run.id, 'failed', { error: 'Cancelled by user via Slack command' });
-      await agentStore.appendAuditEvent({
-        workspace_id: input.workspaceId,
-        goal_id: run.goal_id,
-        run_id: run.id,
-        type: 'run.cancelled',
-        actor: input.userId,
-        summary: `Run cancelled by user`,
-        payload: { user_message: input.messageText }
-      });
+      await finalizeRun(run, 'cancelled', 'Cancelled by user via Slack command');
     }
 
     await slackReplyInThreadTool.execute({ text: `I have cancelled ${activeRuns.length} active task(s).` }, context);
@@ -41,3 +34,4 @@ export async function handleCancelOrUpdate(
     return { status: 'error', intent, message: err.message };
   }
 }
+

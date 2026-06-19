@@ -382,17 +382,6 @@ export default function App() {
     }
   }, [selectedRunId, dashboardPassword]);
 
-  // Auto-refresh the trace while the selected run is still in-flight (W2-E observability),
-  // so iterations / verification / new steps appear live without manual reload.
-  useEffect(() => {
-    if (!selectedRunId) return;
-    const terminal = ['succeeded', 'completed', 'failed', 'cancelled'];
-    const status = runTrace?.run?.status;
-    if (status && terminal.includes(status)) return;
-    const interval = setInterval(() => fetchRunTrace(selectedRunId), 3000);
-    return () => clearInterval(interval);
-  }, [selectedRunId, runTrace?.run?.status, dashboardPassword]);
-
   // Poll status and logs
   useEffect(() => {
     fetchStatus();
@@ -1073,93 +1062,87 @@ export default function App() {
                              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Goal Context</h3>
                              <div className="text-sm font-medium text-slate-800">{runTrace.goal?.title || 'Unknown Goal'}</div>
                              <div className="text-xs text-slate-500 mt-1 bg-slate-50 p-2 rounded whitespace-pre-wrap">{runTrace.goal?.original_instruction || 'No original instruction'}</div>
+                             
+                             {runTrace.run?.result_summary && (
+                               <div className="mt-3 pt-3 border-t border-slate-100">
+                                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Execution Summary</div>
+                                 <div className="text-sm text-slate-700 bg-emerald-50 text-emerald-800 border border-emerald-100 p-2.5 rounded-lg">
+                                   {runTrace.run.result_summary}
+                                 </div>
+                               </div>
+                             )}
+                             {runTrace.run?.failure_reason && (
+                               <div className="mt-3 pt-3 border-t border-slate-100">
+                                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Failure Reason</div>
+                                 <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 p-2.5 rounded-lg">
+                                   {runTrace.run.failure_reason}
+                                 </div>
+                               </div>
+                             )}
                           </div>
 
-                          {/* Run Summary Panel (W2-E observability) */}
-                          {runTrace.run && (
-                            <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200">
-                              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Run Summary</h3>
-                              <div className="grid grid-cols-2 gap-3 text-xs">
-                                <div>
-                                  <div className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Status</div>
-                                  <div className="font-bold text-slate-800">{runTrace.run.status}</div>
-                                </div>
-                                <div>
-                                  <div className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Loop Iterations</div>
-                                  <div className="font-bold text-slate-800">{runTrace.run.iteration_count ?? 0} / 3</div>
-                                </div>
-                                <div>
-                                  <div className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Plan Version</div>
-                                  <div className="font-bold text-slate-800">{runTrace.plan?.version ?? '—'}</div>
-                                </div>
-                                <div>
-                                  <div className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Finished</div>
-                                  <div className="font-mono text-slate-600 text-[11px]">{runTrace.run.finished_at ? new Date(runTrace.run.finished_at).toLocaleString() : 'In progress'}</div>
-                                </div>
-                              </div>
-                              {runTrace.run.result_summary && (
-                                <div className="mt-3 text-xs bg-emerald-50 border border-emerald-100 text-emerald-800 p-2.5 rounded whitespace-pre-wrap">{runTrace.run.result_summary}</div>
-                              )}
-                              {runTrace.run.failure_reason && (
-                                <div className="mt-3 text-xs bg-rose-50 border border-rose-100 text-rose-800 p-2.5 rounded whitespace-pre-wrap">{runTrace.run.failure_reason}</div>
-                              )}
+                          {runTrace.auditEvents?.find((e: any) => e.type === 'run.semantic_verified') && (
+                            <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 mt-4">
+                              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">Semantic Verification</h3>
+                              {(() => {
+                                const evt = runTrace.auditEvents.find((e: any) => e.type === 'run.semantic_verified');
+                                const semVerify = evt.payload;
+                                return (
+                                  <div className={`p-3 border rounded-lg ${semVerify.satisfied ? 'bg-emerald-50 border-emerald-100 text-emerald-800' : 'bg-rose-50 border-rose-100 text-rose-800'}`}>
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <span className="font-bold">{semVerify.satisfied ? 'Satisfied' : 'Not Satisfied'}</span>
+                                      <span className="text-xs px-2 py-0.5 rounded-full bg-white bg-opacity-50 border border-current opacity-70">
+                                        Confidence: {Math.round(semVerify.confidence * 100)}%
+                                      </span>
+                                    </div>
+                                    <div className="text-sm opacity-90">{semVerify.reasoning}</div>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           )}
 
-                          {/* Semantic Verification Panel (W2-D / W2-E) */}
-                          {(() => {
-                            const verifEvents = (runTrace.auditEvents || []).filter((e: any) => e.type === 'run.semantic_verified' || e.type === 'run.verified');
-                            if (!verifEvents.length) return null;
-                            return (
-                              <div>
-                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-6 mb-3 ml-1">Verification</h3>
-                                <div className="space-y-2">
-                                  {verifEvents.map((evt: any, i: number) => {
-                                    const isSemantic = evt.type === 'run.semantic_verified';
-                                    const ok = isSemantic ? evt.payload?.satisfied === true : evt.payload?.ruleResult?.status === 'satisfied';
-                                    return (
-                                      <div key={i} className={`bg-white p-3 border rounded shadow-sm text-xs ${ok ? 'border-emerald-100' : 'border-amber-100'}`}>
-                                        <div className="flex justify-between items-center mb-1">
-                                          <span className="font-bold text-slate-700">{isSemantic ? 'Semantic Verifier (LLM judge)' : 'Rule Verifier'}</span>
-                                          <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${ok ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                                            {ok ? 'satisfied' : (isSemantic ? 'not satisfied' : (evt.payload?.ruleResult?.status || 'n/a'))}
-                                          </span>
-                                        </div>
-                                        <div className="text-slate-600">{isSemantic ? `${evt.payload?.reasoning || ''} (confidence: ${evt.payload?.confidence || 'n/a'}, source: ${evt.payload?.source || 'n/a'})` : (evt.payload?.ruleResult?.reasons || []).join('; ')}</div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            );
-                          })()}
-
-                          {/* Steps Panel */}
                           {runTrace.steps?.length > 0 && (
                             <div>
-                              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-6 mb-3 ml-1">Execution Steps</h3>
-                              <div className="space-y-2">
-                                {runTrace.steps.map((s: any, i: number) => (
-                                  <div key={s.id || i} className="bg-white p-3 border border-slate-100 rounded shadow-sm text-xs">
-                                    <div className="flex justify-between items-center mb-1 border-b border-slate-50 pb-1">
-                                      <span className="font-bold text-slate-700">{i + 1}. {s.title}</span>
-                                      <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded
-                                        ${s.status === 'succeeded' ? 'bg-emerald-100 text-emerald-700' :
-                                          s.status === 'failed' ? 'bg-rose-100 text-rose-700' :
-                                          s.status === 'blocked' ? 'bg-amber-100 text-amber-700' :
-                                          'bg-slate-100 text-slate-600'}`}>
-                                        {s.status}
-                                      </span>
-                                    </div>
-                                    {s.output && (
-                                      <pre className="mt-1 text-[10px] text-slate-500 bg-slate-50 p-1.5 rounded overflow-x-auto whitespace-pre-wrap max-h-28">{typeof s.output === 'string' ? s.output : JSON.stringify(s.output, null, 2)}</pre>
-                                    )}
-                                    {s.error && (
-                                      <div className="mt-1 text-[10px] text-rose-600 bg-rose-50 p-1.5 rounded">{s.error}</div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
+                               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-6 mb-3 ml-1">Execution Steps</h3>
+                               <div className="space-y-3">
+                                 {runTrace.steps.map((step: any) => (
+                                   <div key={step.id} className="bg-white p-4 border border-slate-200 rounded-xl shadow-xs text-xs space-y-2">
+                                     <div className="flex justify-between items-center pb-2 border-b border-slate-50">
+                                       <span className="font-bold text-slate-800">{step.order_index}. {step.title}</span>
+                                       <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded
+                                         ${step.status === 'succeeded' || step.status === 'completed' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                                           step.status === 'running' || step.status === 'pending' ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
+                                           step.status === 'blocked' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                                           'bg-rose-100 text-rose-800 border border-rose-200'}
+                                       `}>
+                                         {step.status}
+                                       </span>
+                                     </div>
+                                     {step.description && <p className="text-slate-600 bg-slate-50 p-2 rounded">{step.description}</p>}
+                                     {(step.input || step.output) && (
+                                        <div className="grid grid-cols-1 gap-2 mt-2">
+                                          {step.input && (
+                                            <div className="flex flex-col gap-1">
+                                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Input</span>
+                                              <pre className="text-[10px] bg-slate-50 p-2 border border-slate-100 rounded text-slate-600 whitespace-pre-wrap font-mono overflow-auto max-h-32">
+                                                 {JSON.stringify(step.input, null, 2)}
+                                              </pre>
+                                            </div>
+                                          )}
+                                          {step.output && (
+                                            <div className="flex flex-col gap-1">
+                                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Output</span>
+                                              <pre className="text-[10px] bg-emerald-50 p-2 border border-emerald-100 rounded text-emerald-700 whitespace-pre-wrap font-mono overflow-auto max-h-32">
+                                                 {JSON.stringify(step.output, null, 2)}
+                                              </pre>
+                                            </div>
+                                          )}
+                                        </div>
+                                     )}
+                                   </div>
+                                 ))}
+                               </div>
                             </div>
                           )}
 

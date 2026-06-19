@@ -24,16 +24,19 @@ export async function handleStatusQuery(
       replyText = `Here is the status of active runs:\n${items}`;
     }
 
-    // W1-E5: audit events for status queries (alongside cancel + approval-from-Slack).
+    await slackReplyInThreadTool.execute({ text: replyText }, context);
+    
     await agentStore.appendAuditEvent({
       workspace_id: input.workspaceId,
       type: 'status.queried',
       actor: input.userId,
-      summary: `Status query returned ${activeRuns.length} active run(s)`,
-      payload: { channelId: input.channelId, activeRunCount: activeRuns.length, query: input.messageText }
+      summary: 'User queried active run status',
+      payload: { 
+        channel_id: input.channelId,
+        active_runs_count: activeRuns.length 
+      }
     });
 
-    await slackReplyInThreadTool.execute({ text: replyText }, context);
     return { status: 'success', intent };
   } catch (err: any) {
     return { status: 'error', intent, message: err.message };

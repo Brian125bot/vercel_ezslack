@@ -1,6 +1,5 @@
 import { query, withTransaction } from './db.js';
 import crypto from 'crypto';
-import { sanitizePayload } from '../agent/sanitize.js';
 import type {
   AgentGoal, GoalStatus, UpdateGoalInput, CreateGoalInput,
   AgentPlan, CreatePlanInput,
@@ -12,6 +11,8 @@ import type {
   AuditEvent, CreateAuditEventInput,
   AgentRunTrace, ListRunsFilter
 } from './types.js';
+
+import { sanitizePayload } from '../agent/sanitize.js';
 
 export const agentStore = {
   async createGoal(input: CreateGoalInput): Promise<AgentGoal> {
@@ -63,11 +64,11 @@ export const agentStore = {
         current_step_id = COALESCE($2, current_step_id),
         result_summary = COALESCE($3, result_summary),
         failure_reason = COALESCE($4, failure_reason),
-        plan_id = COALESCE($5, plan_id),
-        started_at = COALESCE($6, started_at),
-        finished_at = COALESCE($7, finished_at)
+        started_at = COALESCE($5, started_at),
+        finished_at = COALESCE($6, finished_at),
+        plan_id = COALESCE($7, plan_id)
        WHERE id = $8 RETURNING *`,
-      [status, patch?.current_step_id || null, patch?.result_summary || null, patch?.failure_reason || null, patch?.plan_id || null, startedAt || null, finishedAt || null, id]
+      [status, patch?.current_step_id || null, patch?.result_summary || null, patch?.failure_reason || null, startedAt || null, finishedAt || null, patch?.plan_id || null, id]
     );
     if (!rows.length) throw new Error(`Run ${id} not found`);
     return rows[0];
@@ -269,26 +270,24 @@ export const agentStore = {
     );
   },
 
-  // ---- Week 2: single-row lookups used by the worker / closed loop ----
-
-  async getRun(runId: string): Promise<AgentRun> {
-    const rows = await query<AgentRun>(`SELECT * FROM agent_runs WHERE id = $1`, [runId]);
-    if (!rows.length) throw new Error(`Run ${runId} not found`);
+  async getRun(id: string): Promise<AgentRun> {
+    const rows = await query<AgentRun>(`SELECT * FROM agent_runs WHERE id = $1`, [id]);
+    if (!rows.length) throw new Error(`Run ${id} not found`);
     return rows[0];
   },
 
-  async getStep(stepId: string): Promise<AgentStep> {
-    const rows = await query<AgentStep>(`SELECT * FROM agent_steps WHERE id = $1`, [stepId]);
-    if (!rows.length) throw new Error(`Step ${stepId} not found`);
+  async getStep(id: string): Promise<AgentStep> {
+    const rows = await query<AgentStep>(`SELECT * FROM agent_steps WHERE id = $1`, [id]);
+    if (!rows.length) throw new Error(`Step ${id} not found`);
     return rows[0];
   },
 
   async getStepsForRun(runId: string): Promise<AgentStep[]> {
-    return query<AgentStep>(`SELECT * FROM agent_steps WHERE run_id = $1 ORDER BY order_index ASC, created_at ASC`, [runId]);
+    return query<AgentStep>(`SELECT * FROM agent_steps WHERE run_id = $1 ORDER BY order_index ASC`, [runId]);
   },
 
   async getStepsForPlan(planId: string): Promise<AgentStep[]> {
-    return query<AgentStep>(`SELECT * FROM agent_steps WHERE plan_id = $1 ORDER BY order_index ASC, created_at ASC`, [planId]);
+    return query<AgentStep>(`SELECT * FROM agent_steps WHERE plan_id = $1 ORDER BY order_index ASC`, [planId]);
   },
 
   async getApprovalsForRun(runId: string): Promise<ApprovalRequest[]> {
@@ -299,70 +298,61 @@ export const agentStore = {
     return query<AuditEvent>(`SELECT * FROM audit_events WHERE run_id = $1 ORDER BY created_at ASC`, [runId]);
   },
 
-  async incrementRunIteration(runId: string): Promise<number> {
-    const rows = await query<{ iteration_count: number }>(
-      `UPDATE agent_runs SET iteration_count = COALESCE(iteration_count, 0) + 1, updated_at = now() WHERE id = $1 RETURNING iteration_count`,
+  async incrementRunIteration(runId: string): Promise<AgentRun> {
+    const rows = await query<AgentRun>(
+      `UPDATE agent_runs SET iteration_count = COALESCE(iteration_count, 0) + 1, updated_at = now() WHERE id = $1 RETURNING *`,
       [runId]
     );
     if (!rows.length) throw new Error(`Run ${runId} not found`);
-    return rows[0].iteration_count;
+    return rows[0];
   },
 
-  // ---- Week 2: worker queue claim semantics (W2-A) ----
-
-  /**
-   * Atomically claim the oldest queued run for processing. Uses FOR UPDATE SKIP LOCKED so
-   * multiple worker ticks (or instances) never grab the same run. Returns null when the
-   * queue is empty.
-   */
   async claimNextQueuedRun(workerId: string, leaseSeconds: number): Promise<AgentRun | null> {
     const rows = await query<AgentRun>(
-      `UPDATE agent_runs
-         SET status = 'running',
-             claimed_by = $1,
-             claimed_at = now(),
-             lease_expires_at = now() + ($2 || ' seconds')::interval,
-             started_at = COALESCE(started_at, now()),
-             updated_at = now()
+      `UPDATE agent_runs 
+       SET status = 'running', claimed_by = $1, claimed_at = now(), lease_expires_at = now() + interval '1 second' * $2, updated_at = now()
        WHERE id = (
-         SELECT id FROM agent_runs
-         WHERE status = 'queued'
-         ORDER BY created_at ASC
-         FOR UPDATE SKIP LOCKED
+         SELECT id FROM agent_runs 
+         WHERE status = 'queued' 
+         ORDER BY created_at ASC 
+         FOR UPDATE SKIP LOCKED 
          LIMIT 1
-       )
-       RETURNING *`,
-      [workerId, String(leaseSeconds)]
+       ) RETURNING *`,
+      [workerId, leaseSeconds]
     );
-    return rows[0] || null;
+    return rows.length ? rows[0] : null;
   },
 
-  /** Renew the lease for a run still being processed by this worker. */
   async renewLease(runId: string, leaseSeconds: number): Promise<void> {
     await query(
-      `UPDATE agent_runs SET lease_expires_at = now() + ($2 || ' seconds')::interval, updated_at = now() WHERE id = $1`,
-      [runId, String(leaseSeconds)]
+      `UPDATE agent_runs SET lease_expires_at = now() + interval '1 second' * $1, updated_at = now() WHERE id = $2`,
+      [leaseSeconds, runId]
     );
   },
 
-  /**
-   * Re-queue runs whose worker died mid-flight (lease expired). Returns the recovered run ids
-   * so the worker can log the recovery. (W2-F10)
-   */
-  async recoverStaleClaims(): Promise<string[]> {
-    const rows = await query<{ id: string }>(
-      `UPDATE agent_runs
-         SET status = 'queued', claimed_by = NULL, claimed_at = NULL, lease_expires_at = NULL, updated_at = now()
-       WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < now()
-       RETURNING id`,
-      []
+  async recoverStaleClaims(): Promise<number> {
+    const rows = await query<AgentRun>(
+      `UPDATE agent_runs 
+       SET status = 'queued', claimed_by = NULL, claimed_at = NULL, lease_expires_at = NULL, updated_at = now()
+       WHERE status = 'running' AND lease_expires_at < now()
+       RETURNING *`
     );
-    return rows.map(r => r.id);
+    for (const run of rows) {
+      await this.appendAuditEvent({
+        workspace_id: null,
+        goal_id: run.goal_id,
+        run_id: run.id,
+        type: 'run.recovered',
+        actor: 'system',
+        summary: `Recovered stale run claim for ${run.id}`,
+        payload: {}
+      });
+    }
+    return rows.length;
   },
 
-  /** How many runs are currently being processed (used to enforce maxConcurrent). */
   async countRunningRuns(): Promise<number> {
-    const rows = await query<{ count: string }>(`SELECT COUNT(*)::int AS count FROM agent_runs WHERE status = 'running'`, []);
+    const rows = await query<{ count: number }>(`SELECT count(*) as count FROM agent_runs WHERE status = 'running'`);
     return Number(rows[0]?.count || 0);
   }
 };

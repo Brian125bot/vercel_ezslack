@@ -1,12 +1,7 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import type { AgentPlanDraft } from './types.js';
 
-export async function createPlan(
-  goalTitle: string,
-  originalInstruction: string,
-  selectedModel: string,
-  contextBlock?: string
-): Promise<AgentPlanDraft> {
+export async function createPlan(goalTitle: string, originalInstruction: string, selectedModel: string, contextBlock?: string): Promise<AgentPlanDraft> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is missing');
@@ -26,7 +21,8 @@ export async function createPlan(
           properties: {
             title: { type: Type.STRING },
             toolName: { type: Type.STRING },
-            input: { type: Type.OBJECT }
+            input: { type: Type.OBJECT },
+            kind: { type: Type.STRING }
           },
           required: ['title']
         }
@@ -37,22 +33,29 @@ export async function createPlan(
     required: ['summary', 'assumptions', 'steps', 'riskLevel', 'requiresApproval']
   };
 
-  const prompt = `
+  let prompt = `
 You are an AI agent planning a response to:
 Title: ${goalTitle}
 Instruction: ${originalInstruction}
+`;
 
-${contextBlock ? `Context for planning:\n${contextBlock}\n` : ''}
+  if (contextBlock) {
+    prompt += `\n${contextBlock}\n`;
+  }
+
+  prompt += `
 Available safe tools:
-- slack.replyInThread (input: { text: string })  // text MUST be the fully-written reply, never a placeholder
+- slack.replyInThread (input: { text: string })
 - memory.write (input: { content: string, kind: string, visibility: string })
 - memory.search (input: { query: string, kind?: string })
 - task.record (input: { title: string, notes?: string })
 
 Generate a simple 1-3 step plan to accomplish this goal.
-Fully populate each step's "input" with concrete values — especially slack.replyInThread, whose "text" must contain the actual finished message to the user (do not leave it blank or say "TBD").
+CRITICAL: You MUST fully populate each step's \`input\` object using the information from the context.
+For example, if you use slack.replyInThread, you MUST write the final reply text into \`input.text\`, drawing on the available context.
 You are STRICTLY FORBIDDEN from generating any toolName other than the safe tools listed above. If a step requires any other action, state riskLevel="external_write" and requiresApproval=true, and leave toolName empty or undefined.
 Otherwise, use riskLevel="internal_write" or "read" or "draft".
+If it is a conceptual step, you can include \`kind: 'note'\`.
 `;
 
   try {

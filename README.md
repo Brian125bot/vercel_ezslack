@@ -54,6 +54,12 @@ The companion management UI gives you absolute control over your live agentic ec
 
 ---
 
+## 📅 Roadmap & Progress
+
+For detailed tracking of feature implementations, improvements, and architectural milestones, please see the [CHANGELOG.md](./CHANGELOG.md) outlining completed deliverables (such as intent-level routing) and the immediate scope roadmap (such as async worker queues and semantic verifiers).
+
+---
+
 ## 🛠️ Tech Stack & Structure
 
 * **Language**: TypeScript (NodeJS LTS)

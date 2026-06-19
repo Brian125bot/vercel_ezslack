@@ -48,8 +48,12 @@ export async function getAdminDbPool(): Promise<Pool> {
     throw new Error('No database configuration found for admin pool.');
   }
 
-  adminPool.on('error', (err) => {
-    console.error('Unexpected error on admin idle client', err);
+  adminPool.on('error', (err: any) => {
+    if (err && (err.message?.includes('Connection terminated unexpectedly') || err.message?.includes('idle client'))) {
+      console.log('Database admin pool detected an idle client connection termination (benign):', err.message);
+    } else {
+      console.error('Unexpected error on admin idle client', err);
+    }
   });
 
   return adminPool;
@@ -98,8 +102,12 @@ export async function getDbPool(): Promise<Pool> {
     throw new Error('No database configuration found. Set DATABASE_URL, CLOUD_SQL_CONNECTION_NAME, or SQL_HOST.');
   }
 
-  pool.on('error', (err) => {
-    console.error('Unexpected error on idle client', err);
+  pool.on('error', (err: any) => {
+    if (err && (err.message?.includes('Connection terminated unexpectedly') || err.message?.includes('idle client'))) {
+      console.log('Database pool detected an idle client connection termination (benign):', err.message);
+    } else {
+      console.error('Unexpected error on idle client', err);
+    }
   });
 
   return pool;
@@ -146,7 +154,11 @@ export async function withTransaction<T>(callback: (client: any) => Promise<T>):
     await client.query('COMMIT');
     return result;
   } catch (e) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr: any) {
+      console.warn('Transaction rollback error (primary error preserved):', rollbackErr.message);
+    }
     throw e;
   } finally {
     client.release();

@@ -15,7 +15,7 @@ export async function handleDirectReply(
     const replyText = await generateSimpleResponse(input.messageText, input.selectedModel, history);
     
     // Update thread memory
-    const updatedHistory = [...history, { role: 'user', text: input.messageText }, { role: 'model', text: replyText }];
+    const updatedHistory = [...history, { role: 'user' as const, text: input.messageText }, { role: 'model' as const, text: replyText }];
     threadMemory.set(threadKeyStr, updatedHistory.length > 20 ? updatedHistory.slice(-20) : updatedHistory);
 
     await slackReplyInThreadTool.execute({ text: replyText }, context);

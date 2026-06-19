@@ -1,5 +1,4 @@
 import { SlackEventLog, ThreadMessage } from '../types.js';
-import { sanitizeString } from './agent/sanitize.js';
 
 // Stateful Conversation Thread Memory
 export const threadMemory = new Map<string, ThreadMessage[]>();
@@ -14,8 +13,10 @@ export function setSelectedModel(model: string) {
   selectedModel = model;
 }
 
+import { sanitizeString } from './agent/sanitize.js';
+
 export function sanitizeText(text: string | undefined): string | undefined {
-  // Delegates to the centralized redactor in agent/sanitize.ts (single source of truth).
+  if (!text) return text;
   return sanitizeString(text);
 }
 

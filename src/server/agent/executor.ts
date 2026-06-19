@@ -11,10 +11,8 @@ export async function executeStep(
 ): Promise<void> {
   await agentStore.updateStepStatus(step.id, 'running');
 
-  // No-tool steps are honest by default: they only auto-succeed when explicitly marked as a
-  // conceptual note (kind: 'note' carried on the step input). Everything else fails (W1-D).
-  const stepKind = (step.input as any)?.kind;
   if (!step.input || !(step.input as any).toolName) {
+    const stepKind = (step.input as any)?.kind;
     if (stepKind === 'note') {
       await agentStore.updateStepStatus(step.id, 'succeeded', { output: { message: 'Step completed (conceptual note)' } });
       await agentStore.appendAuditEvent({
@@ -97,10 +95,10 @@ export async function executeStep(
     payload: {}
   });
 
-  const policy = checkPolicy(tool.riskLevel, tool.name);
-  // If the user already approved the active plan, external_write tools may proceed without a
-  // fresh approval request. Destructive/privileged actions are NEVER auto-approved.
-  if (!policy.allowed && policy.requiresApproval && context.preApproved) {
+  let policy = checkPolicy(tool.riskLevel, tool.name);
+  
+  if (context.preApproved && tool.riskLevel === 'external_write') {
+    policy = { allowed: true, requiresApproval: false, reason: 'Pre-approved from plan' };
     await agentStore.appendAuditEvent({
       workspace_id: context.workspaceId,
       goal_id: run.goal_id,
@@ -108,10 +106,12 @@ export async function executeStep(
       step_id: step.id,
       type: 'policy.preapproved',
       actor: 'system',
-      summary: `Proceeding with ${tool.name} under prior user approval`,
-      payload: { reason: policy.reason }
+      summary: `Pre-approved outer external_write policy for ${tool.name}`,
+      payload: {}
     });
-  } else if (!policy.allowed) {
+  }
+
+  if (!policy.allowed) {
     if (policy.requiresApproval) {
       const approval = await agentStore.createApprovalRequest({
         goal_id: run.goal_id,

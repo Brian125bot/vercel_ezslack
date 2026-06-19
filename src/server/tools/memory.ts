@@ -10,7 +10,6 @@ export const memoryWriteTool: AgentTool<{ content: string; kind: string; visibil
   async execute(input, context) {
     const content = input.content || '';
 
-    // W1-E: refuse to persist credentials/secrets to memory (centralized detector).
     if (containsSecret(content)) {
       return { status: 'failed', error: 'Refusing to write potentially sensitive information or secrets to memory.' };
     }

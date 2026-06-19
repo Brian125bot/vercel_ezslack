@@ -1,76 +1,86 @@
-/**
- * Semantic Verifier (W2-D).
- *
- * The rule-based verifier (verifier.ts) only checks that steps mechanically succeeded. This
- * adds an LLM judge that decides whether the goal was *actually* met given the goal text and
- * the outputs produced. A run is only allowed to succeed when BOTH the rule verifier and this
- * semantic verifier are satisfied (enforced in loop.ts).
- *
- * If no model/API key is available (e.g. local tests), it returns a low-confidence "skipped"
- * pass so the system still functions, while clearly marking that semantic verification did not
- * actually run.
- */
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type, Schema } from '@google/genai';
 import type { AgentRunTrace } from '../storage/types.js';
 import type { SemanticVerificationResult } from './types.js';
+import { slog } from './log.js';
 
-export async function verifySemantically(
-  trace: AgentRunTrace,
-  selectedModel: string
-): Promise<SemanticVerificationResult> {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+export async function verifySemantically(trace: AgentRunTrace, model: string): Promise<SemanticVerificationResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    slog('verifier', 'skipped', { reason: 'No GEMINI_API_KEY' });
     return {
       satisfied: true,
-      confidence: 'low',
-      reasoning: 'Semantic verification skipped: no model API key configured.',
-      source: 'skipped',
+      confidence: 0,
+      reasoning: 'Skipped semantic verification because GEMINI_API_KEY is not configured.',
+      source: 'skipped'
     };
   }
 
-  const goal = trace.goal;
-  const stepSummary = (trace.steps || [])
-    .map((s) => `- [${s.status}] ${s.title}${s.output ? `: ${typeof s.output === 'string' ? s.output : JSON.stringify(s.output)}` : ''}${s.error ? ` (error: ${s.error})` : ''}`)
-    .join('\n');
+  const ai = new GoogleGenAI({ apiKey });
 
-  const prompt = `You are a strict verification judge. Decide whether the agent ACTUALLY accomplished the user's goal.
+  const responseSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      satisfied: { type: Type.BOOLEAN },
+      confidence: { type: Type.NUMBER },
+      reasoning: { type: Type.STRING }
+    },
+    required: ['satisfied', 'confidence', 'reasoning']
+  };
 
-User goal: "${goal?.title}"
-Original instruction: "${goal?.original_instruction}"
+  const traceDump = JSON.stringify({
+    goal: trace.goal.original_instruction,
+    steps: trace.steps.map(s => ({
+      title: s.title,
+      status: s.status,
+      error: s.error,
+      output: s.output
+    })),
+    toolCalls: trace.toolCalls.map(tc => ({
+      tool: tc.tool_name,
+      status: tc.status,
+      input: tc.input,
+      output: tc.output,
+      error: tc.error
+    }))
+  }, null, 2);
 
-Executed steps and their outputs:
-${stepSummary || '(no steps executed)'}
+  const prompt = `
+You are an expert AI behavior evaluator. Look at the following execution trace of an agent attempting to satisfy a user goal.
+Analyze the actual tool calls made, inputs provided, and their outputs.
 
-Judge whether the goal has been genuinely and completely satisfied by these outputs. Be skeptical: empty, placeholder, generic, or off-topic outputs do NOT satisfy the goal. A reply that does not actually address the instruction is NOT satisfied.
+Trace:
+${traceDump}
 
-Respond with EXACTLY this JSON and nothing else:
-{
-  "satisfied": true | false,
-  "confidence": "high" | "medium" | "low",
-  "reasoning": "one or two sentences"
-}`;
+Did the trace genuinely and completely satisfy the user's goal? If the agent merely said it did something but did not actually do it, it is NOT satisfied. If it failed at an important step, it is NOT satisfied. 
+Output your confidence as a number from 0 to 1.
+`;
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
     const response = await ai.models.generateContent({
-      model: selectedModel,
+      model: model,
       contents: prompt,
-      config: { responseMimeType: 'application/json' },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: responseSchema
+      }
     });
-    const parsed = JSON.parse(response.text?.trim() || '{}');
-    return {
-      satisfied: parsed.satisfied === true,
-      confidence: (['high', 'medium', 'low'].includes(parsed.confidence) ? parsed.confidence : 'medium') as 'high' | 'medium' | 'low',
-      reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : 'No reasoning provided.',
-      source: 'llm',
-    };
+
+    if (response.text) {
+      const result = JSON.parse(response.text) as Omit<SemanticVerificationResult, 'source'>;
+      return {
+        ...result,
+        source: 'llm'
+      };
+    }
   } catch (err: any) {
-    // On judge failure, do not falsely claim success — report not satisfied so the loop replans.
-    return {
-      satisfied: false,
-      confidence: 'low',
-      reasoning: `Semantic verifier error: ${err?.message || String(err)}`,
-      source: 'llm',
-    };
+    slog('verifier', 'error', { error: err.message });
   }
+
+  // On error, return not satisfied so it can replan
+  return {
+    satisfied: false,
+    confidence: 1,
+    reasoning: 'Semantic verification encountered an error.',
+    source: 'llm'
+  };
 }

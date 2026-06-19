@@ -44,7 +44,6 @@ export interface AgentRun {
   current_step_id?: string | null;
   result_summary?: string | null;
   failure_reason?: string | null;
-  // Week 2: background worker queue/claim semantics + closed-loop iteration tracking
   iteration_count?: number;
   claimed_by?: string | null;
   claimed_at?: Date | null;
