@@ -1,7 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { requireDashboardAuth } from './auth.js';
-import { logs, selectedModel, setSelectedModel, processedEventIds, eventTimestamps, addLog, updateLog, threadMemory } from './state.js';
+import { logs, selectedModel, setSelectedModel, processedEventIds, processedMessageKeys, eventTimestamps, addLog, updateLog, threadMemory } from './state.js';
 import { classifyIntent } from './ai.js';
 import { GoogleGenAI } from '@google/genai';
 import { SlackEventLog } from '../types.js';
@@ -201,6 +201,18 @@ router.post('/slack/events', (req: any, res: any) => {
     if (event.bot_id || event.user === undefined) {
       console.log(`[Loop Prevention] Ignoring bot-originated message (bot_id: ${event.bot_id || 'unspecified'})`);
       return res.status(200).send('OK (Self-event and bot-events skipped)');
+    }
+
+    // Message-level deduplication: Slack can fire both `app_mention` and `message.channels` for the same user message.
+    // They have different event_id values but identical event.client_msg_id and/or event.channel + event.ts
+    const msgKey = event.client_msg_id ? `msgid-${event.client_msg_id}` : (event.channel && event.ts ? `msgts-${event.channel}-${event.ts}` : null);
+    if (msgKey) {
+      if (processedMessageKeys.has(msgKey)) {
+        console.log(`[Deduplication] Dropping duplicate event message: ${msgKey}`);
+        return res.status(200).send('OK (Duplicate event message ignored)');
+      }
+      processedMessageKeys.add(msgKey);
+      eventTimestamps.set(msgKey, Date.now());
     }
 
     const logItem: SlackEventLog = {

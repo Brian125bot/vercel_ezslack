@@ -29,15 +29,17 @@ export function updateLog(id: string, updates: Partial<SlackEventLog>) {
 
 // Event deduplication storage
 export const processedEventIds = new Set<string>();
+export const processedMessageKeys = new Set<string>();
 export const eventTimestamps = new Map<string, number>();
 
 // Clean up events older than 10 minutes every minute
 setInterval(() => {
   const now = Date.now();
-  for (const [eventId, timestamp] of eventTimestamps.entries()) {
+  for (const [key, timestamp] of eventTimestamps.entries()) {
     if (now - timestamp > 600 * 1000) {
-      processedEventIds.delete(eventId);
-      eventTimestamps.delete(eventId);
+      processedEventIds.delete(key);
+      processedMessageKeys.delete(key);
+      eventTimestamps.delete(key);
     }
   }
 }, 60 * 1000);
