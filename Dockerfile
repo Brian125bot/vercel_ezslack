@@ -38,8 +38,9 @@ RUN npm ci --only=production
 # Copy compiled target assets from the build stage pipeline
 COPY --from=builder /usr/src/app/dist ./dist
 
-# Standard Cloud Run ingress targets port 3000
-EXPOSE 3000
+# Cloud Run sets the PORT env var (default 8080) and the app binds to it at
+# runtime. EXPOSE is informational only; align it with the Cloud Run default.
+EXPOSE 8080
 
 # Start compiled CommonJS background server
 CMD ["npm", "run", "start"]
