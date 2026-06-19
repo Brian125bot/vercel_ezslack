@@ -28,8 +28,7 @@ steps:
     entrypoint: gcloud
     args:
       - 'run'
-      - 'services'
-      - 'update'
+      - 'deploy'
       - '${_IMAGE}'
       - '--platform=managed'
       - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:$COMMIT_SHA'
