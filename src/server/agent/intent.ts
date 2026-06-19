@@ -8,8 +8,27 @@ export type IntentCategory =
   | 'cancel_or_update'
   | 'unsafe_or_unsupported';
 
-export async function classifyIntent(text: string, selectedModel: string, ai?: any): Promise<IntentCategory> {
+export interface IntentContext {
+  workspaceId: string;
+  channelId: string;
+  userId: string;
+  threadTs?: string;
+  hasPendingApproval?: boolean;
+}
+
+export interface IntentResult {
+  intent: IntentCategory;
+  confidence: 'high' | 'medium' | 'low';
+  source: 'heuristic' | 'llm' | 'fallback';
+}
+
+export async function classifyIntent(
+  text: string,
+  selectedModel: string,
+  options?: { ai?: GoogleGenAI; context?: IntentContext }
+): Promise<IntentResult> {
   const lowercase = text.toLowerCase().trim();
+  const hasPendingApproval = !!options?.context?.hasPendingApproval;
   
   // Heuristic overrides
   
@@ -20,16 +39,35 @@ export async function classifyIntent(text: string, selectedModel: string, ai?: a
     'delete files', 'wipe server'
   ];
   if (unsafePatterns.some(p => lowercase.includes(p))) {
-    return 'unsafe_or_unsupported';
+    return {
+      intent: 'unsafe_or_unsupported',
+      confidence: 'high',
+      source: 'heuristic'
+    };
   }
 
-  // 2. Approval response
+  // 2. Approval response - Weak approval/confirm words only count when hasPendingApproval is true
   const approvalWords = [
     'approve', 'reject', 'confirm', 'yes', 'no', 'proceed', 'deny', 'allow', 'disallow',
     'approved', 'rejected', 'go ahead', 'stop execution', 'cancel proposal'
   ];
   if (approvalWords.some(w => lowercase === w || lowercase.startsWith(w + ' ') || lowercase.startsWith(w + '!'))) {
-    return 'approval_response';
+    if (hasPendingApproval) {
+      return {
+        intent: 'approval_response',
+        confidence: 'high',
+        source: 'heuristic'
+      };
+    } else {
+      // If no pending approval and the phrase is exactly approve, reject, yes, no,, treat as direct_reply
+      if (['approve', 'reject', 'yes', 'no', 'approved', 'rejected', 'confirm'].includes(lowercase)) {
+        return {
+          intent: 'direct_reply',
+          confidence: 'high',
+          source: 'heuristic'
+        };
+      }
+    }
   }
 
   // 3. Cancel / update
@@ -38,7 +76,11 @@ export async function classifyIntent(text: string, selectedModel: string, ai?: a
     'update step', 'change plan', 'modify task', 'cancel goal', 'delete goal'
   ];
   if (cancelWords.some(w => lowercase.includes(w))) {
-    return 'cancel_or_update';
+    return {
+      intent: 'cancel_or_update',
+      confidence: 'high',
+      source: 'heuristic'
+    };
   }
 
   // 4. Status query
@@ -47,7 +89,11 @@ export async function classifyIntent(text: string, selectedModel: string, ai?: a
     'list goals', 'list runs', 'how is the task', 'any update on', 'any status'
   ];
   if (statusWords.some(w => lowercase.includes(w))) {
-    return 'status_query';
+    return {
+      intent: 'status_query',
+      confidence: 'high',
+      source: 'heuristic'
+    };
   }
 
   // 5. Durable task triggers
@@ -57,15 +103,24 @@ export async function classifyIntent(text: string, selectedModel: string, ai?: a
     'execute command', 'monitor', 'backup', 'restore'
   ];
   if (durableWords.some(w => lowercase.includes(w))) {
-    return 'durable_task';
+    return {
+      intent: 'durable_task',
+      confidence: 'high',
+      source: 'heuristic'
+    };
   }
 
   // 6. Very short messages are usually chitchat or greeting
   if (text.length < 8) {
-    return 'direct_reply';
+    return {
+      intent: 'direct_reply',
+      confidence: 'high',
+      source: 'heuristic'
+    };
   }
 
   // Fallback to LLM
+  let ai = options?.ai;
   if (!ai) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (apiKey) {
@@ -87,7 +142,8 @@ User Message: "${text}"
 
 Respond with EXACTLY a JSON block matching this structure:
 {
-  "intent": "INTENT_NAME"
+  "intent": "INTENT_NAME",
+  "confidence": "high" | "medium" | "low"
 }
 Provide NO other text.`;
 
@@ -100,17 +156,32 @@ Provide NO other text.`;
       });
 
       const parsed = JSON.parse(response.text?.trim() || '{}');
-      const intentStr = parsed.intent;
+      let intentStr = parsed.intent as IntentCategory;
+      const confidence = (parsed.confidence || 'medium') as 'high' | 'medium' | 'low';
+      
       const validCategories: IntentCategory[] = [
         'direct_reply', 'durable_task', 'status_query', 'approval_response', 'cancel_or_update', 'unsafe_or_unsupported'
       ];
+      
       if (validCategories.includes(intentStr)) {
-        return intentStr as IntentCategory;
+        // Enforce the rule: cannot be approval_response if there is no pending approval
+        if (intentStr === 'approval_response' && !hasPendingApproval) {
+          intentStr = 'direct_reply';
+        }
+        return {
+          intent: intentStr,
+          confidence,
+          source: 'llm'
+        };
       }
     } catch (err) {
       console.warn(`[Intent fallback error] Failing over to heuristic defaults.`, err);
     }
   }
 
-  return 'direct_reply';
+  return {
+    intent: 'direct_reply',
+    confidence: 'low',
+    source: 'fallback'
+  };
 }

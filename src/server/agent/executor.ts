@@ -12,19 +12,33 @@ export async function executeStep(
   await agentStore.updateStepStatus(step.id, 'running');
 
   if (!step.input || !(step.input as any).toolName) {
-    // If no tool is specified, we just mark it succeeded (e.g. conceptual step)
-    await agentStore.updateStepStatus(step.id, 'succeeded', { output: { message: 'Step completed (no tool)' } });
-    await agentStore.appendAuditEvent({
-      workspace_id: context.workspaceId,
-      goal_id: run.goal_id,
-      run_id: run.id,
-      step_id: step.id,
-      type: 'step.succeeded',
-      actor: 'system',
-      summary: `Step succeeded: ${step.title} (conceptual)`,
-      payload: {}
-    });
-    return;
+    if (step.kind === 'note') {
+      await agentStore.updateStepStatus(step.id, 'succeeded', { output: { message: 'Step completed (conceptual note)' } });
+      await agentStore.appendAuditEvent({
+        workspace_id: context.workspaceId,
+        goal_id: run.goal_id,
+        run_id: run.id,
+        step_id: step.id,
+        type: 'step.succeeded',
+        actor: 'system',
+        summary: `Step succeeded: ${step.title} (conceptual)`,
+        payload: {}
+      });
+      return;
+    } else {
+      await agentStore.updateStepStatus(step.id, 'failed', { error: 'No tool specified and not a note step' });
+      await agentStore.appendAuditEvent({
+        workspace_id: context.workspaceId,
+        goal_id: run.goal_id,
+        run_id: run.id,
+        step_id: step.id,
+        type: 'step.failed',
+        actor: 'system',
+        summary: `Step failed: No tool specified for action step`,
+        payload: { error: 'Unsupported / no-tool step cannot succeed' }
+      });
+      return;
+    }
   }
 
   const toolName = (step.input as any).toolName;

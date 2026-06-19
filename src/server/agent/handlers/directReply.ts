@@ -1,0 +1,26 @@
+import { generateSimpleResponse } from '../../ai.js';
+import { threadMemory } from '../../state.js';
+import { slackReplyInThreadTool } from '../../tools/slack.js';
+import type { AgentPipelineInput, AgentPipelineResult, ToolExecutionContext } from '../types.js';
+
+export async function handleDirectReply(
+  input: AgentPipelineInput,
+  context: ToolExecutionContext
+): Promise<AgentPipelineResult> {
+  const intent = 'direct_reply';
+  const threadKeyStr = input.threadTs ? `chan-${input.channelId}-thread-${input.threadTs}` : `chan-${input.channelId}-single`;
+  const history = threadMemory.get(threadKeyStr) || [];
+  
+  try {
+    const replyText = await generateSimpleResponse(input.messageText, input.selectedModel, history);
+    
+    // Update thread memory
+    const updatedHistory = [...history, { role: 'user', text: input.messageText }, { role: 'model', text: replyText }];
+    threadMemory.set(threadKeyStr, updatedHistory.length > 20 ? updatedHistory.slice(-20) : updatedHistory);
+
+    await slackReplyInThreadTool.execute({ text: replyText }, context);
+    return { status: 'success', intent };
+  } catch (err: any) {
+    return { status: 'error', intent, message: err.message };
+  }
+}

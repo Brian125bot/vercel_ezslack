@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { requireDashboardAuth } from './auth.js';
 import { logs, selectedModel, setSelectedModel, processedEventIds, processedMessageKeys, eventTimestamps, addLog, updateLog, threadMemory } from './state.js';
-import { classifyIntent } from './ai.js';
+import { classifyIntent } from './agent/intent.js';
 import { GoogleGenAI } from '@google/genai';
 import { SlackEventLog } from '../types.js';
 import { agentStore } from './storage/agentStore.js';
@@ -358,37 +358,45 @@ router.post('/slack/events', (req: any, res: any) => {
         const workspaceId = req.body?.team_id || 'T_UNKNOWN';
         const dbAvailable = (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) ? await isDbAvailable() : false;
 
-        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-        const { intent, confidence } = await classifyIntent(promptText, selectedModel, ai);
+        const hasPendingApproval = dbAvailable ? await agentStore.hasPendingApproval(workspaceId, event.channel) : false;
 
-        if (dbAvailable) {
-          const result = await runAgentPipeline({
+        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+        const intentResult = await classifyIntent(promptText, selectedModel, {
+          ai,
+          context: {
             workspaceId,
             channelId: event.channel,
             userId: event.user,
-            messageText: promptText,
-            eventId: eventId,
-            messageTs: event.ts,
             threadTs: threadTsTarget,
-            selectedModel,
-            signatureValid: !!signingSecret && signatureVerified,
-            sourceType: 'slack'
-          });
+            hasPendingApproval
+          }
+        });
+        const { intent, confidence, source } = intentResult;
 
-          const durationMs = Date.now() - startTime;
-          updateLog(logItem.id, {
-            status: result.status === 'success' ? 'success' : 'error',
-            intent: result.intent || intent,
-            confidence,
-            processingTimeMs: durationMs,
-            runId: result.runId,
-            error: result.message
-          });
-        } else {
-          // Fallback to legacy path if no DB
-          const durationMs = Date.now() - startTime;
-          updateLog(logItem.id, { intent, confidence, error: 'Database unavailable, skipped durable run', processingTimeMs: durationMs });
-        }
+        const result = await runAgentPipeline({
+          workspaceId,
+          channelId: event.channel,
+          userId: event.user,
+          messageText: promptText,
+          eventId: eventId,
+          messageTs: event.ts,
+          threadTs: threadTsTarget,
+          selectedModel,
+          signatureValid: !!signingSecret && signatureVerified,
+          sourceType: 'slack',
+          dbAvailable
+        });
+
+        const durationMs = Date.now() - startTime;
+        updateLog(logItem.id, {
+          status: result.status === 'success' ? 'success' : 'error',
+          intent: result.intent || intent,
+          confidence,
+          source,
+          processingTimeMs: durationMs,
+          runId: result.runId,
+          error: (!dbAvailable && result.intent === 'durable_task') ? 'Database unavailable, skipped durable run' : result.message
+        });
 
       } catch (bkErr: any) {
         console.error(`[Background Task Misfire] `, bkErr);

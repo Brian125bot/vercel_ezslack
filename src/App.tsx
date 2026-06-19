@@ -1277,14 +1277,15 @@ export default function App() {
                         {/* Classified Intent Badge */}
                         {log.intent && (
                           <span className={`text-[10px] font-semibold px-2 py-0.5 rounded flex items-center gap-1 border ${
-                            log.intent === 'GENERAL_CHITCHAT' ? 'bg-slate-50 text-slate-600 border-slate-200/60' :
-                            log.intent === 'TECH_SUPPORT' ? 'bg-rose-50 text-rose-600 border-rose-100' :
-                            log.intent === 'TASKS_AND_TODO' ? 'bg-teal-50 text-teal-600 border-teal-100' :
-                            log.intent === 'DATA_ANALYTICS' ? 'bg-violet-50 text-violet-600 border-violet-100' :
-                            log.intent === 'ADMIN_ALERT' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                            log.intent === 'direct_reply' ? 'bg-slate-50 text-slate-600 border-slate-200/60' :
+                            log.intent === 'durable_task' ? 'bg-teal-50 text-teal-600 border-teal-100' :
+                            log.intent === 'status_query' ? 'bg-violet-50 text-violet-600 border-violet-100' :
+                            log.intent === 'approval_response' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                            log.intent === 'cancel_or_update' ? 'bg-rose-50 text-rose-600 border-rose-100' :
+                            log.intent === 'unsafe_or_unsupported' ? 'bg-red-100 text-red-800 border-red-200' :
                             'bg-slate-50 text-slate-600 border-slate-200'
                           }`}>
-                            {log.intent} ({log.confidence || '90%'})
+                            {log.intent} ({log.confidence || 'high'}{log.source ? ` • ${log.source}` : ''})
                           </span>
                         )}
 

@@ -7,12 +7,22 @@ export const memoryWriteTool: AgentTool<{ content: string; kind: string; visibil
   riskLevel: 'internal_write',
   requiresApproval: false,
   async execute(input, context) {
+    const content = input.content || '';
+    const secretPatterns = [
+      /password/i, /secret/i, /api[_-]?key/i, /token/i,
+      /bearer/i, /credential/i, /pwd/i, /auth/i
+    ];
+
+    if (secretPatterns.some(pattern => pattern.test(content))) {
+      return { status: 'failed', error: 'Refusing to write potentially sensitive information or secrets to memory.' };
+    }
+
     const memory = await agentStore.writeMemory({
       workspace_id: context.workspaceId,
       user_id: context.userId,
       channel_id: context.channelId || '',
       kind: input.kind || 'fact',
-      content: input.content,
+      content: content,
       source: 'agent',
       visibility: input.visibility || 'workspace',
       confidence: 1.0

@@ -11,6 +11,7 @@ export interface AgentPipelineInput {
   selectedModel: string;
   signatureValid: boolean;
   sourceType: string;
+  dbAvailable?: boolean;
 }
 
 export interface AgentPipelineResult {
@@ -64,3 +65,26 @@ export interface AgentTool<TInput = any, TOutput = any> {
   requiresApproval: boolean;
   execute(input: TInput, context: ToolExecutionContext): Promise<TOutput>;
 }
+
+export type IntentCategory = 
+  | 'direct_reply'
+  | 'durable_task'
+  | 'status_query'
+  | 'approval_response'
+  | 'cancel_or_update'
+  | 'unsafe_or_unsupported';
+
+export interface IntentContext {
+  workspaceId: string;
+  channelId: string;
+  userId: string;
+  threadTs?: string;
+  hasPendingApproval?: boolean;
+}
+
+export interface IntentResult {
+  intent: IntentCategory;
+  confidence: 'high' | 'medium' | 'low';
+  source: 'heuristic' | 'llm' | 'fallback';
+}
+

@@ -249,5 +249,37 @@ export const agentStore = {
 
   async listAuditEvents(runId: string): Promise<AuditEvent[]> {
     return query<AuditEvent>(`SELECT * FROM audit_events WHERE run_id = $1 ORDER BY created_at ASC`, [runId]);
+  },
+
+  async hasPendingApproval(workspaceId: string, channelId: string): Promise<boolean> {
+    const rows = await query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 
+         FROM approval_requests a
+         JOIN agent_goals g ON a.goal_id = g.id
+         WHERE g.workspace_id = $1 AND a.channel_id = $2 AND a.status = 'pending' AND a.expires_at > now()
+       ) as exists`,
+      [workspaceId, channelId]
+    );
+    return !!rows[0]?.exists;
+  },
+
+  async getPendingApprovals(workspaceId: string, channelId: string): Promise<ApprovalRequest[]> {
+    return query<ApprovalRequest>(
+      `SELECT a.* FROM approval_requests a
+       JOIN agent_goals g ON a.goal_id = g.id
+       WHERE g.workspace_id = $1 AND a.channel_id = $2 AND a.status = 'pending' AND a.expires_at > now()`,
+      [workspaceId, channelId]
+    );
+  },
+
+  async getActiveRunsByChannel(workspaceId: string, channelId: string): Promise<AgentRun[]> {
+    return query<AgentRun>(
+      `SELECT r.* FROM agent_runs r
+       JOIN agent_goals g ON r.goal_id = g.id
+       WHERE g.workspace_id = $1 AND g.source_channel_id = $2
+         AND r.status NOT IN ('succeeded', 'failed')`,
+      [workspaceId, channelId]
+    );
   }
 };
