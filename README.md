@@ -129,6 +129,25 @@ gcloud run deploy slack-ai-agent \
   --set-env-vars="GEMINI_API_KEY=...,SLACK_BOT_TOKEN=...,SLACK_SIGNING_SECRET=...,DASHBOARD_PASSWORD=..."
 ```
 
+### Option 3: Automated CI/CD (Google Cloud Build)
+This repository includes a pre-configured [cloudbuild.yaml](file:///home/creetacticalgenius/projects/slackcloud/cloudbuild.yaml) file to orchestrate continuous integration and delivery. Pushes to the `main` branch can automatically trigger build pipelines via GCP Cloud Build.
+
+The automated pipeline performs the following steps:
+1. **Build**: Compiles a production-ready container using the multi-stage `Dockerfile` built with Node 22 (required for `@google-cloud/cloud-sql-connector` engine requirements).
+2. **Push SHA Tag**: Pushes the image tagged with the corresponding git commit SHA.
+3. **Push Latest Tag**: Publishes the same image with the `:latest` tag for rapid cache resolution and general fallback.
+4. **Deploy**: Executes `gcloud run deploy` to cleanly update the active revision on Cloud Run in the `us-west1` region.
+
+To manually trigger a build using the configured trigger on Google Cloud:
+```bash
+gcloud builds triggers run <TRIGGER_ID> \
+  --branch=main \
+  --project=<PROJECT_ID>
+```
+
+> [!NOTE]
+> **Stale Annotation Resolution:** If your service was originally created using a source-based or AI Studio deployment tool, it may carry a conflicting `run.googleapis.com/sources` annotation. The deployment step uses `gcloud run deploy` (rather than `gcloud run services update`) to cleanly replace the revision specifications, resolving stale source metadata conflicts.
+
 ---
 
 ## ⚙️ Quick Start Installation

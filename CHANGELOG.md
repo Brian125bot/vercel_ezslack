@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - CI/CD Pipeline & Runtime Upgrades - 2026-06-19
+
+### 🚀 Google Cloud Build CI/CD Modernization
+* **Hardened Pipeline Configuration**: Restructured `cloudbuild.yaml` to run a fully automated container build, double-tagging pipeline (`COMMIT_SHA` and `:latest`), and deployment steps targeting the correct region (`us-west1`) and repository (`cloud-run-source-deploy`).
+* **Cloud Run Metadata Cleanliness**: Transitioned from `gcloud run services update` to `gcloud run deploy` to allow clean specification replacements. Surgically purged a stale `run.googleapis.com/sources` annotation leftover from previous AI Studio source-based deployments, which had been blocking subsequent container-based builds.
+
+### ⚙️ Runtime Environment Upgrades
+* **Node.js Engine Upgrade**: Bumped the Dockerfile base images (`builder` and `runner` stages) from `node:20-alpine` to `node:22-alpine` to satisfy engine requirements of `@google-cloud/cloud-sql-connector` and ensure stable database connectivity.
+
+### 🧹 Repo Pruning & Documentation
+* **Stale Document Removal**: Purged untracked legacy specification file (`docs/weeks-1-2-spec.md`) to establish the current main branch as the absolute source of truth.
+* **Deployment Guide**: Updated `README.md` to include comprehensive guides for setting up automated GCP Cloud Build triggers and resolving common annotation-related deployment conflicts.
+
 ## [2.0.0] - Weeks 1–2 (merged) - 2026-06-19
 
 ### ✨ Completed Deliverables (Weeks 1–2)
