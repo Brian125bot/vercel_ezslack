@@ -23,15 +23,20 @@ Switch your agent's brain at runtime without a single line of code redeployment 
 Slack expects an HTTP `200 OK` handshake response within **3 seconds** of firing an event, failing which it cancels the transaction and fires retry surges. This backend instantly validates cryptographic signatures, registers the job ID, and issues a standard response inside of ~15ms. It then leverages NodeJS `setImmediate` to execute the model loop, intent classification, and API routing concurrently in the background.
 
 ### 3. 🧠 Dynamic Intent Classifier (LLM-in-the-Loop)
-Every incoming message is analyzed in real-time by the active model engine to determine target intent. The agent classifies intents with confidence scores into specialized categories:
-* `GENERAL_CHITCHAT`: Conversational pleasantries.
-* `TECH_SUPPORT`: IT, codebase inquiries, or network issues.
-* `TASKS_AND_TODO`: Project milestones, checklists, and assignments.
-* `DATA_ANALYTICS`: SQL queries, metric dumps, or log summaries.
-* `ADMIN_ALERT`: System breaches, security concerns, or failovers.
+Every incoming message is analyzed in real-time by the active model engine to determine target intent. The agent classifies intents into specialized robust categories to dictate the action workflow:
+* `direct_reply`: Conversational pleasantries and standard Q&A.
+* `durable_task`: Multi-step goals, reminders, and advanced project operations requiring background tracking.
+* `status_query`: Interrogation of active goals and workflow outcomes.
+* `approval_response`: Live validation or rejection of multi-step tools.
+* `unsafe_or_unsupported`: Strict boundary classification for destructive actions.
 
-### 4. 🗄️ Durable SQL Agent Core Extensibility
-If configured with `CLOUD_SQL_CONNECTION_NAME` or `DATABASE_URL`, the backend automatically shifts from lightweight memory cache bridging to a durable relational agent data store. Task-like intents (`TASKS_AND_TODO`, `ADMIN_ALERT`, `DATA_ANALYTICS`) trigger strict schemas that persist structured **Agent Goals**, execution traces, step logs, tool invocations, and workspace-scoped memory buffers securely.
+### 4. 🗄️ Durable SQL Agent Core & Runtime (Phase 2)
+The backend shift from lightweight scripting to a robust cloud-native **Agent Runtime Loop** backed by PostgreSQL (`CLOUD_SQL_CONNECTION_NAME` or `DATABASE_URL`). 
+Multi-step task intents automatically generate structured:
+* **Goals & Plans**: Decomposes complex instructions into bounded ordered steps.
+* **Executor & Verifier**: Sequentially processes goals through a tool registry, followed by a verification step guaranteeing intended outcomes were actually met.
+* **Policy & Approvals**: Intercepts actions based on predefined risk levels (`read`, `draft`, `internal_write`, `external_write`). Explicit approvals requested for external writes and destructive operations safely blocked.
+* **Full Audit Trail**: A complete, replayable timeline of goal, plan, tool execution and status updates viewable seamlessly in the Dashboard UI.
 
 ### 5. 🧵 Stateful Conversation Thread Memory
 Maintains up to the last 20 conversational turns per unique thread context (dynamically keyed on channel/thread hash values) so interactions feel natural, context-aware, and continuous.
@@ -61,7 +66,11 @@ The companion management UI gives you absolute control over your live agentic ec
 ├── src/
 │   ├── App.tsx            # React Dashboard with monitoring and simulator
 │   ├── main.tsx           # Entry React mounting node
-│   └── index.css          # Tailwind CSS global styles stylesheet
+│   ├── index.css          # Tailwind CSS global styles stylesheet
+│   └── server/
+│       ├── agent/         # Agent runtime loop (intent, orchestrator, planner, executor, verifier)
+│       ├── storage/       # Durable PostgreSQL persistence (schema, store, migrations)
+│       └── tools/         # Strongly-typed tools (memory, slack, task)
 ├── slack-manifest.json    # Copy-pasteable Slack App Manifest specification
 ├── metadata.json          # Applet permission constraints
 ├── Dockerfile             # Multi-stage Docker build for containerized deployments

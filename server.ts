@@ -11,6 +11,7 @@ import { runMigrations } from "./src/server/storage/migrations.js";
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = 3000;
 
 // Security: Expose minimal server information
@@ -35,6 +36,7 @@ const apiLimiter = rateLimit({
   message: "Too many requests from this IP, please try again after 15 minutes",
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false, default: true }
 });
 app.use("/api", apiLimiter);
 
