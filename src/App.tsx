@@ -29,6 +29,8 @@ interface ServerStatus {
   slackBotTokenConfigured: boolean;
   slackSigningSecretConfigured: boolean;
   appUrl: string;
+  selectedModel?: string;
+  availableModels?: Array<{ id: string; name: string; description: string }>;
 }
 
 interface SlackEventLog {
@@ -85,6 +87,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'simulator' | 'guide'>('simulator');
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [clearingLogs, setClearingLogs] = useState(false);
+  const [updatingModel, setUpdatingModel] = useState(false);
 
   // Authenticated gateway states
   const [dashboardPassword, setDashboardPassword] = useState<string>(() => localStorage.getItem('dashboard_password') || '');
@@ -198,6 +201,38 @@ export default function App() {
       console.error('Error clearing logs:', e);
     } finally {
       setClearingLogs(false);
+    }
+  };
+
+  const handleSelectModel = async (modelId: string) => {
+    setUpdatingModel(true);
+    try {
+      const headers: HeadersInit = { 'Content-Type': 'application/json' };
+      if (dashboardPassword) {
+        headers['Authorization'] = `Bearer ${dashboardPassword}`;
+      }
+      const res = await fetch('/api/model/select', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model: modelId }),
+      });
+
+      if (res.status === 401) {
+        alert('Unauthorized access. Please reauthenticate.');
+        setAuthRequired(true);
+        return;
+      }
+
+      if (res.ok) {
+        await fetchStatus();
+      } else {
+        const err = await res.json();
+        alert(`Failed to set model: ${err.error || 'Unknown error'}`);
+      }
+    } catch (e) {
+      console.error('Error selecting model:', e);
+    } finally {
+      setUpdatingModel(false);
     }
   };
 
@@ -855,6 +890,53 @@ export default function App() {
 
         {/* Right Column: Event Pipeline logs (5 cols) */}
         <div className="lg:col-span-5 flex flex-col gap-4">
+
+          {/* Active Logic Model Controller */}
+          <div className="bg-gradient-to-br from-indigo-950 to-slate-900 border border-slate-800 text-white rounded-2xl p-5 shadow-sm space-y-4 relative overflow-hidden" id="dashboard-model-control-card">
+            {/* Decorative soft glow */}
+            <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/15 rounded-full blur-3xl pointer-events-none" />
+
+            <div className="flex items-center justify-between border-b border-indigo-800/40 pb-3 relative z-10">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 bg-indigo-500/20 text-indigo-300 rounded-lg flex items-center justify-center">
+                  <Cpu className="w-4 h-4 text-indigo-400 animate-pulse" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-white font-sans">Active Gemini Model</h3>
+                  <p className="text-[10px] text-indigo-200/60 font-sans">Toggle live agentic cognition</p>
+                </div>
+              </div>
+              <span className="text-[9px] font-mono bg-indigo-500/10 border border-indigo-500/30 px-2 py-0.5 rounded text-indigo-300 font-bold uppercase tracking-wide">
+                Live Switch
+              </span>
+            </div>
+
+            <div className="space-y-2 relative z-10">
+              <label className="block text-[10px] font-bold text-indigo-300 uppercase tracking-wider font-sans">
+                Select Model Engine
+              </label>
+
+              <select
+                value={status?.selectedModel || 'gemini-3.1-flash-lite'}
+                onChange={(e) => handleSelectModel(e.target.value)}
+                disabled={updatingModel || loadingStatus}
+                className="w-full bg-slate-950/80 border border-indigo-800 text-indigo-200 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-indigo-400 font-sans transition hover:bg-slate-950 cursor-pointer"
+                id="dashboard-model-selector"
+              >
+                {status?.availableModels?.map((opt) => (
+                  <option key={opt.id} value={opt.id} className="bg-slate-900 text-slate-100">
+                    {opt.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {status?.availableModels && (
+              <p className="text-[11px] text-indigo-200/70 leading-relaxed italic border-l-2 border-indigo-500/40 pl-2 font-sans relative z-10">
+                {status.availableModels.find(m => m.id === (status.selectedModel || 'gemini-3.1-flash-lite'))?.description}
+              </p>
+            )}
+          </div>
           
           {/* Pipeline Header */}
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
@@ -924,12 +1006,33 @@ export default function App() {
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-mono text-xs text-slate-700 font-medium truncate shrink-0 max-w-[120px] bg-slate-100 p-0.5 rounded border border-slate-200 flex items-center gap-1">
+                      <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                        <span className="font-mono text-xs text-slate-700 font-medium truncate shrink-0 max-w-[124px] bg-slate-100 p-0.5 rounded border border-slate-200 flex items-center gap-1">
                           <Hash className="w-3 h-3 text-slate-400" />
                           {log.channel}
                         </span>
                         <span className="text-xs text-slate-400 font-mono">by {log.user}</span>
+
+                        {/* Classified Intent Badge */}
+                        {log.intent && (
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded flex items-center gap-1 border ${
+                            log.intent === 'GENERAL_CHITCHAT' ? 'bg-slate-50 text-slate-600 border-slate-200/60' :
+                            log.intent === 'TECH_SUPPORT' ? 'bg-rose-50 text-rose-600 border-rose-100' :
+                            log.intent === 'TASKS_AND_TODO' ? 'bg-teal-50 text-teal-600 border-teal-100' :
+                            log.intent === 'DATA_ANALYTICS' ? 'bg-violet-50 text-violet-600 border-violet-100' :
+                            log.intent === 'ADMIN_ALERT' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                            'bg-slate-50 text-slate-600 border-slate-200'
+                          }`}>
+                            {log.intent} ({log.confidence || '90%'})
+                          </span>
+                        )}
+
+                        {/* Thread Size Context indicator badge */}
+                        {log.threadHistoryCount !== undefined && log.threadHistoryCount > 0 && (
+                          <span className="text-[10px] font-mono bg-violet-50 text-violet-600 border border-violet-100 px-1.5 py-0.5 rounded">
+                            Memory: {log.threadHistoryCount} turns recalled
+                          </span>
+                        )}
                       </div>
 
                       <p className="text-slate-800 text-sm font-semibold truncate mt-1">
@@ -970,7 +1073,7 @@ export default function App() {
                             <div className="space-y-1.5">
                               <div className="flex items-center gap-1.5">
                                 <Sparkles className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                                <h5 className="text-[10px] text-indigo-600 uppercase tracking-wider font-bold">Threaded response from Gemini (gemini-2.5-flash):</h5>
+                                <h5 className="text-[10px] text-indigo-600 uppercase tracking-wider font-bold">Threaded response from Gemini ({status?.selectedModel || 'gemini-3.1-flash-lite'}):</h5>
                               </div>
                               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-slate-700">
                                 {formatSlackMarkdown(log.aiResponse)}
@@ -990,25 +1093,37 @@ export default function App() {
                             </div>
                           )}
 
-                          <div className="grid grid-cols-2 gap-2 text-[9px] font-mono leading-tight pt-2 border-t border-slate-100 text-slate-500">
+                          <div className="grid grid-cols-2 gap-3 text-[9px] font-mono leading-tight pt-2.5 border-t border-slate-200 text-slate-500 bg-slate-50/70 p-3 rounded-lg border border-slate-100">
                             <div>
-                              <p className="text-slate-400 font-sans">INTERNAL LOG ID:</p>
+                              <p className="text-slate-400 font-sans font-bold">INTERNAL LOG ID:</p>
                               <p className="font-semibold text-slate-700">{log.id}</p>
                             </div>
                             <div>
-                              <p className="text-slate-400 font-sans">SLACK EVENT ID:</p>
+                              <p className="text-slate-400 font-sans font-bold">SLACK EVENT ID:</p>
                               <p className="font-semibold text-slate-700 truncate">{log.eventId}</p>
                             </div>
                             <div>
-                              <p className="text-slate-400 font-sans">EVENT TIMESTAMP:</p>
+                              <p className="text-slate-400 font-sans font-bold">EVENT TIMESTAMP:</p>
                               <p className="font-semibold text-slate-700">{new Date(log.timestamp).toLocaleString()}</p>
                             </div>
                             <div>
-                              <p className="text-slate-400 font-sans">INTEGRITY STATUS:</p>
+                              <p className="text-slate-400 font-sans font-bold">INTEGRITY STATUS:</p>
                               <p className="font-semibold text-slate-700">
                                 {log.signatureVerified ? 'Verified Standard' : 'Sandbox (No Key)'}
                               </p>
                             </div>
+                            {log.processingTimeMs !== undefined && (
+                              <div>
+                                <p className="text-indigo-400 font-sans font-bold">COGNITION LATENCY:</p>
+                                <p className="font-bold text-indigo-700">{log.processingTimeMs} ms</p>
+                              </div>
+                            )}
+                            {log.threadKey && (
+                              <div className="col-span-2">
+                                <p className="text-slate-400 font-sans font-bold">RESOLVED MEMORY THREAD KEY:</p>
+                                <p className="font-semibold text-slate-600 truncate">{log.threadKey}</p>
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}

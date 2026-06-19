@@ -30,11 +30,26 @@ interface SlackEventLog {
   signatureVerified: boolean;
   aiResponse?: string;
   error?: string;
+  intent?: string;           // Dynamically classified intent
+  confidence?: string;       // Confidence score
+  processingTimeMs?: number; // Background task latency recording
+  threadKey?: string;        // Resolved thread identification key
+  threadHistoryCount?: number; // Size of thread history recalled
 }
+
+// Stateful Conversation Thread Memory
+interface ThreadMessage {
+  role: 'user' | 'model';
+  text: string;
+}
+const threadMemory = new Map<string, ThreadMessage[]>();
 
 // In-memory rolling logs buffer
 const logs: SlackEventLog[] = [];
 const maxLogs = 50;
+
+// Active Gemini model state
+let selectedModel = 'gemini-3.1-flash-lite';
 
 function addLog(item: SlackEventLog) {
   logs.unshift(item); // Latest first
@@ -103,8 +118,28 @@ app.get('/api/status', requireDashboardAuth, (req, res) => {
     slackBotTokenConfigured: !!(process.env.SLACK_BOT_TOKEN && process.env.SLACK_BOT_TOKEN !== 'MY_SLACK_BOT_TOKEN'),
     slackSigningSecretConfigured: !!(process.env.SLACK_SIGNING_SECRET && process.env.SLACK_SIGNING_SECRET !== 'MY_SIGNING_SECRET'),
     appUrl: process.env.APP_URL || 'http://localhost:3000',
-    dashboardPasswordRequired: !!DASHBOARD_PASSWORD
+    dashboardPasswordRequired: !!DASHBOARD_PASSWORD,
+    selectedModel,
+    availableModels: [
+      { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', description: 'Default. Extra fast, low latency, perfect for messaging workflows.' },
+      { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Ultimate intelligence/speed ratio. Incredible logic capabilities.' },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Stable and responsive general-purpose logic automations.' },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'Next-gen experimental agentic and search capabilities.' },
+      { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', description: 'Legacy 2M token context model with robust consistency.' }
+    ]
   });
+});
+
+// Select active Gemini model
+app.post('/api/model/select', requireDashboardAuth, (req, res) => {
+  const { model } = req.body;
+  const allowed = ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  if (!allowed.includes(model)) {
+    return res.status(400).json({ error: 'Unsupported or unreleased model selection ID.' });
+  }
+  selectedModel = model;
+  console.log(`[Dashboard Admin] Switched active logic model to: ${selectedModel}`);
+  res.json({ success: true, selectedModel });
 });
 
 // Retrieve latest logs
@@ -187,6 +222,49 @@ app.post('/api/slack/test', requireDashboardAuth, async (req: any, res: any) => 
     res.status(500).json({ error: error.message || String(error) });
   }
 });
+
+/**
+ * Classifies raw event messages into a high-impact intent category.
+ */
+async function classifyIntent(text: string, model: string, ai: any): Promise<{ intent: string; confidence: string }> {
+  try {
+    const classificationPrompt = `Analyze the following message and classify its primary intent into exactly one of these categories: [GENERAL_CHITCHAT, TECH_SUPPORT, TASKS_AND_TODO, DATA_ANALYTICS, ADMIN_ALERT].
+Message: "${text}"
+
+Respond with EXACTLY a JSON block matching this structure:
+{
+  "intent": "INTENT_NAME",
+  "confidence": "XX%"
+}`;
+    
+    const response = await ai.models.generateContent({
+      model: model,
+      contents: classificationPrompt,
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+    
+    try {
+      const parsed = JSON.parse(response.text?.trim() || "{}");
+      return {
+        intent: parsed.intent || 'GENERAL_CHITCHAT',
+        confidence: parsed.confidence || '90%'
+      };
+    } catch {
+      const raw = response.text || '';
+      for (const cat of ['GENERAL_CHITCHAT', 'TECH_SUPPORT', 'TASKS_AND_TODO', 'DATA_ANALYTICS', 'ADMIN_ALERT']) {
+        if (raw.toUpperCase().includes(cat)) {
+          return { intent: cat, confidence: '85%' };
+        }
+      }
+      return { intent: 'GENERAL_CHITCHAT', confidence: '75%' };
+    }
+  } catch (err) {
+    console.warn(`[Intent Routing Warning] Could not classify intent:`, err);
+    return { intent: 'GENERAL_CHITCHAT', confidence: 'N/A' };
+  }
+}
 
 // Precise Slack Webhook Events endpoint
 app.post('/api/slack/events', (req: any, res: any) => {
@@ -302,6 +380,7 @@ app.post('/api/slack/events', (req: any, res: any) => {
 
     // 5. Asynchronous Background task processing using setImmediate
     setImmediate(async () => {
+      const startTime = Date.now();
       try {
         console.log(`[Background Queue] Initiated background pipeline for ID: ${eventId}`);
         
@@ -322,9 +401,43 @@ app.post('/api/slack/events', (req: any, res: any) => {
           }
         });
 
-        const promptText = event.text;
+        const promptText = event.text || "";
+        const threadTsTarget = event.thread_ts || event.ts;
+        const threadKeyStr = threadTsTarget ? `chan-${event.channel}-thread-${threadTsTarget}` : `chan-${event.channel}-single`;
+
+        // Classification Phase
+        console.log(`[Intent Analysis] Running dynamic classification for event text...`);
+        const { intent, confidence } = await classifyIntent(promptText, selectedModel, ai);
+        console.log(`[Intent Classification] Category: ${intent} | Confidence: ${confidence}`);
+
+        // Thread Memory Retrieval
+        const history = threadMemory.get(threadKeyStr) || [];
+        console.log(`[Thread Memory] Resolved Key: ${threadKeyStr} | Pre-existing History turns: ${history.length}`);
+
+        // Update Log processing stage metadata
+        updateLog(logItem.id, {
+          intent,
+          confidence,
+          threadKey: threadKeyStr,
+          threadHistoryCount: history.length
+        });
+
+        // Compile stateful conversation parts
+        const contents: any[] = [];
+        for (const msg of history) {
+          contents.push({
+            role: msg.role === 'model' ? 'model' : 'user',
+            parts: [{ text: msg.text }]
+          });
+        }
+        contents.push({
+          role: 'user',
+          parts: [{ text: promptText }]
+        });
+
         const systemInstruction = 
-          "You are a helpful and precise Slack AI Agent backend. " +
+          "You are a helpful, context-aware, and precise Slack AI Agent backend. " +
+          "You hold conversation thread memory to maintain context in nested messaging dialogues. " +
           "Your responses must be highly actionable, readable, and written in standard Slack-compatible markdown:\n" +
           "- Use *text* for bold (do NOT use standard markdown **text**)\n" +
           "- Use _text_ for italics (do NOT use standard markdown *text* or _text_)\n" +
@@ -333,30 +446,44 @@ app.post('/api/slack/events', (req: any, res: any) => {
           "- Use ``` with language label for multiline block code\n" +
           "- Rely on clear spacing and formatting. Answer the user prompt directly without meta-commentary.";
 
-        console.log(`[Background Gemini] Prompting gemini-3.5-flash with message text length: ${promptText ? promptText.length : 0}`);
+        console.log(`[Background Gemini] Prompting ${selectedModel} with conversation history count: ${contents.length}`);
         const aiResponse = await ai.models.generateContent({
-          model: 'gemini-3.5-flash',
-          contents: promptText || "Hello! Who are you?",
+          model: selectedModel,
+          contents: contents,
           config: {
             systemInstruction: systemInstruction,
+            tools: [{ googleSearch: {} }],
           }
         });
 
         const generatedText = aiResponse.text || "(Empty response returned)";
         console.log(`[Background Gemini] Succeeded: ${generatedText.substring(0, 50)}...`);
 
-        // Check if Slack Bot Token is configured (if not, we simulate success for convenient preview testing)
+        // Record metrics
+        const durationMs = Date.now() - startTime;
+
+        // Save conversation turn back to thread memory (sliding limit of last 20 messages)
+        const updatedHistory = [...history];
+        updatedHistory.push({ role: 'user', text: promptText });
+        updatedHistory.push({ role: 'model', text: generatedText });
+        if (updatedHistory.length > 20) {
+          threadMemory.set(threadKeyStr, updatedHistory.slice(-20));
+        } else {
+          threadMemory.set(threadKeyStr, updatedHistory);
+        }
+
+        // Check if Slack Bot Token is configured (if not, we simulate)
         const isMockToken = !slackBotToken || slackBotToken === 'MY_SLACK_BOT_TOKEN' || slackBotToken.startsWith('mock') || !slackBotToken.startsWith('xox');
         
         if (isMockToken) {
           console.log(`[Slack Simulated API] Saved simulated thread post to channel: ${event.channel}`);
           updateLog(logItem.id, {
             status: 'success',
-            aiResponse: `${generatedText}\n\n_(Simulated Dispatch: SLACK_BOT_TOKEN is not configured or is mock)_`
+            aiResponse: `${generatedText}\n\n_(Simulated Dispatch: SLACK_BOT_TOKEN is not configured or is mock)_`,
+            processingTimeMs: durationMs
           });
         } else {
           // Thread-grouped Slack API dispatch
-          const threadTsTarget = event.thread_ts || event.ts;
           const slackPayload = {
             channel: event.channel,
             text: generatedText,
@@ -382,15 +509,18 @@ app.post('/api/slack/events', (req: any, res: any) => {
           console.log(`[Slack API Dispatch] Succeeded routing message to thread ${threadTsTarget}`);
           updateLog(logItem.id, {
             status: 'success',
-            aiResponse: generatedText
+            aiResponse: generatedText,
+            processingTimeMs: durationMs
           });
         }
 
       } catch (bkErr: any) {
         console.error(`[Background Task Misfire] `, bkErr);
+        const durationMs = Date.now() - startTime;
         updateLog(logItem.id, {
           status: 'error',
-          error: bkErr.message || String(bkErr)
+          error: bkErr.message || String(bkErr),
+          processingTimeMs: durationMs
         });
       }
     });
