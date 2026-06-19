@@ -135,6 +135,25 @@ router.post('/agent/approvals/:id/resolve', requireDashboardAuth, async (req, re
       payload: { approvalId: approval.id, status, title: approval.title }
     });
     
+    // Background execution based on approval outcome
+    if (status === 'approved') {
+      import('./agent/orchestrator.js').then(({ resumeAgentPipeline }) => {
+        resumeAgentPipeline(approval.run_id!).catch((e) => console.error("Failed to resume pipeline", e));
+      });
+    } else {
+      await agentStore.updateRunStatus(approval.run_id!, 'cancelled', { failure_reason: 'User rejected the plan.' });
+      await agentStore.updateGoalStatus(approval.goal_id!, 'cancelled');
+      await agentStore.appendAuditEvent({
+        workspace_id: trace.goal.workspace_id,
+        goal_id: approval.goal_id!,
+        run_id: approval.run_id!,
+        type: 'run.cancelled',
+        actor: 'system',
+        summary: 'Run cancelled due to approval rejection',
+        payload: {}
+      });
+    }
+
     res.json({ success: true, approval });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

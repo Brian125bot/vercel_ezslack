@@ -314,3 +314,126 @@ export async function runAgentPipeline(input: AgentPipelineInput): Promise<Agent
     return { status: 'error', intent, message: err.message };
   }
 }
+
+export async function resumeAgentPipeline(runId: string): Promise<void> {
+  let run: any, goal: any;
+  let context: ToolExecutionContext;
+  try {
+    const trace = await agentStore.getRunTrace(runId);
+    if (!trace || !trace.run || !trace.goal) return;
+
+    if (trace.run.status !== 'awaiting_approval') {
+      console.log(`Cannot resume run ${runId} because it is in state ${trace.run.status}`);
+      return; 
+    }
+
+    run = await agentStore.updateRunStatus(runId, 'running', { started_at: new Date() });
+    goal = await agentStore.updateGoalStatus(trace.goal.id, 'running');
+
+    context = {
+      workspaceId: trace.goal.workspace_id,
+      channelId: trace.goal.source_channel_id || '',
+      userId: trace.goal.created_by_user_id || 'system',
+      runId: run.id,
+      stepId: '',
+      messageTs: trace.goal.source_message_ts || '',
+      threadTs: trace.goal.source_thread_ts || undefined
+    };
+
+    // Execute steps sequentially
+    for (const step of trace.steps) {
+      if (step.status === 'succeeded') continue;
+
+      if (step.status === 'blocked' || step.status === 'pending') {
+        // Reset status to pending so it runs execution
+        await agentStore.updateStepStatus(step.id, 'pending');
+        
+        context.stepId = step.id;
+
+        await agentStore.appendAuditEvent({
+          workspace_id: context.workspaceId,
+          goal_id: goal.id,
+          run_id: run.id,
+          step_id: step.id,
+          type: 'step.started',
+          actor: 'system',
+          summary: `Started step: ${step.title}`,
+          payload: {}
+        });
+
+        await executeStep(run, step, context);
+
+        const currentTrace = await agentStore.getRunTrace(run.id);
+        const updatedStep = currentTrace.steps.find((s: any) => s.id === step.id);
+        
+        if (updatedStep?.status === 'failed' || updatedStep?.status === 'blocked') {
+          break; // Stop running
+        }
+      }
+    }
+
+    const finalTrace = await agentStore.getRunTrace(run.id);
+    const verification = verifyRun(finalTrace);
+
+    await agentStore.appendAuditEvent({
+      workspace_id: context.workspaceId,
+      goal_id: goal.id,
+      run_id: run.id,
+      type: 'verification.completed',
+      actor: 'system',
+      summary: `Verification completed: ${verification.status}`,
+      payload: { verification }
+    });
+
+    let runStatus: any = 'failed';
+    if (verification.status === 'satisfied') runStatus = 'succeeded';
+    else if (verification.status === 'blocked') runStatus = 'blocked';
+
+    run = await agentStore.updateRunStatus(run.id, runStatus, {
+      result_summary: verification.reasons.join(' '),
+      failure_reason: runStatus !== 'succeeded' ? verification.reasons.join(' ') : undefined
+    });
+
+    await agentStore.appendAuditEvent({
+      workspace_id: context.workspaceId,
+      goal_id: goal.id,
+      run_id: run.id,
+      type: runStatus === 'succeeded' ? 'run.completed' : `run.${runStatus}`,
+      actor: 'system',
+      summary: `Run finished with status: ${runStatus}`,
+      payload: {}
+    });
+
+    let goalStatus: any = 'failed';
+    if (runStatus === 'succeeded') goalStatus = 'completed';
+    else if (runStatus === 'blocked') goalStatus = 'blocked';
+
+    await agentStore.updateGoalStatus(goal.id, goalStatus);
+
+    if (runStatus === 'blocked' || runStatus === 'failed') {
+      await reportStatus(runStatus === 'blocked' ? 'blocked' : 'failed', verification.reasons.join(' '), context);
+      await agentStore.appendAuditEvent({
+        workspace_id: context.workspaceId,
+        goal_id: goal.id,
+        run_id: run.id,
+        type: 'report.sent',
+        actor: 'system',
+        summary: `Sent Slack status report: ${runStatus}`,
+        payload: { reasons: verification.reasons }
+      });
+    } else if (runStatus === 'succeeded') {
+      await reportStatus('completed', 'Task completed successfully! Reasons: ' + verification.reasons.join(' '), context);
+      await agentStore.appendAuditEvent({
+        workspace_id: context.workspaceId,
+        goal_id: goal.id,
+        run_id: run.id,
+        type: 'report.sent',
+        actor: 'system',
+        summary: `Sent Slack status report: completed`,
+        payload: { reasons: verification.reasons }
+      });
+    }
+  } catch (err: any) {
+    console.error('Agent pipeline resume failed:', err);
+  }
+}
