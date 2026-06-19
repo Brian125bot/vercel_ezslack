@@ -148,16 +148,15 @@ router.post('/slack/events', (req: any, res: any) => {
           const calculatedSignature = 'v0=' + hmac.digest('hex');
 
           try {
-            signatureVerified = crypto.timingSafeEqual(
-              Buffer.from(signature as string, 'utf8'),
-              Buffer.from(calculatedSignature, 'utf8')
-            );
+            const signatureHash = crypto.createHash('sha256').update(signature as string, 'utf8').digest();
+            const calculatedHash = crypto.createHash('sha256').update(calculatedSignature, 'utf8').digest();
+            signatureVerified = crypto.timingSafeEqual(signatureHash, calculatedHash);
           } catch (err) {
             signatureVerified = false;
           }
 
           if (!signatureVerified) {
-            signatureError = `Cryptographic verification failed! Target: ${calculatedSignature}, Header: ${signature}`;
+            signatureError = 'Cryptographic verification failed';
           }
         }
       }
