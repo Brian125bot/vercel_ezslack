@@ -333,9 +333,9 @@ app.post('/api/slack/events', (req: any, res: any) => {
           "- Use ``` with language label for multiline block code\n" +
           "- Rely on clear spacing and formatting. Answer the user prompt directly without meta-commentary.";
 
-        console.log(`[Background Gemini] Prompting gemini-2.5-flash with message text length: ${promptText ? promptText.length : 0}`);
+        console.log(`[Background Gemini] Prompting gemini-3.5-flash with message text length: ${promptText ? promptText.length : 0}`);
         const aiResponse = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-3.5-flash',
           contents: promptText || "Hello! Who are you?",
           config: {
             systemInstruction: systemInstruction,
