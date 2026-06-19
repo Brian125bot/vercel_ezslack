@@ -26,7 +26,7 @@ export const agentStore = {
   },
 
   async updateGoalStatus(id: string, status: GoalStatus, patch?: UpdateGoalInput): Promise<AgentGoal> {
-    const completedAt = status === 'completed' ? new Date() : null;
+    const completedAt = (['completed', 'failed', 'cancelled', 'blocked'].includes(status)) ? new Date() : null;
     const rows = await query<AgentGoal>(
       `UPDATE agent_goals SET status = $1, updated_at = now(), completed_at = COALESCE($2, completed_at), title = COALESCE($3, title), normalized_objective = COALESCE($4, normalized_objective) WHERE id = $5 RETURNING *`,
       [status, completedAt, patch?.title || null, patch?.normalized_objective || null, id]
@@ -57,7 +57,7 @@ export const agentStore = {
 
   async updateRunStatus(id: string, status: RunStatus, patch?: UpdateRunInput): Promise<AgentRun> {
     let startedAt = status === 'running' && patch?.started_at !== undefined ? patch.started_at : undefined;
-    let finishedAt = (status === 'succeeded' || status === 'failed' || status === 'cancelled') ? new Date() : undefined;
+    let finishedAt = (['succeeded', 'failed', 'cancelled', 'blocked'].includes(status)) ? new Date() : undefined;
     
     const rows = await query<AgentRun>(
       `UPDATE agent_runs SET status = $1, updated_at = now(), 

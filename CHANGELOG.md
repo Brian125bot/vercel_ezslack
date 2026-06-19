@@ -2,13 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - Phase 2 (Week 1 Completed)
+## [2.0.0] - Weeks 1–2 (merged) - 2026-06-19
 
-### ✨ Enhancements & Updates (Week 1)
+### ✨ Completed Deliverables (Weeks 1–2)
+
+Both Week 1 (Trust & Correctness) and Week 2 (Agent Loop) have been successfully finalized, verified, and merged into the `main` branch.
+
+#### Week 1 Epics
 
 * **Unified Intent Classification (Epic W1-A)**:
   * Consolidated message intent routing into a centralized system within `src/server/agent/intent.ts`.
-  * Removed legacy legacy text categorization in `src/server/ai.ts`.
+  * Removed legacy text categorization in `src/server/ai.ts`.
   * Introduced the `IntentResult` data structure to track intent, confidence score, and evaluation source (`heuristic`, `llm`, or `fallback`).
   * Enhanced frontend routing logic to correctly color-code intent labels by category in the Dashboard (e.g. `durable_task` vs `direct_reply`). 
 * **Intent Handler Dispatch System (Epic W1-B)**:
@@ -24,25 +28,26 @@ All notable changes to this project will be documented in this file.
 * **Orchestrator Context Wiring**:
   * Connected standard memory queries, agent states, pending approvals, and active runs checks via updated bindings inside `agentStore.ts`.
 
----
+#### Week 2 Epics
 
-## 📅 Planned Work (Week 2 Specs)
+* **Run Worker & Queue Semantics (Epic W2-A)**:
+  * Severed the direct run execution sequence from the immediate HTTP request cycle.
+  * Designed and implemented an independent background execution runner in `worker.ts` utilizing database queueing with atomic task row reservation via `FOR UPDATE SKIP LOCKED`.
+  * Implemented stale-claim recovery with leases to allow tasks to scale resiliently across multiple nodes.
+* **Context Assembly for Planner (Epic W2-B)**:
+  * Enhanced `planner.ts` to consume long-term thread history snapshots and active memory snippets (`context.ts`), allowing the generative step to reason with user context and historical feedback before building multi-step maps.
+* **Closed-Loop Runtime (Epic W2-C)**:
+  * Extended the executor to automatically feed failed runs / blocked verification states back into a new contextual planner instance (`loop.ts`). 
+  * Supported up to 3 automatic replan/retry cycles during failures without needing user input.
+* **Semantic Verifier (Epic W2-D)**:
+  * Introduced `semanticVerifier.ts` to intelligently determine if the final execution trace actually aligns with the user's intent. Supplementing hardcoded rule-verifications with LLM-layer verification.
+* **Observability & Dashboard Updates (Epic W2-E)**:
+  * Exposed the iteration counts (re-plans) and Semantic Verification signals inside the live React telemetry panel.
 
-Based on the agent core roadmap, upcoming developments will transition the pipeline from a linear operation into an asynchronous closed-loop runtime.
+### 🧹 Commit Cleanup & Refinements (Polishing gap closure)
 
-### Epic W2-A: Run Worker & Queue Semantics
-* Severing the direct run execution sequence from the immediate HTTP request cycle.
-* Creating an independent `worker.ts` processor and database queueing mechanism with task claims features to scale across multiple Cloud Run instances.
-
-### Epic W2-B: Context Assembly for Planner
-* Enhancing `planner.ts` to consume long-term thread history snapshots and active memory snippets (`context.ts`) allowing the generative step to reason with user context and historical feedback before building multi-step maps.
-
-### Epic W2-C: Closed-Loop Runtime
-* Extending the executor to automatically feed failed runs / blocked verification states back into a new contextual planner instance (`loop.ts`). 
-* Supporting up to 3 automatic replan/retry cycles during failures without needing user input.
-
-### Epic W2-D: Semantic Verifier
-* Introducing `semanticVerifier.ts` to intelligently determine if the final execution trace actually aligns with the user's intent. Supplementing hardcoded rule-verifications with LLM-layer verification.
-
-### Epic W2-E: Observability & Dashboard Updates
-* Exposing the iteration counts (re-plans) and Semantic Verification signals inside the live React telemetry panel.
+* **Robust Finished Condition Invariant**: Corrected run status updates so `finished_at` is always written for all terminal runs, including those ending in `blocked` status.
+* **Goal Completed Timestamps**: Enhanced goal tracking to ensure `completed_at` timestamps are applied to all goals ending as `completed`, `failed`, `cancelled`, or `blocked`.
+* **Technical Documentation**: Created `docs/intent-routing.md` to lay out the full intent taxonomy and heuristics matching structures. Updated `README.md` to document the 7 Worker & Queue system invariants.
+* **Log Sanitation**: Added complete descriptive JSDoc comments detailing structured logging and its strict automatic sanitization logic to hide runtime secret keys.
+* **File Cleanup**: Removed stale temporary specification documents (`phase2dod.md` and `weeks-1-2-spec.md`) to establish `slack_ez_cloud` as the clear source of truth.

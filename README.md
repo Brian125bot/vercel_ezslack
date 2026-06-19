@@ -23,7 +23,8 @@ Switch your agent's brain at runtime without a single line of code redeployment 
 Slack expects an HTTP `200 OK` handshake response within **3 seconds** of firing an event, failing which it cancels the transaction and fires retry surges. This backend instantly validates cryptographic signatures, registers the job ID, and issues a standard response inside of ~15ms. It then leverages NodeJS `setImmediate` to execute the model loop, intent classification, and API routing concurrently in the background.
 
 ### 3. 🧠 Dynamic Intent Classifier (LLM-in-the-Loop)
-Every incoming message is analyzed in real-time by the active model engine to determine target intent. The agent classifies intents into specialized robust categories to dictate the action workflow:
+Every incoming message is analyzed in real-time by the active model engine to determine target intent. The agent classifies intents into specialized robust categories to dictate the action workflow. For more technical implementation details, see our stable [Intent Routing Guide](./docs/intent-routing.md).
+
 * `direct_reply`: Conversational pleasantries and standard Q&A.
 * `durable_task`: Multi-step goals, reminders, and advanced project operations requiring background tracking.
 * `status_query`: Interrogation of active goals and workflow outcomes.
@@ -38,7 +39,17 @@ Multi-step task intents automatically generate structured:
 * **Policy & Approvals**: Intercepts actions based on predefined risk levels (`read`, `draft`, `internal_write`, `external_write`). Explicit approvals requested for external writes and destructive operations safely blocked.
 * **Full Audit Trail**: A complete, replayable timeline of goal, plan, tool execution and status updates viewable seamlessly in the Dashboard UI.
 
-### 5. 🧵 Stateful Conversation Thread Memory
+### 5. ⚙️ Worker & Queue Invariants
+The background task queue separates rapid incoming Slack webhooks from complex, longer-running background planning, execution, and verification loops. It ensures scalability and high availability:
+* **Queue Claim Pattern**: Atomic database row reservation using `FOR UPDATE SKIP LOCKED` to support safe parallel queue claims across multiple instances.
+* **Lease TTL**: Claims are locked for `300 seconds` (5 minutes) during model loop runs to prevent concurrent executions.
+* **Stale-Recovery**: Auto-cleanup via `recoverStaleClaims()` runs at the beginning of each polling cycle, recovering runs with expired leases.
+* **Concurrency Limit**: Standard configuration restricts work to `maxConcurrent = 2` runs per container.
+* **Polling Interval**: Checked every `2 seconds` (`2000` ms) for freshly queued executions.
+* **Database State Check**: The background worker is strictly initialized and starts only when the database is available.
+* **Migration Version**: Built on version `2` of the idempotent SQL schema.
+
+### 6. 🧵 Stateful Conversation Thread Memory
 Maintains up to the last 20 conversational turns per unique thread context (dynamically keyed on channel/thread hash values) so interactions feel natural, context-aware, and continuous.
 
 ---
