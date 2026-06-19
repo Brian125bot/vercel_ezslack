@@ -115,6 +115,32 @@ router.get('/agent/audit', requireDashboardAuth, async (req, res) => {
   }
 });
 
+router.post('/agent/approvals/:id/resolve', requireDashboardAuth, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (status !== 'approved' && status !== 'rejected') {
+      return res.status(400).json({ error: 'Status must be approved or rejected' });
+    }
+    const approval = await agentStore.resolveApproval(req.params.id, status);
+    
+    // Create an audit event
+    const trace = await agentStore.getRunTrace(approval.run_id!);
+    await agentStore.appendAuditEvent({
+      workspace_id: trace.goal.workspace_id,
+      goal_id: approval.goal_id!,
+      run_id: approval.run_id!,
+      type: 'approval.resolved',
+      actor: 'user',
+      summary: `User resolved approval request with status: ${status}`,
+      payload: { approvalId: approval.id, status, title: approval.title }
+    });
+    
+    res.json({ success: true, approval });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/slack/test', requireDashboardAuth, async (req: any, res: any) => {
   try {
     const { text, channel, user, generateInvalidSignature, timestampOffsetSeconds } = req.body;

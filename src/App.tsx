@@ -97,6 +97,7 @@ export default function App() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runTrace, setRunTrace] = useState<any>(null);
   const [loadingTrace, setLoadingTrace] = useState(false);
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
 
   // Authenticated gateway states
   const [dashboardPassword, setDashboardPassword] = useState<string>(() => localStorage.getItem('dashboard_password') || '');
@@ -332,6 +333,36 @@ export default function App() {
       console.error('Error fetching run trace:', e);
     } finally {
       setLoadingTrace(false);
+    }
+  };
+
+  const handleResolveApproval = async (approvalId: string, status: 'approved' | 'rejected') => {
+    setResolvingApprovalId(approvalId);
+    try {
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json'
+      };
+      if (dashboardPassword) {
+        headers['Authorization'] = `Bearer ${dashboardPassword}`;
+      }
+      const res = await fetch(`/api/agent/approvals/${approvalId}/resolve`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ status })
+      });
+      if (res.ok) {
+        if (selectedRunId) {
+          await fetchRunTrace(selectedRunId);
+        }
+      } else {
+        const errData = await res.json();
+        alert(`Failed to resolve approval: ${errData.error || 'Unknown error'}`);
+      }
+    } catch (e: any) {
+      console.error('Error resolving approval:', e);
+      alert(`Error resolving approval: ${e.message || String(e)}`);
+    } finally {
+      setResolvingApprovalId(null);
     }
   };
 
@@ -1032,6 +1063,55 @@ export default function App() {
                              <div className="text-sm font-medium text-slate-800">{runTrace.goal?.title || 'Unknown Goal'}</div>
                              <div className="text-xs text-slate-500 mt-1 bg-slate-50 p-2 rounded whitespace-pre-wrap">{runTrace.goal?.original_instruction || 'No original instruction'}</div>
                           </div>
+
+                          {/* Approvals Panel */}
+                          {runTrace.approvals?.length > 0 && (
+                            <div>
+                               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-6 mb-3 ml-1">Approval Requests</h3>
+                               <div className="space-y-3">
+                                 {runTrace.approvals.map((app: any) => (
+                                   <div key={app.id} className="bg-white p-4 border border-indigo-100 rounded-xl shadow-xs text-xs space-y-3">
+                                     <div className="flex justify-between items-center pb-2 border-b border-slate-50">
+                                       <span className="font-bold text-slate-800">{app.title}</span>
+                                       <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded
+                                         ${app.status === 'pending' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                                           app.status === 'approved' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                                           'bg-rose-100 text-rose-800 border border-rose-200'}
+                                       `}>
+                                         {app.status}
+                                       </span>
+                                     </div>
+                                     <p className="text-slate-600 leading-relaxed bg-slate-50 p-2.5 rounded border border-slate-100 whitespace-pre-wrap">{app.description}</p>
+                                     <div className="flex items-center gap-2 text-[10px]">
+                                       <span className="text-slate-400 uppercase tracking-wider font-semibold">Risk Level:</span>
+                                       <span className="font-bold text-rose-600 uppercase font-mono">{app.risk_level}</span>
+                                       <span className="text-slate-300">|</span>
+                                       <span className="text-slate-400 uppercase tracking-wider font-semibold">Expires:</span>
+                                       <span className="text-slate-500 font-mono">{new Date(app.expires_at).toLocaleString()}</span>
+                                     </div>
+                                     {app.status === 'pending' && (
+                                       <div className="flex gap-2 pt-2">
+                                         <button
+                                           onClick={() => handleResolveApproval(app.id, 'approved')}
+                                           disabled={resolvingApprovalId === app.id}
+                                           className="flex-1 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold py-1.5 px-3 rounded-lg text-center transition shadow-xs disabled:opacity-50 cursor-pointer text-xs"
+                                         >
+                                           {resolvingApprovalId === app.id ? 'Processing...' : '√ Approve Plan'}
+                                         </button>
+                                         <button
+                                           onClick={() => handleResolveApproval(app.id, 'rejected')}
+                                           disabled={resolvingApprovalId === app.id}
+                                           className="flex-1 bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-200 text-slate-700 hover:text-rose-700 font-bold py-1.5 px-3 rounded-lg text-center transition shadow-xs disabled:opacity-50 cursor-pointer text-xs"
+                                         >
+                                           Reject
+                                         </button>
+                                       </div>
+                                     )}
+                                   </div>
+                                 ))}
+                               </div>
+                            </div>
+                          )}
 
                           {runTrace.auditEvents?.length > 0 && (
                             <div>
