@@ -382,6 +382,17 @@ export default function App() {
     }
   }, [selectedRunId, dashboardPassword]);
 
+  // Auto-refresh the trace while the selected run is still in-flight (W2-E observability),
+  // so iterations / verification / new steps appear live without manual reload.
+  useEffect(() => {
+    if (!selectedRunId) return;
+    const terminal = ['succeeded', 'completed', 'failed', 'cancelled'];
+    const status = runTrace?.run?.status;
+    if (status && terminal.includes(status)) return;
+    const interval = setInterval(() => fetchRunTrace(selectedRunId), 3000);
+    return () => clearInterval(interval);
+  }, [selectedRunId, runTrace?.run?.status, dashboardPassword]);
+
   // Poll status and logs
   useEffect(() => {
     fetchStatus();
@@ -1063,6 +1074,94 @@ export default function App() {
                              <div className="text-sm font-medium text-slate-800">{runTrace.goal?.title || 'Unknown Goal'}</div>
                              <div className="text-xs text-slate-500 mt-1 bg-slate-50 p-2 rounded whitespace-pre-wrap">{runTrace.goal?.original_instruction || 'No original instruction'}</div>
                           </div>
+
+                          {/* Run Summary Panel (W2-E observability) */}
+                          {runTrace.run && (
+                            <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200">
+                              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Run Summary</h3>
+                              <div className="grid grid-cols-2 gap-3 text-xs">
+                                <div>
+                                  <div className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Status</div>
+                                  <div className="font-bold text-slate-800">{runTrace.run.status}</div>
+                                </div>
+                                <div>
+                                  <div className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Loop Iterations</div>
+                                  <div className="font-bold text-slate-800">{runTrace.run.iteration_count ?? 0} / 3</div>
+                                </div>
+                                <div>
+                                  <div className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Plan Version</div>
+                                  <div className="font-bold text-slate-800">{runTrace.plan?.version ?? '—'}</div>
+                                </div>
+                                <div>
+                                  <div className="text-slate-400 uppercase tracking-wider font-semibold text-[10px]">Finished</div>
+                                  <div className="font-mono text-slate-600 text-[11px]">{runTrace.run.finished_at ? new Date(runTrace.run.finished_at).toLocaleString() : 'In progress'}</div>
+                                </div>
+                              </div>
+                              {runTrace.run.result_summary && (
+                                <div className="mt-3 text-xs bg-emerald-50 border border-emerald-100 text-emerald-800 p-2.5 rounded whitespace-pre-wrap">{runTrace.run.result_summary}</div>
+                              )}
+                              {runTrace.run.failure_reason && (
+                                <div className="mt-3 text-xs bg-rose-50 border border-rose-100 text-rose-800 p-2.5 rounded whitespace-pre-wrap">{runTrace.run.failure_reason}</div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Semantic Verification Panel (W2-D / W2-E) */}
+                          {(() => {
+                            const verifEvents = (runTrace.auditEvents || []).filter((e: any) => e.type === 'run.semantic_verified' || e.type === 'run.verified');
+                            if (!verifEvents.length) return null;
+                            return (
+                              <div>
+                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-6 mb-3 ml-1">Verification</h3>
+                                <div className="space-y-2">
+                                  {verifEvents.map((evt: any, i: number) => {
+                                    const isSemantic = evt.type === 'run.semantic_verified';
+                                    const ok = isSemantic ? evt.payload?.satisfied === true : evt.payload?.ruleResult?.status === 'satisfied';
+                                    return (
+                                      <div key={i} className={`bg-white p-3 border rounded shadow-sm text-xs ${ok ? 'border-emerald-100' : 'border-amber-100'}`}>
+                                        <div className="flex justify-between items-center mb-1">
+                                          <span className="font-bold text-slate-700">{isSemantic ? 'Semantic Verifier (LLM judge)' : 'Rule Verifier'}</span>
+                                          <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${ok ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                            {ok ? 'satisfied' : (isSemantic ? 'not satisfied' : (evt.payload?.ruleResult?.status || 'n/a'))}
+                                          </span>
+                                        </div>
+                                        <div className="text-slate-600">{isSemantic ? `${evt.payload?.reasoning || ''} (confidence: ${evt.payload?.confidence || 'n/a'}, source: ${evt.payload?.source || 'n/a'})` : (evt.payload?.ruleResult?.reasons || []).join('; ')}</div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                          {/* Steps Panel */}
+                          {runTrace.steps?.length > 0 && (
+                            <div>
+                              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-6 mb-3 ml-1">Execution Steps</h3>
+                              <div className="space-y-2">
+                                {runTrace.steps.map((s: any, i: number) => (
+                                  <div key={s.id || i} className="bg-white p-3 border border-slate-100 rounded shadow-sm text-xs">
+                                    <div className="flex justify-between items-center mb-1 border-b border-slate-50 pb-1">
+                                      <span className="font-bold text-slate-700">{i + 1}. {s.title}</span>
+                                      <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded
+                                        ${s.status === 'succeeded' ? 'bg-emerald-100 text-emerald-700' :
+                                          s.status === 'failed' ? 'bg-rose-100 text-rose-700' :
+                                          s.status === 'blocked' ? 'bg-amber-100 text-amber-700' :
+                                          'bg-slate-100 text-slate-600'}`}>
+                                        {s.status}
+                                      </span>
+                                    </div>
+                                    {s.output && (
+                                      <pre className="mt-1 text-[10px] text-slate-500 bg-slate-50 p-1.5 rounded overflow-x-auto whitespace-pre-wrap max-h-28">{typeof s.output === 'string' ? s.output : JSON.stringify(s.output, null, 2)}</pre>
+                                    )}
+                                    {s.error && (
+                                      <div className="mt-1 text-[10px] text-rose-600 bg-rose-50 p-1.5 rounded">{s.error}</div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
 
                           {/* Approvals Panel */}
                           {runTrace.approvals?.length > 0 && (

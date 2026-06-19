@@ -141,16 +141,23 @@ router.post('/agent/approvals/:id/resolve', requireDashboardAuth, async (req, re
         resumeAgentPipeline(approval.run_id!).catch((e) => console.error("Failed to resume pipeline", e));
       });
     } else {
-      await agentStore.updateRunStatus(approval.run_id!, 'cancelled', { failure_reason: 'User rejected the plan.' });
-      await agentStore.updateGoalStatus(approval.goal_id!, 'cancelled');
-      await agentStore.appendAuditEvent({
-        workspace_id: trace.goal.workspace_id,
-        goal_id: approval.goal_id!,
-        run_id: approval.run_id!,
-        type: 'run.cancelled',
-        actor: 'system',
-        summary: 'Run cancelled due to approval rejection',
-        payload: {}
+      // Reject -> terminal via the single finalize path (W2-F11), with a Slack report.
+      const { finalizeRun } = await import('./agent/finalize.js');
+      await finalizeRun({
+        runId: approval.run_id!,
+        goalId: approval.goal_id!,
+        workspaceId: trace.goal.workspace_id,
+        state: 'cancelled',
+        failureReason: 'User rejected the plan.',
+        context: {
+          runId: approval.run_id!,
+          stepId: '',
+          workspaceId: trace.goal.workspace_id,
+          channelId: trace.goal.source_channel_id || '',
+          userId: trace.goal.created_by_user_id,
+          messageTs: trace.goal.source_message_ts || '',
+          threadTs: trace.goal.source_thread_ts || undefined
+        }
       });
     }
 
@@ -384,7 +391,10 @@ router.post('/slack/events', (req: any, res: any) => {
           selectedModel,
           signatureValid: !!signingSecret && signatureVerified,
           sourceType: 'slack',
-          dbAvailable
+          dbAvailable,
+          // Pass the already-computed classification so the orchestrator does NOT re-classify
+          // (fixes the Week-1 double-classification gap).
+          intentResult
         });
 
         const durationMs = Date.now() - startTime;

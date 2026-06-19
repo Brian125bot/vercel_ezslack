@@ -1,7 +1,12 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import type { AgentPlanDraft } from './types.js';
 
-export async function createPlan(goalTitle: string, originalInstruction: string, selectedModel: string): Promise<AgentPlanDraft> {
+export async function createPlan(
+  goalTitle: string,
+  originalInstruction: string,
+  selectedModel: string,
+  contextBlock?: string
+): Promise<AgentPlanDraft> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is missing');
@@ -37,13 +42,15 @@ You are an AI agent planning a response to:
 Title: ${goalTitle}
 Instruction: ${originalInstruction}
 
+${contextBlock ? `Context for planning:\n${contextBlock}\n` : ''}
 Available safe tools:
-- slack.replyInThread (input: { text: string })
+- slack.replyInThread (input: { text: string })  // text MUST be the fully-written reply, never a placeholder
 - memory.write (input: { content: string, kind: string, visibility: string })
 - memory.search (input: { query: string, kind?: string })
 - task.record (input: { title: string, notes?: string })
 
 Generate a simple 1-3 step plan to accomplish this goal.
+Fully populate each step's "input" with concrete values — especially slack.replyInThread, whose "text" must contain the actual finished message to the user (do not leave it blank or say "TBD").
 You are STRICTLY FORBIDDEN from generating any toolName other than the safe tools listed above. If a step requires any other action, state riskLevel="external_write" and requiresApproval=true, and leave toolName empty or undefined.
 Otherwise, use riskLevel="internal_write" or "read" or "draft".
 `;

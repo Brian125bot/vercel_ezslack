@@ -21,17 +21,38 @@ export async function handleApprovalResponse(
     }
 
     const text = input.messageText.toLowerCase();
-    const isApproving = text.includes('approve') || text.includes('yes') || text.includes('proceed');
-    const isDenying = text.includes('reject') || text.includes('no') || text.includes('deny');
+    const isApproving = /\b(approve|approved|yes|yep|proceed|go ahead|confirm|ok|okay)\b/.test(text);
+    const isDenying = /\b(reject|rejected|no|nope|deny|denied|cancel|stop|halt)\b/.test(text);
 
-    let newStatus: 'approved' | 'rejected' = isApproving ? 'approved' : 'rejected';
-    
-    // Default to approved if ambiguous? W1-A intent heuristics only let it here if approval words are present.
-    // If we have a pending approval, resolve the oldest one
-    const targetApproval = pendingApprovals[0]; // Resolves the first pending wait.
+    // W1 gap fix (approval polarity): if the intent is ambiguous — or the user said BOTH
+    // approve and reject words — we must NOT silently default to rejected (or approved).
+    // Re-prompt for an explicit decision instead. Approval is a destructive, irreversible
+    // commit point, so guessing here is unsafe.
+    if (isApproving === isDenying) {
+      const targetApproval = pendingApprovals[0];
+      await agentStore.appendAuditEvent({
+        workspace_id: input.workspaceId,
+        goal_id: targetApproval.goal_id,
+        run_id: targetApproval.run_id,
+        step_id: targetApproval.step_id,
+        type: 'approval.ambiguous',
+        actor: input.userId,
+        summary: 'Ambiguous approval response — re-prompted user for explicit decision',
+        payload: { user_message: input.messageText }
+      });
+      await slackReplyInThreadTool.execute({
+        text: `I have a pending approval ("${targetApproval.title}") but couldn't tell whether you want to *approve* or *reject* it. Please reply with exactly "approve" or "reject".`
+      }, context);
+      return { status: 'success', intent };
+    }
+
+    const newStatus: 'approved' | 'rejected' = isApproving ? 'approved' : 'rejected';
+
+    // Resolve the oldest pending approval.
+    const targetApproval = pendingApprovals[0];
     await agentStore.resolveApproval(targetApproval.id, newStatus);
     
-    // Also append an audit event so it is visible in UI
+    // Audit event so it is visible in the dashboard.
     await agentStore.appendAuditEvent({
       workspace_id: input.workspaceId,
       goal_id: targetApproval.goal_id,
@@ -39,17 +60,30 @@ export async function handleApprovalResponse(
       step_id: targetApproval.step_id,
       type: `approval.${newStatus}`,
       actor: input.userId,
-      summary: `User ${newStatus} execution of ${targetApproval.proposed_action?.tool || 'tool'}`,
+      summary: `User ${newStatus} execution of ${targetApproval.proposed_action?.tool || 'plan'}`,
       payload: { user_message: input.messageText }
     });
 
     const actionText = newStatus === 'approved' ? 'approved and will resume' : 'rejected and will halt processing';
     await slackReplyInThreadTool.execute({ text: `Task has been ${actionText}.` }, context);
-    
-    // We update the run status to queued to resume processing if approved (W2 will use workers, W1 might just leave it)
-    if (newStatus === 'approved' && targetApproval.run_id) {
-      // In Week 1, we might need a way to unblock the run. For now, mark it queued.
-      await agentStore.updateRunStatus(targetApproval.run_id, 'queued');
+
+    if (targetApproval.run_id) {
+      if (newStatus === 'approved') {
+        // Resume goes through the worker (W2-F9): re-queue so the worker re-claims and the
+        // closed loop executes the now-approved plan.
+        await agentStore.updateRunStatus(targetApproval.run_id, 'queued');
+      } else {
+        // Reject -> terminal via the single finalize path.
+        const { finalizeRun } = await import('../finalize.js');
+        await finalizeRun({
+          runId: targetApproval.run_id,
+          goalId: targetApproval.goal_id!,
+          workspaceId: input.workspaceId,
+          state: 'cancelled',
+          failureReason: 'User rejected the plan.',
+          context
+        });
+      }
     }
 
     return { status: 'success', intent };
