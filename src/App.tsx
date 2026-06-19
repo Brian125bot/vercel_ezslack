@@ -31,6 +31,8 @@ interface ServerStatus {
   appUrl: string;
   selectedModel?: string;
   availableModels?: Array<{ id: string; name: string; description: string }>;
+  databaseConfigured: boolean;
+  databaseAvailable: boolean;
 }
 
 interface SlackEventLog {

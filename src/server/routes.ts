@@ -103,6 +103,18 @@ router.get('/agent/memory', requireDashboardAuth, async (req, res) => {
   }
 });
 
+router.get('/agent/audit', requireDashboardAuth, async (req, res) => {
+  try {
+    if (!req.query.runId) {
+       return res.status(400).json({ error: 'runId query parameter is required' });
+    }
+    const auditEvents = await agentStore.listAuditEvents(req.query.runId as string);
+    res.json(auditEvents);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 router.post('/slack/test', requireDashboardAuth, async (req: any, res: any) => {
   try {
     const { text, channel, user, generateInvalidSignature, timestampOffsetSeconds } = req.body;

@@ -164,10 +164,11 @@ export const agentStore = {
 
   async writeMemory(input: CreateMemoryInput): Promise<MemoryRecord> {
     const id = crypto.randomUUID();
+    const sanitizedContent = sanitizePayload(input.content);
     const rows = await query<MemoryRecord>(
       `INSERT INTO memory_records (id, workspace_id, user_id, channel_id, kind, content, source, source_ref, confidence, visibility)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [id, input.workspace_id, input.user_id || null, input.channel_id || null, input.kind, input.content, input.source, input.source_ref ? JSON.stringify(input.source_ref) : null, input.confidence, input.visibility]
+      [id, input.workspace_id, input.user_id || null, input.channel_id || null, input.kind, sanitizedContent, input.source, input.source_ref ? JSON.stringify(input.source_ref) : null, input.confidence, input.visibility]
     );
     return rows[0];
   },
@@ -244,5 +245,9 @@ export const agentStore = {
     const rows = await query<AgentGoal>(`SELECT * FROM agent_goals WHERE id = $1`, [goalId]);
     if (!rows.length) throw new Error(`Goal ${goalId} not found`);
     return rows[0];
+  },
+
+  async listAuditEvents(runId: string): Promise<AuditEvent[]> {
+    return query<AuditEvent>(`SELECT * FROM audit_events WHERE run_id = $1 ORDER BY created_at ASC`, [runId]);
   }
 };

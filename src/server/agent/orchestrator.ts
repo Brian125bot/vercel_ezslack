@@ -89,6 +89,19 @@ export async function runAgentPipeline(input: AgentPipelineInput): Promise<Agent
       payload: {}
     });
 
+    // Report task accepted to Slack immediately
+    await reportStatus('task_accepted', `I have accepted your goal: "${goal.title}". Analyzing constraints and drafting a plan...`, context);
+
+    await agentStore.appendAuditEvent({
+      workspace_id: input.workspaceId,
+      goal_id: goal.id,
+      run_id: run.id,
+      type: 'report.sent',
+      actor: 'system',
+      summary: 'Task accepted acknowledgment sent to Slack',
+      payload: {}
+    });
+
     // Update statuses to planning stage
     goal = await agentStore.updateGoalStatus(goal.id, 'planning');
     run = await agentStore.updateRunStatus(run.id, 'planning');
@@ -100,7 +113,7 @@ export async function runAgentPipeline(input: AgentPipelineInput): Promise<Agent
       version: 1,
       summary: planDraft.summary,
       assumptions: planDraft.assumptions,
-      risks: [{ level: planDraft.riskLevel }],
+      risks: [{ level: planDraft.riskLevel, requiresApproval: planDraft.requiresApproval }],
       steps: planDraft.steps,
       status: 'active'
     });
@@ -112,8 +125,65 @@ export async function runAgentPipeline(input: AgentPipelineInput): Promise<Agent
       type: 'plan.created',
       actor: 'system',
       summary: 'Plan generated',
-      payload: {}
+      payload: { planDraft }
     });
+
+    // If the plan draft itself requires approval before execution
+    if (planDraft.requiresApproval) {
+      const approval = await agentStore.createApprovalRequest({
+        goal_id: goal.id,
+        run_id: run.id,
+        requested_from_user_id: input.userId || 'system',
+        channel_id: input.channelId,
+        message_ts: input.messageTs,
+        title: `Approve proposed plan for: ${goal.title}`,
+        description: `Plan summary: ${planDraft.summary}\nRisk level: ${planDraft.riskLevel}`,
+        risk_level: planDraft.riskLevel,
+        proposed_action: { plan: planDraft },
+        status: 'pending',
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000)
+      });
+
+      await agentStore.appendAuditEvent({
+        workspace_id: input.workspaceId,
+        goal_id: goal.id,
+        run_id: run.id,
+        type: 'approval.requested',
+        actor: 'system',
+        summary: `Approval requested for plan risk: ${planDraft.riskLevel}`,
+        payload: { approvalId: approval.id }
+      });
+
+      run = await agentStore.updateRunStatus(run.id, 'awaiting_approval', { plan_id: plan.id, started_at: new Date() });
+      goal = await agentStore.updateGoalStatus(goal.id, 'awaiting_approval');
+
+      // Create blocked steps
+      for (let i = 0; i < planDraft.steps.length; i++) {
+        const stepDraft = planDraft.steps[i];
+        await agentStore.createStep({
+          run_id: run.id,
+          order_index: i,
+          title: stepDraft.title,
+          status: 'blocked',
+          input: { toolName: stepDraft.toolName, input: stepDraft.input },
+          error: 'Plan requires explicit user approval.'
+        });
+      }
+
+      await reportStatus('awaiting_approval', `I have generated a plan with a risk level of *${planDraft.riskLevel}* because it contains external impacts. An approval request has been created—please resolve it in the dashboard to continue.`, context);
+      
+      await agentStore.appendAuditEvent({
+        workspace_id: input.workspaceId,
+        goal_id: goal.id,
+        run_id: run.id,
+        type: 'report.sent',
+        actor: 'system',
+        summary: 'Awaiting approval notification sent to Slack',
+        payload: {}
+      });
+
+      return { status: 'success', intent, runId: run.id };
+    }
 
     run = await agentStore.updateRunStatus(run.id, 'running', { plan_id: plan.id, started_at: new Date() });
     goal = await agentStore.updateGoalStatus(goal.id, 'running');

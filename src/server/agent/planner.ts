@@ -44,7 +44,7 @@ Available safe tools:
 - task.record (input: { title: string, notes?: string })
 
 Generate a simple 1-3 step plan to accomplish this goal.
-If the task requires unsupported external action (like creating a Jira ticket, posting to social media, GitHub issue), state riskLevel="external_write" and requiresApproval=true, and don't provide a toolName.
+You are STRICTLY FORBIDDEN from generating any toolName other than the safe tools listed above. If a step requires any other action, state riskLevel="external_write" and requiresApproval=true, and leave toolName empty or undefined.
 Otherwise, use riskLevel="internal_write" or "read" or "draft".
 `;
 
@@ -61,6 +61,19 @@ Otherwise, use riskLevel="internal_write" or "read" or "draft".
     if (response.text) {
       const plan = JSON.parse(response.text) as AgentPlanDraft;
       if (!plan.riskLevel) plan.riskLevel = 'internal_write';
+      
+      const ALLOWED_TOOLS = ['slack.replyInThread', 'memory.write', 'memory.search', 'task.record'];
+      if (plan.steps) {
+        plan.steps = plan.steps.map(step => {
+          if (step.toolName && !ALLOWED_TOOLS.includes(step.toolName)) {
+            console.warn(`Planner generated unknown toolName: ${step.toolName}. Redacting for safety.`);
+            step.toolName = undefined;
+            plan.requiresApproval = true;
+            plan.riskLevel = 'external_write';
+          }
+          return step;
+        });
+      }
       return plan;
     }
   } catch (err) {

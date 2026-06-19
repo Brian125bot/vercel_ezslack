@@ -6,6 +6,8 @@ export interface ServerStatus {
   selectedModel?: string;
   availableModels?: Array<{ id: string; name: string; description: string }>;
   dashboardPasswordRequired: boolean;
+  databaseConfigured: boolean;
+  databaseAvailable: boolean;
 }
 
 export interface SlackEventLog {

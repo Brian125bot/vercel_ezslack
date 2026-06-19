@@ -13,6 +13,39 @@ export function verifyRun(trace: AgentRunTrace): VerificationResult {
     };
   }
 
+  // Check if plan requires approval
+  const risks = trace.plan?.risks;
+  let planRequiresApproval = false;
+  if (risks) {
+    if (Array.isArray(risks)) {
+      planRequiresApproval = risks[0]?.requiresApproval === true || risks[0]?.level === 'external_write' || risks[0]?.riskLevel === 'external_write';
+    } else if (typeof risks === 'object') {
+      planRequiresApproval = risks.requiresApproval === true || risks.level === 'external_write' || risks.riskLevel === 'external_write';
+    }
+  }
+
+  // If plan requires approval, make sure there is an approved request and no pending/rejected requests
+  if (planRequiresApproval) {
+    const approvals = trace.approvals || [];
+    const hasApproved = approvals.some(app => app.status === 'approved');
+    const hasPendingOrRejected = approvals.some(app => app.status === 'pending' || app.status === 'rejected');
+
+    if (!hasApproved || hasPendingOrRejected) {
+      const reasons = ['Plan requires explicit user approval which is pending, rejected, or missing.'];
+      steps.forEach(step => {
+        if (step.status === 'blocked') {
+          reasons.push(`Step '${step.title}' was blocked.`);
+        }
+      });
+      return {
+        status: 'blocked',
+        confidence: 1,
+        reasons,
+        recommendedNextAction: 'block'
+      };
+    }
+  }
+
   let allSucceeded = true;
   let anyBlocked = false;
   let slackFailed = false;
