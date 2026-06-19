@@ -1,12 +1,46 @@
 substitutions:
-  _REGION: us-central1
-  _REPO: apps
-  _IMAGE: slack-ai-agent
+  _REGION: us-west1
+  _REPO: cloud-run-source-deploy
+  _IMAGE: slack-ai-agent-backend
 steps:
+  # 1. Build the Docker image
   - name: gcr.io/cloud-builders/docker
-    args: ['build','-t','${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$SHORT_SHA','-t','${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest','.']
+    id: Build
+    args:
+      - 'build'
+      - '--no-cache'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:$COMMIT_SHA'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:latest'
+      - '.'
+
+  # 2. Push image to Artifact Registry
+  - name: gcr.io/cloud-builders/docker
+    id: Push
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:$COMMIT_SHA'
+
+  # 3. Deploy to Cloud Run
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: Deploy
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'services'
+      - 'update'
+      - '${_IMAGE}'
+      - '--platform=managed'
+      - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:$COMMIT_SHA'
+      - '--labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID'
+      - '--region=${_REGION}'
+      - '--quiet'
+
 images:
-  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$SHORT_SHA'
-  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:$COMMIT_SHA'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:latest'
+
 options:
   logging: CLOUD_LOGGING_ONLY
+  substitutionOption: ALLOW_LOOSE
