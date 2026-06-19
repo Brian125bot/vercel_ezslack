@@ -7,6 +7,7 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { router as apiRoutes } from "./src/server/routes.js";
 import { runMigrations } from "./src/server/storage/migrations.js";
+import { startWorker } from "./src/server/agent/worker.js";
 
 dotenv.config();
 
@@ -57,8 +58,10 @@ async function initServer() {
   try {
     if (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) {
       await runMigrations();
+      // Week 2: start the background run worker only once the DB (and its schema) is ready.
+      startWorker();
     } else {
-      console.log('No SQL configuration found (DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST). Skipping database migrations.');
+      console.log('No SQL configuration found (DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST). Skipping database migrations and background worker.');
     }
   } catch (err) {
     console.error('Failed to run database migrations:', err);

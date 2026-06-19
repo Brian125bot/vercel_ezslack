@@ -12,6 +12,9 @@ export interface AgentPipelineInput {
   signatureValid: boolean;
   sourceType: string;
   dbAvailable?: boolean;
+  // Pre-classified intent (W1 gap fix): routes.ts classifies once and passes the result
+  // through so the orchestrator never re-runs the (LLM) classifier.
+  intentResult?: IntentResult;
 }
 
 export interface AgentPipelineResult {
@@ -56,6 +59,27 @@ export interface ToolExecutionContext {
   userId: string;
   messageTs: string;
   threadTs?: string;
+  // Set when the user has already approved the active plan. Lets the executor proceed with
+  // external_write tools (but never destructive/privileged) without re-requesting approval.
+  preApproved?: boolean;
+}
+
+/**
+ * Context assembled for the planner (W2-B). Gives the model thread history, relevant memory,
+ * prior step outputs and replan feedback so it plans with information rather than blind.
+ */
+export interface PlanningContext {
+  threadHistory: { role: string; text: string }[];
+  memorySnippets: string[];
+  priorStepOutputs: { title: string; output: string }[];
+  replanFeedback?: string;
+}
+
+export interface SemanticVerificationResult {
+  satisfied: boolean;
+  confidence: 'high' | 'medium' | 'low';
+  reasoning: string;
+  source: 'llm' | 'skipped';
 }
 
 export interface AgentTool<TInput = any, TOutput = any> {

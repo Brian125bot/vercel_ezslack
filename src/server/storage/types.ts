@@ -44,6 +44,11 @@ export interface AgentRun {
   current_step_id?: string | null;
   result_summary?: string | null;
   failure_reason?: string | null;
+  // Week 2: background worker queue/claim semantics + closed-loop iteration tracking
+  iteration_count?: number;
+  claimed_by?: string | null;
+  claimed_at?: Date | null;
+  lease_expires_at?: Date | null;
   started_at?: Date | null;
   finished_at?: Date | null;
   created_at: Date;
@@ -53,6 +58,7 @@ export interface AgentRun {
 export interface AgentStep {
   id: string;
   run_id: string;
+  plan_id?: string | null;
   plan_step_id?: string | null;
   order_index: number;
   title: string;

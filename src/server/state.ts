@@ -1,4 +1,5 @@
 import { SlackEventLog, ThreadMessage } from '../types.js';
+import { sanitizeString } from './agent/sanitize.js';
 
 // Stateful Conversation Thread Memory
 export const threadMemory = new Map<string, ThreadMessage[]>();
@@ -14,13 +15,8 @@ export function setSelectedModel(model: string) {
 }
 
 export function sanitizeText(text: string | undefined): string | undefined {
-  if (!text) return text;
-  let sanitized = text;
-  sanitized = sanitized.replace(/xoxb-[a-zA-Z0-9-]{10,}/gi, '[REDACTED_SLACK_BOT_TOKEN]');
-  sanitized = sanitized.replace(/xoxp-[a-zA-Z0-9-]{10,}/gi, '[REDACTED_SLACK_USER_TOKEN]');
-  sanitized = sanitized.replace(/AIzaSy[a-zA-Z0-9_-]{33}/g, '[REDACTED_GEMINI_API_KEY]');
-  sanitized = sanitized.replace(/(password|secret|token)\s*[:=]\s*['"]?[a-zA-Z0-9_-]{8,}/gi, '$1=[REDACTED]');
-  return sanitized;
+  // Delegates to the centralized redactor in agent/sanitize.ts (single source of truth).
+  return sanitizeString(text);
 }
 
 export function sanitizeLogItem(item: SlackEventLog): SlackEventLog {

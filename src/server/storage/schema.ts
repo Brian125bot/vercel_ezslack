@@ -150,5 +150,26 @@ export const migrations = [
       CREATE INDEX IF NOT EXISTS idx_audit_run_created ON audit_events(run_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_scheduled_enabled_next_run ON scheduled_triggers(enabled, next_run_at);
     `
+  },
+  {
+    version: 2,
+    name: 'worker_queue_and_loop',
+    // Week 2: background worker claim semantics + closed-loop iteration tracking.
+    // Fully idempotent (ADD COLUMN IF NOT EXISTS / CREATE INDEX IF NOT EXISTS) so it is
+    // safe to re-run against partially-migrated databases.
+    sql: `
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS iteration_count integer NOT NULL DEFAULT 0;
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS claimed_by text;
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS claimed_at timestamptz;
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;
+
+      ALTER TABLE agent_steps ADD COLUMN IF NOT EXISTS plan_id uuid;
+
+      -- Worker claims the oldest queued run; this partial index keeps that scan cheap.
+      CREATE INDEX IF NOT EXISTS idx_runs_queued_created ON agent_runs(created_at) WHERE status = 'queued';
+      -- Stale-claim recovery scans running runs whose lease has expired.
+      CREATE INDEX IF NOT EXISTS idx_runs_lease ON agent_runs(lease_expires_at) WHERE status = 'running';
+      CREATE INDEX IF NOT EXISTS idx_steps_plan ON agent_steps(plan_id);
+    `
   }
 ];

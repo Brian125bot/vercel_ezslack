@@ -1,5 +1,6 @@
 import type { AgentTool } from '../agent/types.js';
 import { agentStore } from '../storage/agentStore.js';
+import { containsSecret } from '../agent/sanitize.js';
 
 export const memoryWriteTool: AgentTool<{ content: string; kind: string; visibility: string }> = {
   name: 'memory.write',
@@ -8,12 +9,9 @@ export const memoryWriteTool: AgentTool<{ content: string; kind: string; visibil
   requiresApproval: false,
   async execute(input, context) {
     const content = input.content || '';
-    const secretPatterns = [
-      /password/i, /secret/i, /api[_-]?key/i, /token/i,
-      /bearer/i, /credential/i, /pwd/i, /auth/i
-    ];
 
-    if (secretPatterns.some(pattern => pattern.test(content))) {
+    // W1-E: refuse to persist credentials/secrets to memory (centralized detector).
+    if (containsSecret(content)) {
       return { status: 'failed', error: 'Refusing to write potentially sensitive information or secrets to memory.' };
     }
 
