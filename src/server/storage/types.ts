@@ -1,7 +1,7 @@
-export type GoalStatus = 'pending' | 'planning' | 'running' | 'paused' | 'completed' | 'failed';
-export type RunStatus = 'starting' | 'running' | 'waiting_for_approval' | 'paused' | 'completed' | 'failed' | 'blocked';
-export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'skipped' | 'succeeded';
-export type ToolCallStatus = 'pending' | 'running' | 'waiting_for_approval' | 'approved' | 'rejected' | 'completed' | 'failed' | 'created' | 'requires_approval' | 'succeeded' | 'blocked';
+export type GoalStatus = 'created' | 'planning' | 'running' | 'awaiting_approval' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+export type RunStatus = 'queued' | 'planning' | 'running' | 'awaiting_approval' | 'blocked' | 'succeeded' | 'failed' | 'cancelled';
+export type StepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'blocked';
+export type ToolCallStatus = 'created' | 'running' | 'succeeded' | 'failed' | 'blocked' | 'requires_approval';
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type MemoryVisibility = 'private' | 'workspace' | 'public';
 

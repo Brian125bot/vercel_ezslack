@@ -1003,8 +1003,9 @@ export default function App() {
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs font-bold font-mono text-slate-700">Run {r.id.substring(0, 8)}</span>
                             <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold
-                              ${r.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 
+                              ${(r.status === 'completed' || r.status === 'succeeded') ? 'bg-emerald-100 text-emerald-700' : 
                                 r.status === 'failed' ? 'bg-rose-100 text-rose-700' : 
+                                r.status === 'blocked' ? 'bg-amber-100 text-amber-700' : 
                                 'bg-indigo-100 text-indigo-700'}
                             `}>
                               {r.status}

@@ -71,7 +71,7 @@ export const agentStore = {
 
   async updateRunStatus(id: string, status: RunStatus, patch?: UpdateRunInput): Promise<AgentRun> {
     let startedAt = status === 'running' && patch?.started_at !== undefined ? patch.started_at : undefined;
-    let finishedAt = (status === 'completed' || status === 'failed') ? new Date() : undefined;
+    let finishedAt = (status === 'succeeded' || status === 'failed' || status === 'cancelled') ? new Date() : undefined;
     
     const rows = await query<AgentRun>(
       `UPDATE agent_runs SET status = $1, updated_at = now(), 
@@ -99,7 +99,7 @@ export const agentStore = {
 
   async updateStepStatus(id: string, status: StepStatus, patch?: UpdateStepInput): Promise<AgentStep> {
     let startedAt = status === 'running' ? new Date() : undefined;
-    let finishedAt = (status === 'completed' || status === 'failed') ? new Date() : undefined;
+    let finishedAt = (status === 'succeeded' || status === 'failed') ? new Date() : undefined;
 
     const rows = await query<AgentStep>(
       `UPDATE agent_steps SET status = $1, 
@@ -127,7 +127,7 @@ export const agentStore = {
 
   async updateToolCallStatus(id: string, status: ToolCallStatus, patch?: UpdateToolCallInput): Promise<ToolCall> {
     let startedAt = status === 'running' ? new Date() : undefined;
-    let finishedAt = (status === 'completed' || status === 'failed') ? new Date() : undefined;
+    let finishedAt = (status === 'succeeded' || status === 'failed') ? new Date() : undefined;
 
     const rows = await query<ToolCall>(
       `UPDATE tool_calls SET status = $1, 
