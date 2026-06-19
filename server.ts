@@ -12,11 +12,7 @@ dotenv.config();
 
 const app = express();
 app.set('trust proxy', 1);
-// Cloud Run (and most PaaS hosts) inject the port to listen on via the PORT
-// environment variable (defaults to 8080 on Cloud Run). The container must bind
-// to that port or the startup health check fails and the deployment is marked
-// as failed. Fall back to 3000 for local development.
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = 3000;
 
 // Security: Expose minimal server information
 app.disable('x-powered-by');
@@ -85,7 +81,7 @@ async function initServer() {
     });
   }
 
-  // Bind to the configured PORT on 0.0.0.0 (required for Cloud Run ingress)
+  // Bind to port 3000 and 0.0.0.0 exclusively
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Fullstack Server Ready] Slack backend API serving on http://0.0.0.0:${PORT}`);
   });
