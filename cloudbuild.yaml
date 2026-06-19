@@ -15,14 +15,21 @@ steps:
       - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:latest'
       - '.'
 
-  # 2. Push image to Artifact Registry
+  # 2. Push commit-SHA tagged image
   - name: gcr.io/cloud-builders/docker
     id: Push
     args:
       - 'push'
       - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:$COMMIT_SHA'
 
-  # 3. Deploy to Cloud Run
+  # 3. Push :latest tag
+  - name: gcr.io/cloud-builders/docker
+    id: Push-Latest
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:latest'
+
+  # 4. Deploy to Cloud Run — strip stale AI Studio source annotation on every deploy
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     id: Deploy
     entrypoint: gcloud
@@ -32,6 +39,7 @@ steps:
       - '${_IMAGE}'
       - '--platform=managed'
       - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$REPO_NAME/${_IMAGE}:$COMMIT_SHA'
+      - '--remove-annotations=run.googleapis.com/sources'
       - '--labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID'
       - '--region=${_REGION}'
       - '--quiet'
