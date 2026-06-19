@@ -60,7 +60,43 @@ The companion management UI gives you absolute control over your live agentic ec
 │   └── index.css          # Tailwind CSS global styles stylesheet
 ├── slack-manifest.json    # Copy-pasteable Slack App Manifest specification
 ├── metadata.json          # Applet permission constraints
+├── Dockerfile             # Multi-stage Docker build for containerized deployments
+├── .dockerignore          # Docker build exclusion rules
 └── .env.example           # Reference environment configurations
+```
+
+---
+
+## 🐳 Deployment Options (Google Cloud Run)
+
+This repository is built to offer maximum flexibility for cloud-native zero-downtime deployment. It supports natively deploying to Google Cloud Run utilizing either source-based Buildpacks or the included structural Dockerfile.
+
+### Option 1: Cloud Buildpacks (Source Deployment)
+Rely on Google's native buildpacks to infer your Node.js runtime and handle optimized containerization automatically.
+```bash
+gcloud run deploy slack-ai-agent \
+  --source . \
+  --platform managed \
+  --allow-unauthenticated \
+  --set-env-vars="GEMINI_API_KEY=...,SLACK_BOT_TOKEN=...,SLACK_SIGNING_SECRET=...,DASHBOARD_PASSWORD=..."
+```
+
+### Option 2: Custom Multi-Stage Dockerfile
+If you prefer deterministic control over image sizing, dependency pruning, and layer caching, you can compile leveraging the custom two-stage `Dockerfile` included in the repository. The provided Dockerfile uses an Alpine Linux base to heavily optimize footprint (~20MB target).
+
+```bash
+# Build the Docker image locally
+docker build -t gcr.io/YOUR_PROJECT_ID/slack-ai-agent .
+
+# Push the image to GCP Container Registry
+docker push gcr.io/YOUR_PROJECT_ID/slack-ai-agent
+
+# Deploy the image to Cloud Run
+gcloud run deploy slack-ai-agent \
+  --image gcr.io/YOUR_PROJECT_ID/slack-ai-agent \
+  --platform managed \
+  --allow-unauthenticated \
+  --set-env-vars="GEMINI_API_KEY=...,SLACK_BOT_TOKEN=...,SLACK_SIGNING_SECRET=...,DASHBOARD_PASSWORD=..."
 ```
 
 ---

@@ -1,0 +1,27 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+.npm/
+
+# Build caches and compile outputs
+dist/
+build/
+.next/
+server.js
+server.cjs
+*.log
+
+# Workspace environments and credentials
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Version control & OS descriptors
+.git/
+.github/
+.gitignore
+.dockerignore
+.DS_Store
+Thumbs.db
