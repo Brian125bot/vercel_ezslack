@@ -2,23 +2,37 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---- Mocks must be declared before imports ----
 
-const mockAgentStore = {
-  getGoal: vi.fn(),
-  getRun: vi.fn(),
-  incrementRunIteration: vi.fn(),
-  createPlan: vi.fn(),
-  createStep: vi.fn(),
-  getStepsForPlan: vi.fn(),
-  getStepsForRun: vi.fn(),
-  getStep: vi.fn(),
-  getRunTrace: vi.fn(),
-  getApprovalsForRun: vi.fn().mockResolvedValue([]),
-  getAuditEventsForRun: vi.fn().mockResolvedValue([]),
-  updateRunStatus: vi.fn(),
-  updateGoalStatus: vi.fn(),
-  appendAuditEvent: vi.fn(),
-  createApprovalRequest: vi.fn(),
-};
+const {
+  mockAgentStore,
+  mockCreatePlan,
+  mockExecuteStep,
+  mockFinalizeRun,
+  mockVerifyRun,
+  mockVerifySemantically
+} = vi.hoisted(() => ({
+  mockAgentStore: {
+    getGoal: vi.fn(),
+    getRun: vi.fn(),
+    incrementRunIteration: vi.fn(),
+    createPlan: vi.fn(),
+    createStep: vi.fn(),
+    getStepsForPlan: vi.fn(),
+    getStepsForRun: vi.fn(),
+    getStep: vi.fn(),
+    getRunTrace: vi.fn(),
+    getApprovalsForRun: vi.fn().mockResolvedValue([]),
+    getAuditEventsForRun: vi.fn().mockResolvedValue([]),
+    updateRunStatus: vi.fn(),
+    updateGoalStatus: vi.fn(),
+    appendAuditEvent: vi.fn(),
+    createApprovalRequest: vi.fn(),
+  },
+  mockCreatePlan: vi.fn(),
+  mockExecuteStep: vi.fn(),
+  mockFinalizeRun: vi.fn(),
+  mockVerifyRun: vi.fn(),
+  mockVerifySemantically: vi.fn(),
+}));
 
 vi.mock('../src/server/storage/agentStore.js', () => ({
   agentStore: mockAgentStore
@@ -29,27 +43,22 @@ vi.mock('../src/server/agent/context.js', () => ({
   renderContextForPrompt: vi.fn().mockReturnValue('')
 }));
 
-const mockCreatePlan = vi.fn();
 vi.mock('../src/server/agent/planner.js', () => ({
   createPlan: mockCreatePlan
 }));
 
-const mockExecuteStep = vi.fn();
 vi.mock('../src/server/agent/executor.js', () => ({
   executeStep: mockExecuteStep
 }));
 
-const mockFinalizeRun = vi.fn();
 vi.mock('../src/server/agent/finalize.js', () => ({
   finalizeRun: mockFinalizeRun
 }));
 
-const mockVerifyRun = vi.fn();
 vi.mock('../src/server/agent/verifier.js', () => ({
   verifyRun: mockVerifyRun
 }));
 
-const mockVerifySemantically = vi.fn();
 vi.mock('../src/server/agent/semanticVerifier.js', () => ({
   verifySemantically: mockVerifySemantically
 }));
@@ -122,6 +131,16 @@ describe('Agent Loop (W4-F6)', () => {
     // Default: getApprovalsForRun and getAuditEventsForRun return empty
     mockAgentStore.getApprovalsForRun.mockResolvedValue([]);
     mockAgentStore.getAuditEventsForRun.mockResolvedValue([]);
+    // Default: getRunTrace returns minimum hydrate-safe object
+    mockAgentStore.getRunTrace.mockResolvedValue({
+      run: makeRun(),
+      goal: makeGoal(),
+      plan: { id: 'plan-1', steps: [] },
+      steps: [],
+      toolCalls: [],
+      approvals: [],
+      auditEvents: []
+    });
   });
 
   it('happy path: plan → execute → verify → succeed', async () => {
@@ -131,6 +150,7 @@ describe('Agent Loop (W4-F6)', () => {
     const planDraft = makePlanDraft();
 
     mockAgentStore.getGoal.mockResolvedValue(goal);
+    mockAgentStore.getRun.mockResolvedValue(run);
     mockAgentStore.incrementRunIteration.mockResolvedValue({ ...run, iteration_count: 1 });
     mockCreatePlan.mockResolvedValue(planDraft);
     mockAgentStore.createPlan.mockResolvedValue({ id: 'plan-1', ...planDraft });
@@ -145,7 +165,15 @@ describe('Agent Loop (W4-F6)', () => {
     // Verification passes
     mockVerifyRun.mockReturnValue({ status: 'satisfied', confidence: 1, reasons: [], recommendedNextAction: 'complete' });
     mockVerifySemantically.mockResolvedValue({ satisfied: true, confidence: 0.95, reasoning: 'Looks good', source: 'llm' });
-    mockAgentStore.getRunTrace.mockResolvedValue({ run, goal, plan: { id: 'plan-1' }, steps: [{ ...step, status: 'succeeded' }], toolCalls: [], approvals: [], auditEvents: [] });
+    mockAgentStore.getRunTrace.mockResolvedValue({
+      run: { ...run, plan_id: 'plan-1' },
+      goal,
+      plan: { id: 'plan-1', steps: planDraft.steps },
+      steps: [{ ...step, status: 'succeeded' }],
+      toolCalls: [],
+      approvals: [],
+      auditEvents: []
+    });
 
     mockFinalizeRun.mockResolvedValue(undefined);
     mockAgentStore.appendAuditEvent.mockResolvedValue(undefined);
@@ -165,6 +193,7 @@ describe('Agent Loop (W4-F6)', () => {
     const planDraft = makePlanDraft();
 
     mockAgentStore.getGoal.mockResolvedValue(goal);
+    mockAgentStore.getRun.mockResolvedValue(run);
     mockAgentStore.incrementRunIteration.mockResolvedValue({ ...run, iteration_count: 1 });
     mockCreatePlan.mockResolvedValue(planDraft);
     mockAgentStore.createPlan.mockResolvedValue({ id: 'plan-1', ...planDraft });
@@ -177,7 +206,15 @@ describe('Agent Loop (W4-F6)', () => {
     // Rule verification passes but semantic fails
     mockVerifyRun.mockReturnValue({ status: 'satisfied', confidence: 1, reasons: [], recommendedNextAction: 'complete' });
     mockVerifySemantically.mockResolvedValue({ satisfied: false, confidence: 0.3, reasoning: 'Reply does not match goal', source: 'llm' });
-    mockAgentStore.getRunTrace.mockResolvedValue({ run, goal, plan: { id: 'plan-1' }, steps: [{ ...step, status: 'succeeded' }], toolCalls: [], approvals: [], auditEvents: [] });
+    mockAgentStore.getRunTrace.mockResolvedValue({
+      run: { ...run, plan_id: 'plan-1' },
+      goal,
+      plan: { id: 'plan-1', steps: planDraft.steps },
+      steps: [{ ...step, status: 'succeeded' }],
+      toolCalls: [],
+      approvals: [],
+      auditEvents: []
+    });
     mockAgentStore.appendAuditEvent.mockResolvedValue(undefined);
 
     // Spy on setImmediate to catch the recursive call without actually recursing
@@ -228,6 +265,7 @@ describe('Agent Loop (W4-F6)', () => {
     const planDraft = makePlanDraft();
 
     mockAgentStore.getGoal.mockResolvedValue(goal);
+    mockAgentStore.getRun.mockResolvedValue(run);
     mockAgentStore.incrementRunIteration.mockResolvedValue({ ...run, iteration_count: 1 });
     mockCreatePlan.mockResolvedValue(planDraft);
     mockAgentStore.createPlan.mockResolvedValue({ id: 'plan-1', ...planDraft });

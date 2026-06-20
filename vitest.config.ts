@@ -7,6 +7,7 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     testTimeout: 10_000,
     coverage: {
+      provider: "v8",
       reporter: ['text', 'json-summary'],
       include: ['src/server/agent/**/*.ts']
     }
