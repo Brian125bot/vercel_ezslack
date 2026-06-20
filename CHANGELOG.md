@@ -2,6 +2,169 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0] - Final W3+W4 DoD Completion - 2026-06-20
+
+### ✨ Features
+
+#### W4-F1: Time-Deferred Trigger Detection
+* Created `src/server/agent/deferral.ts` with `detectDeferral()` utility.
+* Patterns: "remind me in N hours/days", "remind me tomorrow", "follow up
+  next week", "schedule this for tomorrow", and bare "in N units" with
+  action-verb context guard.
+* `durableTask.ts` now checks for deferral before creating a run. When
+  detected, creates a `scheduled_trigger` (one-shot) instead of an
+  immediate `queued` run. The scheduler poller fires the run at the
+  scheduled time.
+* Audit event `trigger.created` logged with delay and human-readable label.
+
+#### W4-F9: Plan Mutation Wired into cancel_or_update Handler
+* `cancelUpdate.ts` now sub-classifies messages as `cancel` vs `update`.
+* Cancel patterns ("cancel", "stop", "abort", etc.) → existing cancel path.
+* Everything else → calls `mutatePlan()` to modify pending steps in the
+  active run's plan, producing an audit-visible `plan.mutated` event.
+* Removed unused `'reorder'` action from `MutationInstruction` type.
+
+#### Scheduler Upgrades
+* `cron-parser` used for full cron expression support (dynamic require with
+  graceful fallback to basic parsing if not installed).
+* Scheduled runs now inherit the model from the goal's most recent run
+  instead of hardcoding `gemini-3.1-flash-lite`.
+
+### 🧪 Tests
+
+#### W4-F6: Loop Integration Tests
+* `tests/loop.test.ts` — 4 test cases covering the full closed loop:
+  - Happy path (plan → execute → verify → succeed)
+  - Semantic failure triggers replan via `setImmediate`
+  - Max iterations (3) → run fails without creating a plan
+  - Step blocked → run blocked and finalized
+
+#### W4-F7: Migration Idempotency Tests
+* `tests/migration.test.ts` — 9 static analysis tests:
+  - All CREATE TABLE uses IF NOT EXISTS
+  - All CREATE INDEX uses IF NOT EXISTS
+  - All ADD COLUMN uses IF NOT EXISTS
+  - All DROP TABLE/COLUMN uses IF EXISTS
+  - Versions unique, ascending, positive integers
+  - Every migration has name and non-empty SQL
+
+#### W4-F1: Deferral Detection Tests
+* `tests/deferral.test.ts` — 15 tests: "remind me", "follow up",
+  "schedule this", unit normalization (mins/hrs), and 5 negative cases
+  to prevent false positives.
+
+### 🧹 Cleanup
+* Added `getRunsForGoal()` to `agentStore.ts` for model inheritance.
+* Removed dead `updateScheduledTriggerAfterRun()` and
+  `disableScheduledTrigger()` store methods (superseded by atomic
+  `DELETE + reinsert` pattern from v3.0.1).
+
+## [3.0.1] - Pre-merge QA Bug Fixes - 2026-06-20
+
+### 🔒 Security
+* **Interactivity signature verification (W3-F7):** Extracted Slack HMAC-SHA256
+  verification into a shared `verifySlackSignature()` helper. Both `/api/slack/events`
+  and `/api/slack/interactivity` now verify request signatures, preventing forged
+  approval/rejection actions.
+
+### 🐛 Bug Fixes
+* **Expired approval guard (W3-F9):** `resolveApproval()` now checks
+  `status = 'pending' AND expires_at > now()`. Expired approvals can no longer be
+  approved to execute external tools. Returns descriptive errors for already-resolved,
+  expired, or not-found approvals.
+* **Scheduler atomic claim (W4-F3):** `getDueScheduledTriggers()` now uses
+  `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *` for atomic trigger claiming.
+  Multiple Cloud Run instances polling concurrently can no longer double-fire the same
+  trigger. Recurring triggers are re-inserted with the next run time after successful
+  claim; one-shot triggers are not re-inserted (effectively disabled).
+
+## [3.0.0] - Weeks 3–4 (Real-World Action & Autonomy) - 2026-06-20
+
+### Week 3: Real-World Action
+
+#### W3-A: Exec-Time Content Generation (`generate` step kind)
+* Added `StepKind` type (`'tool' | 'generate' | 'note'`) to `types.ts`.
+* `executor.ts` now handles `kind: 'generate'` steps: calls Gemini at execution time
+  with upstream step outputs as context, stores result in `output.generated`.
+* Downstream `slack.replyInThread` steps auto-inject generated text when their
+  `input.text` is empty, eliminating the "chat wrapper" problem where the planner
+  would bake empty `input:{}` at plan time.
+* Added `updateStepInput()` to `agentStore.ts` for runtime input patching.
+* Updated `planner.ts` to teach the LLM about `generate` steps and build the tool
+  catalogue dynamically from the live registry.
+
+#### W3-B: External Adapter Framework + GitHub Issue Adapter
+* Created `src/server/tools/adapters/` with `ExternalAdapter` interface (`base.ts`).
+* Implemented `GitHubIssueAdapter` — creates issues via GitHub REST API when
+  `GITHUB_TOKEN` is set. Declares `riskLevel: 'external_write'`.
+* Implemented `EmailAdapter` — sends email via configurable webhook relay when
+  `EMAIL_WEBHOOK_URL` is set.
+* `registry.ts` now auto-registers configured adapters at startup and exposes
+  `registerAdapter()` + `getAdapters()` methods.
+* Planner prompt dynamically includes all registered tools.
+
+#### W3-C: Block Kit Interactive Approvals
+* `slack.ts` exports `postApprovalBlockKit()` — posts Approve/Reject buttons
+  with the approval UUID in `action.value`.
+* `executor.ts` calls `postApprovalBlockKit()` when policy blocks a tool.
+* Added `POST /api/slack/interactivity` route to `routes.ts`:
+  - Parses URL-encoded `payload` from Slack
+  - Resolves approval in DB, updates Block Kit message (removes buttons)
+  - Resumes pipeline on approve, cancels on reject
+* `updateApprovalMessage()` replaces the button message with a resolved state.
+* `updateApprovalMessageTs()` added to `agentStore.ts`.
+* Updated `slack-manifest.json` with interactivity request URL.
+
+#### W3-D: Action-Aware Reporting
+* Rewrote `reporter.ts` with `buildRunReport(trace)` — generates a structured
+  Slack message listing every step, its tool, outcome, generated content length,
+  and resolved approvals.
+* `finalize.ts` now calls `reportRunResult(trace)` instead of posting a generic
+  "Task finished with status: X" message.
+* Legacy `reportStatus()` preserved for backward compatibility.
+
+### Week 4: Autonomy & Hardening
+
+#### W4-A: Scheduled Triggers Poller
+* Created `src/server/agent/scheduler.ts` with 15-second polling interval.
+* `startScheduler()` / `stopScheduler()` lifecycle methods.
+* `getDueScheduledTriggers()`, `updateScheduledTriggerAfterRun()`,
+  `disableScheduledTrigger()`, `createScheduledTrigger()` added to `agentStore.ts`.
+* Computes next run from cron (basic subset) or `interval_seconds`.
+* Broken triggers are auto-disabled to prevent infinite error loops.
+* `server.ts` starts the scheduler alongside the worker.
+
+#### W4-B: Test Suite & CI Gate
+* Added `vitest` as dev dependency with `vitest.config.ts`.
+* Created 5 test files covering core agent modules:
+  - `tests/intent.test.ts` — 11 heuristic classification tests
+  - `tests/policy.test.ts` — 6 risk-level policy tests
+  - `tests/sanitize.test.ts` — 8 secret detection / redaction tests
+  - `tests/verifier.test.ts` — 6 rule-based verification tests
+  - `tests/reporter.test.ts` — 8 action-aware report generation tests
+* `package.json` scripts: `test`, `test:watch`, `test:coverage`.
+* `cloudbuild.yaml` now runs `npm run lint` and `npm test` gates before Docker build.
+
+#### W4-C: Natural Language Plan Mutation
+* Created `src/server/agent/planMutation.ts` with `mutatePlan()`.
+* Supports add/remove/replace/modify actions on pending steps.
+* Uses Gemini structured output to interpret user instructions.
+* Only pending steps can be mutated; succeeded/running/blocked are protected.
+* All mutations are audit-logged with `plan.mutated` event type.
+
+#### W4-D: Ops Hardening
+* **Email adapter** — `src/server/tools/adapters/email.ts` (see W3-B).
+* **Graceful shutdown** — `server.ts` handles SIGTERM/SIGINT: stops worker,
+  stops scheduler, drains HTTP connections, closes DB pool.
+* **Health endpoint** — `GET /api/health` returns `{ status: 'ok', uptime }`.
+* `express.urlencoded()` middleware added for Slack interactivity payloads.
+
+### Documentation
+* Created `docs/intent-routing.md` — full architecture doc covering intent
+  classification flow, step kinds, tool registry, approval flow, plan mutation,
+  and scheduled triggers.
+* Updated this CHANGELOG to cover all v3.0.0 deliverables.
+
 ## [2.1.0] - CI/CD Pipeline & Runtime Upgrades - 2026-06-19
 
 ### 🚀 Google Cloud Build CI/CD Modernization

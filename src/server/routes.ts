@@ -11,6 +11,52 @@ import { runAgentPipeline } from './agent/orchestrator.js';
 
 export const router = express.Router();
 
+/**
+ * Verify a Slack request signature (HMAC-SHA256).
+ * Returns { valid: true } or { valid: false, error: string }.
+ * Used by both /slack/events and /slack/interactivity.
+ */
+function verifySlackSignature(req: any): { valid: boolean; error?: string } {
+  const signingSecret = process.env.SLACK_SIGNING_SECRET?.trim();
+  if (!signingSecret) {
+    console.warn('[Signature Warning] SLACK_SIGNING_SECRET not set. Skipping verification.');
+    return { valid: true }; // permissive for local dev
+  }
+
+  const signature = req.headers['x-slack-signature'] as string | undefined;
+  const timestamp = req.headers['x-slack-request-timestamp'] as string | undefined;
+
+  if (!signature || !timestamp) {
+    return { valid: false, error: 'Missing signature headers' };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const reqTime = parseInt(timestamp, 10);
+  if (isNaN(reqTime) || Math.abs(now - reqTime) > 300) {
+    return { valid: false, error: `Replay attack: timestamp ${timestamp} is stale` };
+  }
+
+  const baseString = `v0:${timestamp}:`;
+  const hmac = crypto.createHmac('sha256', signingSecret);
+  hmac.update(Buffer.from(baseString, 'utf8'));
+  if (req.rawBody) {
+    hmac.update(req.rawBody);
+  }
+  const calculatedSignature = 'v0=' + hmac.digest('hex');
+
+  try {
+    const sigHash = crypto.createHash('sha256').update(signature, 'utf8').digest();
+    const calcHash = crypto.createHash('sha256').update(calculatedSignature, 'utf8').digest();
+    if (!crypto.timingSafeEqual(sigHash, calcHash)) {
+      return { valid: false, error: 'Cryptographic verification failed' };
+    }
+  } catch {
+    return { valid: false, error: 'Cryptographic verification failed' };
+  }
+
+  return { valid: true };
+}
+
 router.get('/status', requireDashboardAuth, async (req, res) => {
   const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD?.trim();
   const dbConfigured = !!(process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST);
@@ -227,72 +273,111 @@ router.post('/slack/test', requireDashboardAuth, async (req: any, res: any) => {
   }
 });
 
+// ── W4-D: Health check endpoint (no auth) ──
+router.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
+// ── W3-C: Slack interactivity endpoint (Block Kit button callbacks) ──
+router.post('/slack/interactivity', async (req: any, res: any) => {
+  try {
+    // W3-F7: Verify Slack signature before processing interactivity payloads
+    const sigResult = verifySlackSignature(req);
+    if (!sigResult.valid) {
+      console.log(`[Interactivity Signature Error] ${sigResult.error}`);
+      return res.status(401).send(`Unauthorized: ${sigResult.error}`);
+    }
+
+    // Slack sends the payload as a URL-encoded `payload` field
+    const rawPayload = req.body?.payload || req.body;
+    const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;
+    
+    if (!payload || !payload.actions || payload.actions.length === 0) {
+      return res.status(200).send('OK');
+    }
+
+    // ACK immediately
+    res.status(200).send('');
+
+    const action = payload.actions[0];
+    const actionId: string = action.action_id || '';
+    const approvalId: string = action.value || '';
+    const userId: string = payload.user?.id || '';
+    const channelId: string = payload.channel?.id || '';
+
+    if (!approvalId || (!actionId.startsWith('approval_approve') && !actionId.startsWith('approval_reject'))) {
+      return;
+    }
+
+    const newStatus: 'approved' | 'rejected' = actionId.includes('approve') ? 'approved' : 'rejected';
+
+    const approval = await agentStore.resolveApproval(approvalId, newStatus);
+
+    // Update the original Block Kit message to remove buttons
+    const { updateApprovalMessage } = await import('./tools/slack.js');
+    await updateApprovalMessage(approval, newStatus, channelId);
+
+    // Create audit event
+    if (approval.run_id) {
+      const trace = await agentStore.getRunTrace(approval.run_id);
+      await agentStore.appendAuditEvent({
+        workspace_id: trace.goal.workspace_id,
+        goal_id: approval.goal_id!,
+        run_id: approval.run_id,
+        type: `approval.${newStatus}`,
+        actor: userId,
+        summary: `User ${newStatus} execution via Block Kit button`,
+        payload: { approvalId: approval.id }
+      });
+    }
+
+    // Resume or cancel based on outcome
+    if (newStatus === 'approved' && approval.run_id) {
+      const { resumeAgentPipeline } = await import('./agent/orchestrator.js');
+      resumeAgentPipeline(approval.run_id).catch(e => console.error('Failed to resume pipeline', e));
+    } else if (newStatus === 'rejected' && approval.run_id) {
+      await agentStore.updateRunStatus(approval.run_id, 'cancelled', { failure_reason: 'User rejected via Slack button.' });
+      if (approval.goal_id) {
+        await agentStore.updateGoalStatus(approval.goal_id, 'cancelled');
+      }
+    }
+  } catch (err: any) {
+    console.error('[Interactivity Error]', err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+});
+
 router.post('/slack/events', (req: any, res: any) => {
   try {
-    const signature = req.headers['x-slack-signature'];
-    const timestamp = req.headers['x-slack-request-timestamp'];
-    const rawBody = req.rawBody || "";
-
     if (req.body && req.body.type === 'url_verification') {
       const challengeClient = req.body.challenge;
       console.log(`[Handshake] Received challenge token verification. Challenge: ${challengeClient}`);
       return res.status(200).json({ challenge: challengeClient });
     }
 
-    const signingSecret = process.env.SLACK_SIGNING_SECRET?.trim();
-    let signatureVerified = false;
-    let signatureError = '';
+    // Verify Slack signature using the shared helper
+    const sigResult = verifySlackSignature(req);
+    const signatureVerified = sigResult.valid;
 
-    if (signingSecret) {
-      if (!signature || !timestamp) {
-        signatureError = 'Missing signature headers';
-      } else {
-        const now = Math.floor(Date.now() / 1000);
-        const reqTime = parseInt(timestamp as string, 10);
-        if (isNaN(reqTime) || Math.abs(now - reqTime) > 300) {
-          signatureError = `Replay attack warning: timestamp over 5 minutes old (${timestamp})`;
-        } else {
-          const baseString = `v0:${timestamp}:`;
-          const hmac = crypto.createHmac('sha256', signingSecret);
-          hmac.update(Buffer.from(baseString, 'utf8'));
-          if (req.rawBody) {
-             hmac.update(req.rawBody);
-          }
-          const calculatedSignature = 'v0=' + hmac.digest('hex');
-
-          try {
-            const signatureHash = crypto.createHash('sha256').update(signature as string, 'utf8').digest();
-            const calculatedHash = crypto.createHash('sha256').update(calculatedSignature, 'utf8').digest();
-            signatureVerified = crypto.timingSafeEqual(signatureHash, calculatedHash);
-          } catch (err) {
-            signatureVerified = false;
-          }
-
-          if (!signatureVerified) {
-            signatureError = 'Cryptographic verification failed';
-          }
-        }
-      }
-      
-      if (signatureError) {
-        console.log(`[Signature Error] ${signatureError}`);
-        const logItem: SlackEventLog = {
-          id: Math.random().toString(36).substring(2, 9),
-          timestamp: new Date().toISOString(),
-          eventId: req.body?.event_id || 'unknown-id',
-          eventType: req.body?.event?.type || 'unknown-type',
-          channel: req.body?.event?.channel || 'unknown',
-          user: req.body?.event?.user || 'unknown',
-          text: req.body?.event?.text || '',
-          status: 'error',
-          signatureVerified: false,
-          error: `Unauthorized: ${signatureError}`
-        };
-        addLog(logItem);
-        return res.status(401).send(`Unauthorized: ${signatureError}`);
-      }
-    } else {
-      console.warn(`[Signature Warning] SLACK_SIGNING_SECRET is not set. Skipping verify check for testing convenience.`);
+    if (!signatureVerified) {
+      const signatureError = sigResult.error || 'Unknown verification failure';
+      console.log(`[Signature Error] ${signatureError}`);
+      const logItem: SlackEventLog = {
+        id: Math.random().toString(36).substring(2, 9),
+        timestamp: new Date().toISOString(),
+        eventId: req.body?.event_id || 'unknown-id',
+        eventType: req.body?.event?.type || 'unknown-type',
+        channel: req.body?.event?.channel || 'unknown',
+        user: req.body?.event?.user || 'unknown',
+        text: req.body?.event?.text || '',
+        status: 'error',
+        signatureVerified: false,
+        error: `Unauthorized: ${signatureError}`
+      };
+      addLog(logItem);
+      return res.status(401).send(`Unauthorized: ${signatureError}`);
     }
 
     const eventId = req.body.event_id;
@@ -336,7 +421,7 @@ router.post('/slack/events', (req: any, res: any) => {
       user: event.user || 'unknown',
       text: event.text || '',
       status: 'processing',
-      signatureVerified: !!signingSecret && signatureVerified,
+      signatureVerified: signatureVerified,
     };
     addLog(logItem);
 
@@ -382,7 +467,7 @@ router.post('/slack/events', (req: any, res: any) => {
           messageTs: event.ts,
           threadTs: threadTsTarget,
           selectedModel,
-          signatureValid: !!signingSecret && signatureVerified,
+          signatureValid: signatureVerified,
           sourceType: 'slack',
           dbAvailable,
           intentResult

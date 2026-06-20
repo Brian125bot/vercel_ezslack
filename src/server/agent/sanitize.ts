@@ -16,10 +16,10 @@ export function sanitizeString(text: string): string {
   if (typeof text !== 'string') return text;
   let sanitized = text;
   const secretPatterns = [
-    /(?:xox[bp]-[a-zA-Z0-9-]{10,})/gi,
-    /(?:sk-[a-zA-Z0-9]{20,})/gi,
-    /(?:AIza[0-9A-Za-z-_]{35})/gi,
-    /(?:AKIA[0-9A-Z]{16})/gi,
+    /(xox[bp])(-[a-zA-Z0-9-]{10,})/gi,
+    /(sk-[a-zA-Z0-9]{20,})/gi,
+    /(AIza[0-9A-Za-z-_]{35})/gi,
+    /(AKIA[0-9A-Z]{16})/gi,
     /(password\s*=\s*['"]?)[a-zA-Z0-9!@#$%^&*()_+]{8,}(['"]?)/gi,
     /(bearer\s+)[a-zA-Z0-9\-\._~+\/]+={0,2}/gi,
     /(-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----[\s\S]+?-----END (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----)/g,
@@ -28,8 +28,15 @@ export function sanitizeString(text: string): string {
   
   secretPatterns.forEach(pattern => {
     sanitized = sanitized.replace(pattern, (match, p1, p2) => {
-      if (p1 && p2) return `${p1}[REDACTED]${p2}`;
-      if (p1) return `${p1}[REDACTED]`;
+      // If we have capture groups, we want to keep the prefixes/suffixes
+      if (p1 !== undefined && p2 !== undefined && typeof p1 === 'string' && typeof p2 === 'string') {
+        // This handles cases like password="...", keep password=" and "
+        return `${p1}[REDACTED]${p2}`;
+      }
+      if (p1 !== undefined && typeof p1 === 'string') {
+        // This handles cases like bearer ..., keep bearer
+        return `${p1}[REDACTED]`;
+      }
       return '[REDACTED]';
     });
   });

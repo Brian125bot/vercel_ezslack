@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import type { AgentPlanDraft } from './types.js';
+import { toolsRegistry } from '../tools/registry.js';
 
 export async function createPlan(goalTitle: string, originalInstruction: string, selectedModel: string, contextBlock?: string): Promise<AgentPlanDraft> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -20,9 +21,9 @@ export async function createPlan(goalTitle: string, originalInstruction: string,
           type: Type.OBJECT,
           properties: {
             title: { type: Type.STRING },
+            kind: { type: Type.STRING },
             toolName: { type: Type.STRING },
-            input: { type: Type.OBJECT },
-            kind: { type: Type.STRING }
+            input: { type: Type.OBJECT }
           },
           required: ['title']
         }
@@ -32,6 +33,12 @@ export async function createPlan(goalTitle: string, originalInstruction: string,
     },
     required: ['summary', 'assumptions', 'steps', 'riskLevel', 'requiresApproval']
   };
+
+  // Build the tool catalogue dynamically from the registry
+  const allTools = toolsRegistry.getAll();
+  const toolDescriptions = allTools
+    .map(t => `- ${t.name} (risk: ${t.riskLevel}) — ${t.description}`)
+    .join('\n');
 
   let prompt = `
 You are an AI agent planning a response to:
@@ -44,18 +51,20 @@ Instruction: ${originalInstruction}
   }
 
   prompt += `
-Available safe tools:
-- slack.replyInThread (input: { text: string })
-- memory.write (input: { content: string, kind: string, visibility: string })
-- memory.search (input: { query: string, kind?: string })
-- task.record (input: { title: string, notes?: string })
+Available tools:
+${toolDescriptions}
 
-Generate a simple 1-3 step plan to accomplish this goal.
-CRITICAL: You MUST fully populate each step's \`input\` object using the information from the context.
-For example, if you use slack.replyInThread, you MUST write the final reply text into \`input.text\`, drawing on the available context.
-You are STRICTLY FORBIDDEN from generating any toolName other than the safe tools listed above. If a step requires any other action, state riskLevel="external_write" and requiresApproval=true, and leave toolName empty or undefined.
-Otherwise, use riskLevel="internal_write" or "read" or "draft".
-If it is a conceptual step, you can include \`kind: 'note'\`.
+Step kinds:
+- "tool"    — execute a registered tool (you MUST set toolName + input)
+- "generate" — call an LLM at execution time to produce text content (set prompt in input.prompt); downstream steps can consume the generated output automatically
+- "note"    — conceptual/no-op step (no tool needed)
+
+Planning rules:
+1. Generate a 1-5 step plan. Prefer "generate" kind when the final reply needs content that depends on tool outputs from earlier steps (e.g. search results, memory lookups). Follow a "generate" step with a "slack.replyInThread" step — the reply text will be auto-injected from the generated output.
+2. You MUST fully populate each step's \`input\` object using the information from the context.
+3. For "tool" steps, include \`kind: "tool"\` (or omit kind), set \`toolName\`, and set \`input\`.
+4. If a step requires an external tool not listed above, set riskLevel="external_write" and requiresApproval=true, and describe the action in the step title without a toolName.
+5. Otherwise, use riskLevel="internal_write" or "read" or "draft".
 `;
 
   try {
@@ -72,14 +81,23 @@ If it is a conceptual step, you can include \`kind: 'note'\`.
       const plan = JSON.parse(response.text) as AgentPlanDraft;
       if (!plan.riskLevel) plan.riskLevel = 'internal_write';
       
-      const ALLOWED_TOOLS = ['slack.replyInThread', 'memory.write', 'memory.search', 'task.record'];
+      // Validate tool names against the live registry
       if (plan.steps) {
         plan.steps = plan.steps.map(step => {
-          if (step.toolName && !ALLOWED_TOOLS.includes(step.toolName)) {
-            console.warn(`Planner generated unknown toolName: ${step.toolName}. Redacting for safety.`);
+          // If kind is generate or note, no tool needed
+          if (step.kind === 'generate' || step.kind === 'note') {
             step.toolName = undefined;
-            plan.requiresApproval = true;
-            plan.riskLevel = 'external_write';
+            return step;
+          }
+          // Default kind to 'tool' if toolName is specified
+          if (step.toolName) {
+            step.kind = step.kind || 'tool';
+            if (!toolsRegistry.get(step.toolName)) {
+              console.warn(`Planner generated unknown toolName: ${step.toolName}. Redacting for safety.`);
+              step.toolName = undefined;
+              plan.requiresApproval = true;
+              plan.riskLevel = 'external_write';
+            }
           }
           return step;
         });
@@ -96,9 +114,15 @@ If it is a conceptual step, you can include \`kind: 'note'\`.
     assumptions: [],
     steps: [
       {
-        title: 'Draft response',
+        title: 'Generate response content',
+        kind: 'generate',
+        input: { prompt: `Respond to: ${originalInstruction}` }
+      },
+      {
+        title: 'Send response to user',
+        kind: 'tool',
         toolName: 'slack.replyInThread',
-        input: { text: 'I received your request but planning failed to generate a sophisticated structure. How can I assist further?' }
+        input: { text: '' } // auto-populated from generate step
       }
     ],
     riskLevel: 'internal_write',
