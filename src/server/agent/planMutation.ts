@@ -4,7 +4,7 @@ import { agentStore } from '../storage/agentStore.js';
 import { slog } from './log.js';
 
 interface MutationInstruction {
-  action: 'add' | 'remove' | 'replace' | 'reorder' | 'modify';
+  action: 'add' | 'remove' | 'replace' | 'modify';
   stepIndex?: number;       // 0-based
   newStep?: PlannedAgentStep;
   field?: string;           // for 'modify': which field to change

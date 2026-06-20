@@ -273,6 +273,13 @@ export const agentStore = {
     );
   },
 
+  async getRunsForGoal(goalId: string): Promise<AgentRun[]> {
+    return query<AgentRun>(
+      `SELECT * FROM agent_runs WHERE goal_id = $1 ORDER BY created_at ASC`,
+      [goalId]
+    );
+  },
+
   async getActiveRunsByChannel(workspaceId: string, channelId: string): Promise<AgentRun[]> {
     return query<AgentRun>(
       `SELECT r.* FROM agent_runs r
@@ -431,15 +438,4 @@ export const agentStore = {
     }
     // If nextRunAt is null → one-shot trigger, don't re-insert (effectively disabled)
   },
-
-  async updateScheduledTriggerAfterRun(id: string, nextRunAt: Date | null): Promise<void> {
-    await query(
-      `UPDATE scheduled_triggers SET last_run_at = now(), next_run_at = $1 WHERE id = $2`,
-      [nextRunAt, id]
-    );
-  },
-
-  async disableScheduledTrigger(id: string): Promise<void> {
-    await query(`UPDATE scheduled_triggers SET enabled = false WHERE id = $1`, [id]);
-  }
 };

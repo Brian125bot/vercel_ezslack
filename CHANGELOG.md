@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0] - Final W3+W4 DoD Completion - 2026-06-20
+
+### ✨ Features
+
+#### W4-F1: Time-Deferred Trigger Detection
+* Created `src/server/agent/deferral.ts` with `detectDeferral()` utility.
+* Patterns: "remind me in N hours/days", "remind me tomorrow", "follow up
+  next week", "schedule this for tomorrow", and bare "in N units" with
+  action-verb context guard.
+* `durableTask.ts` now checks for deferral before creating a run. When
+  detected, creates a `scheduled_trigger` (one-shot) instead of an
+  immediate `queued` run. The scheduler poller fires the run at the
+  scheduled time.
+* Audit event `trigger.created` logged with delay and human-readable label.
+
+#### W4-F9: Plan Mutation Wired into cancel_or_update Handler
+* `cancelUpdate.ts` now sub-classifies messages as `cancel` vs `update`.
+* Cancel patterns ("cancel", "stop", "abort", etc.) → existing cancel path.
+* Everything else → calls `mutatePlan()` to modify pending steps in the
+  active run's plan, producing an audit-visible `plan.mutated` event.
+* Removed unused `'reorder'` action from `MutationInstruction` type.
+
+#### Scheduler Upgrades
+* `cron-parser` used for full cron expression support (dynamic require with
+  graceful fallback to basic parsing if not installed).
+* Scheduled runs now inherit the model from the goal's most recent run
+  instead of hardcoding `gemini-3.1-flash-lite`.
+
+### 🧪 Tests
+
+#### W4-F6: Loop Integration Tests
+* `tests/loop.test.ts` — 4 test cases covering the full closed loop:
+  - Happy path (plan → execute → verify → succeed)
+  - Semantic failure triggers replan via `setImmediate`
+  - Max iterations (3) → run fails without creating a plan
+  - Step blocked → run blocked and finalized
+
+#### W4-F7: Migration Idempotency Tests
+* `tests/migration.test.ts` — 9 static analysis tests:
+  - All CREATE TABLE uses IF NOT EXISTS
+  - All CREATE INDEX uses IF NOT EXISTS
+  - All ADD COLUMN uses IF NOT EXISTS
+  - All DROP TABLE/COLUMN uses IF EXISTS
+  - Versions unique, ascending, positive integers
+  - Every migration has name and non-empty SQL
+
+#### W4-F1: Deferral Detection Tests
+* `tests/deferral.test.ts` — 15 tests: "remind me", "follow up",
+  "schedule this", unit normalization (mins/hrs), and 5 negative cases
+  to prevent false positives.
+
+### 🧹 Cleanup
+* Added `getRunsForGoal()` to `agentStore.ts` for model inheritance.
+* Removed dead `updateScheduledTriggerAfterRun()` and
+  `disableScheduledTrigger()` store methods (superseded by atomic
+  `DELETE + reinsert` pattern from v3.0.1).
+
 ## [3.0.1] - Pre-merge QA Bug Fixes - 2026-06-20
 
 ### 🔒 Security

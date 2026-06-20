@@ -7,11 +7,9 @@ let isShuttingDown = false;
 const POLL_INTERVAL_MS = 15_000; // 15 seconds
 
 /**
- * Compute the next occurrence from a cron expression (simple subset).
- * Supports: "* * * * *" style with minute/hour/day-of-month/month/day-of-week.
- * For simplicity, this handles interval_seconds directly and delegates
- * cron to a basic next-minute calculation.  A full cron parser (e.g.
- * `cron-parser`) should be used in production.
+ * Compute the next occurrence from a cron expression using `cron-parser`,
+ * or from a fixed interval in seconds. Falls back gracefully if the cron
+ * library is unavailable or the expression is invalid.
  */
 function computeNextRunAt(
   cron: string | null | undefined,
@@ -22,34 +20,36 @@ function computeNextRunAt(
     return new Date(Date.now() + intervalSeconds * 1000);
   }
   if (cron) {
-    // Very basic: just schedule for 1 minute from now as a safe fallback.
-    // In production, integrate `cron-parser` for proper cron evaluation.
     try {
-      const parts = cron.trim().split(/\s+/);
-      if (parts.length === 5) {
-        // If all wildcards, run every minute
-        const allWild = parts.every(p => p === '*');
-        if (allWild) {
-          return new Date(Date.now() + 60_000);
-        }
-        // If minute is a number, run at that minute in the next hour
-        const minute = parseInt(parts[0], 10);
-        if (!isNaN(minute)) {
-          const next = new Date();
-          next.setMinutes(minute, 0, 0);
-          if (next <= new Date()) {
-            next.setHours(next.getHours() + 1);
+      // Dynamic import guard — cron-parser may not be installed in all environments
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { CronExpressionParser } = require('cron-parser');
+      const interval = CronExpressionParser.parse(cron, {
+        tz: timezone || 'UTC',
+        currentDate: new Date(),
+      });
+      return interval.next().toDate();
+    } catch (err: any) {
+      slog('scheduler', 'cron.parse.error', { cron, error: err.message });
+      // Fallback: basic parsing for simple cases
+      try {
+        const parts = cron.trim().split(/\s+/);
+        if (parts.length === 5) {
+          const allWild = parts.every(p => p === '*');
+          if (allWild) return new Date(Date.now() + 60_000);
+          const minute = parseInt(parts[0], 10);
+          if (!isNaN(minute)) {
+            const next = new Date();
+            next.setMinutes(minute, 0, 0);
+            if (next <= new Date()) next.setHours(next.getHours() + 1);
+            return next;
           }
-          return next;
         }
-      }
-      // Fallback: 1 hour from now
-      return new Date(Date.now() + 3600_000);
-    } catch {
-      return new Date(Date.now() + 3600_000);
+      } catch { /* fall through */ }
+      return new Date(Date.now() + 3600_000); // ultimate fallback: 1 hour
     }
   }
-  return null;
+  return null; // one-shot, no recurrence
 }
 
 /**
@@ -67,10 +67,17 @@ async function pollScheduledTriggers(): Promise<void> {
       try {
         const goal = await agentStore.getGoal(trigger.goal_id);
 
+        // Inherit model from the goal's most recent run, or use a default
+        let model = 'gemini-2.5-flash';
+        const previousRuns = await agentStore.getRunsForGoal(trigger.goal_id);
+        if (previousRuns.length > 0) {
+          model = previousRuns[previousRuns.length - 1].model;
+        }
+
         // Create a new run for this triggered goal
         const run = await agentStore.createRun({
           goal_id: trigger.goal_id,
-          model: 'gemini-3.1-flash-lite', // default model for scheduled runs
+          model,
           status: 'queued'
         });
 

@@ -79,8 +79,43 @@ Users can modify pending plan steps with natural language:
 The mutation engine uses Gemini to interpret the instruction and applies
 add/remove/replace/modify operations to pending steps.
 
+## Time-Deferred Detection (W4-F1)
+
+When a `durable_task` message contains time-deferred language, the handler
+creates a `scheduled_trigger` instead of an immediate run:
+
+```
+"remind me tomorrow to check the deploy"
+  → detectDeferral() → { deferred: true, delayMs: ~24h, label: "remind you tomorrow" }
+  → createScheduledTrigger({ next_run_at: tomorrow 9 AM })
+  → No immediate run created
+  → Scheduler fires the trigger at the scheduled time
+```
+
+Supported patterns:
+- `"remind me in N (minutes|hours|days|weeks)"`
+- `"remind me tomorrow"`
+- `"follow up (tomorrow|next week|in N units)"`
+- `"schedule (this|it) for tomorrow / next week / in N units"`
+- Bare `"in N units"` with action verb context (e.g., `"check this in 2 hours"`)
+
+Messages without time-deferred language are queued immediately as before.
+
+## Cancel vs Update Sub-Classification (W4-C)
+
+The `cancel_or_update` handler sub-classifies the user's intent:
+
+| Pattern | Action |
+|---|---|
+| "cancel", "stop", "abort", "kill", "end", "halt", "nevermind" | Cancel all active runs |
+| Everything else | Call `mutatePlan()` on the active run's plan |
+
+This allows mid-run plan modification: `"actually, also include the action items"`
+modifies pending steps rather than cancelling the entire run.
+
 ## Scheduled Triggers (W4-A)
 
 Goals can have associated `scheduled_triggers` with cron expressions or
 interval_seconds. The scheduler polls every 15 seconds, creates new runs
-for due triggers, and computes the next run time.
+for due triggers, and computes the next run time. Scheduled runs inherit
+the model from the goal's most recent run.

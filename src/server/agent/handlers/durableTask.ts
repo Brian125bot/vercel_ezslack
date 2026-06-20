@@ -1,6 +1,7 @@
 import { agentStore } from '../../storage/agentStore.js';
 import { slackReplyInThreadTool } from '../../tools/slack.js';
 import type { AgentPipelineInput, AgentPipelineResult, ToolExecutionContext } from '../types.js';
+import { detectDeferral } from '../deferral.js';
 
 export async function handleDurableTask(
   input: AgentPipelineInput,
@@ -16,6 +17,49 @@ export async function handleDurableTask(
 
   let goal, run;
   try {
+    // W4-F1: Check for time-deferred language before creating a run
+    const deferral = detectDeferral(input.messageText);
+
+    if (deferral.deferred && deferral.delayMs) {
+      // Create the goal but NOT an immediate run — schedule it for later
+      goal = await agentStore.createGoal({
+        workspace_id: input.workspaceId,
+        created_by_user_id: input.userId,
+        source: input.sourceType,
+        source_channel_id: input.channelId,
+        source_thread_ts: input.threadTs,
+        source_message_ts: input.messageTs,
+        title: input.messageText.substring(0, 100),
+        original_instruction: input.messageText,
+        status: 'created',
+        priority: 'normal'
+      });
+
+      const nextRunAt = new Date(Date.now() + deferral.delayMs);
+
+      const trigger = await agentStore.createScheduledTrigger({
+        goal_id: goal.id,
+        next_run_at: nextRunAt,
+        timezone: 'UTC',
+      });
+
+      await agentStore.appendAuditEvent({
+        workspace_id: input.workspaceId,
+        goal_id: goal.id,
+        type: 'trigger.created',
+        actor: 'system',
+        summary: `Scheduled trigger created: fires at ${nextRunAt.toISOString()} (${deferral.label})`,
+        payload: { triggerId: trigger.id, delayMs: deferral.delayMs, label: deferral.label }
+      });
+
+      await slackReplyInThreadTool.execute({
+        text: `Got it — I'll ${deferral.label || 'follow up'} at ${nextRunAt.toLocaleString()}. ⏰`
+      }, context);
+
+      return { status: 'success', intent };
+    }
+
+    // Immediate execution path (unchanged)
     goal = await agentStore.createGoal({
       workspace_id: input.workspaceId,
       created_by_user_id: input.userId,
