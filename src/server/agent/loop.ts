@@ -90,7 +90,7 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
           risk_level: planDraft.riskLevel,
           proposed_action: { plan: planDraft },
           status: 'pending',
-          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000)
+          expires_at: new Date(Date.now() + 30 * 60 * 1000)
         });
         
         await agentStore.updateRunStatus(run.id, 'awaiting_approval', { plan_id: planId });

@@ -1,24 +1,40 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// ---- Mocks must be declared before imports ----
-
-const mockAgentStore = {
-  getGoal: vi.fn(),
-  getRun: vi.fn(),
-  incrementRunIteration: vi.fn(),
-  createPlan: vi.fn(),
-  createStep: vi.fn(),
-  getStepsForPlan: vi.fn(),
-  getStepsForRun: vi.fn(),
-  getStep: vi.fn(),
-  getRunTrace: vi.fn(),
-  getApprovalsForRun: vi.fn().mockResolvedValue([]),
-  getAuditEventsForRun: vi.fn().mockResolvedValue([]),
-  updateRunStatus: vi.fn(),
-  updateGoalStatus: vi.fn(),
-  appendAuditEvent: vi.fn(),
-  createApprovalRequest: vi.fn(),
-};
+// ---- Mocks ----
+// Declared via vi.hoisted() so the objects exist when the hoisted vi.mock()
+// factories run. (A plain `const` would be in the temporal dead zone because
+// vi.mock calls are hoisted to the very top of the module.)
+const {
+  mockAgentStore,
+  mockCreatePlan,
+  mockExecuteStep,
+  mockFinalizeRun,
+  mockVerifyRun,
+  mockVerifySemantically,
+} = vi.hoisted(() => ({
+  mockAgentStore: {
+    getGoal: vi.fn(),
+    getRun: vi.fn(),
+    incrementRunIteration: vi.fn(),
+    createPlan: vi.fn(),
+    createStep: vi.fn(),
+    getStepsForPlan: vi.fn(),
+    getStepsForRun: vi.fn(),
+    getStep: vi.fn(),
+    getRunTrace: vi.fn(),
+    getApprovalsForRun: vi.fn().mockResolvedValue([]),
+    getAuditEventsForRun: vi.fn().mockResolvedValue([]),
+    updateRunStatus: vi.fn(),
+    updateGoalStatus: vi.fn(),
+    appendAuditEvent: vi.fn(),
+    createApprovalRequest: vi.fn(),
+  },
+  mockCreatePlan: vi.fn(),
+  mockExecuteStep: vi.fn(),
+  mockFinalizeRun: vi.fn(),
+  mockVerifyRun: vi.fn(),
+  mockVerifySemantically: vi.fn(),
+}));
 
 vi.mock('../src/server/storage/agentStore.js', () => ({
   agentStore: mockAgentStore
@@ -29,27 +45,22 @@ vi.mock('../src/server/agent/context.js', () => ({
   renderContextForPrompt: vi.fn().mockReturnValue('')
 }));
 
-const mockCreatePlan = vi.fn();
 vi.mock('../src/server/agent/planner.js', () => ({
   createPlan: mockCreatePlan
 }));
 
-const mockExecuteStep = vi.fn();
 vi.mock('../src/server/agent/executor.js', () => ({
   executeStep: mockExecuteStep
 }));
 
-const mockFinalizeRun = vi.fn();
 vi.mock('../src/server/agent/finalize.js', () => ({
   finalizeRun: mockFinalizeRun
 }));
 
-const mockVerifyRun = vi.fn();
 vi.mock('../src/server/agent/verifier.js', () => ({
   verifyRun: mockVerifyRun
 }));
 
-const mockVerifySemantically = vi.fn();
 vi.mock('../src/server/agent/semanticVerifier.js', () => ({
   verifySemantically: mockVerifySemantically
 }));
@@ -122,6 +133,18 @@ describe('Agent Loop (W4-F6)', () => {
     // Default: getApprovalsForRun and getAuditEventsForRun return empty
     mockAgentStore.getApprovalsForRun.mockResolvedValue([]);
     mockAgentStore.getAuditEventsForRun.mockResolvedValue([]);
+    // buildScopedTrace() re-fetches the run + trace; provide sane defaults so
+    // the verification path doesn't throw when a test doesn't override them.
+    mockAgentStore.getRun.mockResolvedValue(makeRun({ status: 'running', plan_id: 'plan-1' }));
+    mockAgentStore.getRunTrace.mockResolvedValue({
+      run: makeRun({ status: 'running', plan_id: 'plan-1' }),
+      goal: makeGoal(),
+      plan: { id: 'plan-1', steps: [] },
+      steps: [],
+      toolCalls: [],
+      approvals: [],
+      auditEvents: [],
+    });
   });
 
   it('happy path: plan → execute → verify → succeed', async () => {

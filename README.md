@@ -296,7 +296,7 @@ Supported patterns:
 - Atomic `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *` prevents double-firing
 - Recurring triggers (cron/interval): re-inserted with next run time after claim
 - One-shot triggers: not re-inserted after firing
-- `cron-parser` for full cron expression support (graceful fallback if not installed)
+- `cron-parser` (v5) for full cron expression support (graceful fallback if parsing fails)
 - Scheduled runs inherit the model from the goal's most recent run
 - Starts alongside the worker in `server.ts`; gracefully stops on SIGTERM/SIGINT
 
