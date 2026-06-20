@@ -9,7 +9,8 @@ import type {
   ApprovalRequest, CreateApprovalRequestInput,
   MemoryRecord, CreateMemoryInput, SearchMemoryInput,
   AuditEvent, CreateAuditEventInput,
-  AgentRunTrace, ListRunsFilter
+  AgentRunTrace, ListRunsFilter,
+  ScheduledTrigger
 } from './types.js';
 
 import { sanitizePayload } from '../agent/sanitize.js';
@@ -354,5 +355,59 @@ export const agentStore = {
   async countRunningRuns(): Promise<number> {
     const rows = await query<{ count: number }>(`SELECT count(*) as count FROM agent_runs WHERE status = 'running'`);
     return Number(rows[0]?.count || 0);
+  },
+
+  // ── W3-A: Update a step's input (e.g. inject generated content) ──
+  async updateStepInput(id: string, input: any): Promise<AgentStep> {
+    const rows = await query<AgentStep>(
+      `UPDATE agent_steps SET input = $1 WHERE id = $2 RETURNING *`,
+      [JSON.stringify(input), id]
+    );
+    if (!rows.length) throw new Error(`Step ${id} not found`);
+    return rows[0];
+  },
+
+  // ── W3-C: Persist the Slack message_ts for an interactive approval message ──
+  async updateApprovalMessageTs(id: string, messageTs: string): Promise<ApprovalRequest> {
+    const rows = await query<ApprovalRequest>(
+      `UPDATE approval_requests SET message_ts = $1 WHERE id = $2 RETURNING *`,
+      [messageTs, id]
+    );
+    if (!rows.length) throw new Error(`Approval ${id} not found`);
+    return rows[0];
+  },
+
+  // ── W4-A: Scheduled triggers ──
+  async createScheduledTrigger(input: {
+    goal_id: string;
+    cron?: string | null;
+    interval_seconds?: number | null;
+    timezone?: string;
+    next_run_at?: Date | null;
+  }): Promise<ScheduledTrigger> {
+    const id = crypto.randomUUID();
+    const rows = await query<ScheduledTrigger>(
+      `INSERT INTO scheduled_triggers (id, goal_id, cron, interval_seconds, timezone, enabled, next_run_at)
+       VALUES ($1, $2, $3, $4, $5, true, $6) RETURNING *`,
+      [id, input.goal_id, input.cron || null, input.interval_seconds || null, input.timezone || 'UTC', input.next_run_at || null]
+    );
+    return rows[0];
+  },
+
+  async getDueScheduledTriggers(): Promise<ScheduledTrigger[]> {
+    return query<ScheduledTrigger>(
+      `SELECT * FROM scheduled_triggers WHERE enabled = true AND next_run_at <= now() ORDER BY next_run_at ASC LIMIT 20`
+    );
+  },
+
+  async updateScheduledTriggerAfterRun(id: string, nextRunAt: Date | null): Promise<void> {
+    await query(
+      `UPDATE scheduled_triggers SET last_run_at = now(), next_run_at = $1 WHERE id = $2`,
+      [nextRunAt, id]
+    );
+  },
+
+  async disableScheduledTrigger(id: string): Promise<void> {
+    await query(`UPDATE scheduled_triggers SET enabled = false WHERE id = $1`, [id]);
   }
 };

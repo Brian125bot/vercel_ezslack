@@ -7,7 +7,9 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { router as apiRoutes } from "./src/server/routes.js";
 import { runMigrations } from "./src/server/storage/migrations.js";
-import { startWorker } from "./src/server/agent/worker.js";
+import { startWorker, stopWorker } from "./src/server/agent/worker.js";
+import { startScheduler, stopScheduler } from "./src/server/agent/scheduler.js";
+import { closeDb } from "./src/server/storage/db.js";
 
 dotenv.config();
 
@@ -19,7 +21,6 @@ const PORT = 3000;
 app.disable('x-powered-by');
 
 // Security: Set HTTP Security Headers
-// Note: Content Security Policy is disabled to avoid breaking Vite's inline scripts in dev
 app.use(helmet({
   contentSecurityPolicy: false,
 }));
@@ -32,7 +33,7 @@ app.use(cors({
 
 // Security: Global API Rate Limiting to prevent DoS attacks
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 2000, 
   message: "Too many requests from this IP, please try again after 15 minutes",
   standardHeaders: true,
@@ -41,8 +42,7 @@ const apiLimiter = rateLimit({
 });
 app.use("/api", apiLimiter);
 
-// Preserve raw buffer body for Slack signature verify using custom JSON parser verify hook
-// Security: Enforce explicit payload limit (2MB)
+// Preserve raw buffer body for Slack signature verify
 app.use(express.json({
   limit: '2mb',
   verify: (req: any, res, buf) => {
@@ -50,8 +50,36 @@ app.use(express.json({
   }
 }));
 
+// Slack interactivity sends URL-encoded payloads
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+
 // Mount API routes
 app.use('/api', apiRoutes);
+
+// ── W4-D: Graceful shutdown ──
+let server: ReturnType<typeof app.listen> | null = null;
+
+async function gracefulShutdown(signal: string) {
+  console.log(`\n[${signal}] Graceful shutdown initiated...`);
+  stopWorker();
+  stopScheduler();
+
+  if (server) {
+    server.close(() => {
+      console.log('[Shutdown] HTTP server closed.');
+    });
+  }
+
+  // Give in-flight requests a moment to drain
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  await closeDb();
+  console.log('[Shutdown] Database connections closed. Exiting.');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Configure Vite middleware or static paths based on environment
 async function initServer() {
@@ -59,12 +87,12 @@ async function initServer() {
     if (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) {
       await runMigrations();
       startWorker();
+      startScheduler(); // W4-A: Start the scheduled triggers poller
     } else {
       console.log('No SQL configuration found (DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST). Skipping database migrations.');
     }
   } catch (err) {
     console.error('Failed to run database migrations:', err);
-    // Continuing without crashing so simulation/API status endpoints remain active with DB unavailable status.
   }
 
   if (process.env.NODE_ENV !== "production") {
@@ -83,8 +111,7 @@ async function initServer() {
     });
   }
 
-  // Bind to port 3000 and 0.0.0.0 exclusively
-  app.listen(PORT, "0.0.0.0", () => {
+  server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`[Fullstack Server Ready] Slack backend API serving on http://0.0.0.0:${PORT}`);
   });
 }

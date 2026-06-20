@@ -2,7 +2,86 @@ import type { AgentRun, AgentStep } from '../storage/types.js';
 import { agentStore } from '../storage/agentStore.js';
 import { toolsRegistry } from '../tools/registry.js';
 import { checkPolicy } from './policy.js';
-import type { ToolExecutionContext } from './types.js';
+import type { ToolExecutionContext, StepKind } from './types.js';
+import { GoogleGenAI } from '@google/genai';
+
+/**
+ * Runs a `generate` step: calls Gemini with a prompt (and optional upstream
+ * step outputs) to produce free-form content at *execution* time.  The
+ * generated text is stored in the step's `output.generated` field so
+ * downstream steps (e.g. `slack.replyInThread`) can consume it.
+ */
+async function executeGenerateStep(
+  run: AgentRun,
+  step: AgentStep,
+  context: ToolExecutionContext
+): Promise<void> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    await agentStore.updateStepStatus(step.id, 'failed', { error: 'GEMINI_API_KEY not configured' });
+    return;
+  }
+
+  const stepInput = step.input as any;
+  const prompt = stepInput?.prompt || stepInput?.input?.prompt || '';
+
+  // Gather outputs of all preceding succeeded steps for context
+  const priorSteps = await agentStore.getStepsForRun(run.id);
+  const upstreamOutputs = priorSteps
+    .filter(s => s.order_index < step.order_index && s.status === 'succeeded' && s.output)
+    .map(s => `[${s.title}]: ${JSON.stringify(s.output)}`)
+    .join('\n');
+
+  const goal = await agentStore.getGoal(run.goal_id);
+
+  const fullPrompt = `You are an AI agent executing a step titled "${step.title}" for the goal: "${goal.original_instruction}".
+${upstreamOutputs ? `\nUpstream step outputs:\n${upstreamOutputs}\n` : ''}
+${prompt ? `Additional instructions: ${prompt}` : ''}
+
+Generate the requested content. Be concise and use Slack-compatible markdown.`;
+
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: run.model,
+      contents: fullPrompt
+    });
+
+    const generatedText = response.text || '(Empty generation)';
+    await agentStore.updateStepStatus(step.id, 'succeeded', {
+      output: { generated: generatedText }
+    });
+    // Also persist the generated text into the step input so downstream steps
+    // can reference it via updateStepInput pattern
+    await agentStore.updateStepInput(step.id, {
+      ...(step.input as any),
+      _generatedOutput: generatedText
+    });
+
+    await agentStore.appendAuditEvent({
+      workspace_id: context.workspaceId,
+      goal_id: run.goal_id,
+      run_id: run.id,
+      step_id: step.id,
+      type: 'step.generated',
+      actor: 'system',
+      summary: `Generate step succeeded: ${step.title}`,
+      payload: { generatedLength: generatedText.length }
+    });
+  } catch (err: any) {
+    await agentStore.updateStepStatus(step.id, 'failed', { error: err.message });
+    await agentStore.appendAuditEvent({
+      workspace_id: context.workspaceId,
+      goal_id: run.goal_id,
+      run_id: run.id,
+      step_id: step.id,
+      type: 'step.failed',
+      actor: 'system',
+      summary: `Generate step failed: ${err.message}`,
+      payload: { error: err.message }
+    });
+  }
+}
 
 export async function executeStep(
   run: AgentRun, 
@@ -10,9 +89,16 @@ export async function executeStep(
   context: ToolExecutionContext
 ): Promise<void> {
   await agentStore.updateStepStatus(step.id, 'running');
+  const stepKind: StepKind = (step.input as any)?.kind || 'tool';
 
-  if (!step.input || !(step.input as any).toolName) {
-    const stepKind = (step.input as any)?.kind;
+  // ── W3-A: generate step kind ──────────────────────────────────
+  if (stepKind === 'generate') {
+    await executeGenerateStep(run, step, context);
+    return;
+  }
+
+  // ── Note step (existing W1 behaviour) ─────────────────────────
+  if (stepKind === 'note' || (!step.input || !(step.input as any).toolName)) {
     if (stepKind === 'note') {
       await agentStore.updateStepStatus(step.id, 'succeeded', { output: { message: 'Step completed (conceptual note)' } });
       await agentStore.appendAuditEvent({
@@ -42,8 +128,22 @@ export async function executeStep(
     }
   }
 
+  // ── Tool step ─────────────────────────────────────────────────
   const toolName = (step.input as any).toolName;
-  const toolInput = (step.input as any).input || {};
+  let toolInput = (step.input as any).input || {};
+
+  // W3-A: If the tool input references upstream generated content, inject it
+  if (toolName === 'slack.replyInThread' && (!toolInput.text || String(toolInput.text).trim() === '')) {
+    const priorSteps = await agentStore.getStepsForRun(run.id);
+    const generatedStep = priorSteps
+      .filter(s => s.order_index < step.order_index && s.status === 'succeeded')
+      .reverse()
+      .find(s => (s.output as any)?.generated);
+    if (generatedStep) {
+      toolInput = { ...toolInput, text: (generatedStep.output as any).generated };
+      await agentStore.updateStepInput(step.id, { ...(step.input as any), input: toolInput });
+    }
+  }
 
   const tool = toolsRegistry.get(toolName);
   if (!tool) {
@@ -113,6 +213,8 @@ export async function executeStep(
 
   if (!policy.allowed) {
     if (policy.requiresApproval) {
+      // W3-C: Post Block Kit approval message to Slack
+      const { postApprovalBlockKit } = await import('../tools/slack.js');
       const approval = await agentStore.createApprovalRequest({
         goal_id: run.goal_id,
         run_id: run.id,
@@ -128,6 +230,9 @@ export async function executeStep(
         status: 'pending',
         expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000)
       });
+
+      // Post interactive Block Kit approval message
+      await postApprovalBlockKit(approval, context);
 
       await agentStore.appendAuditEvent({
         workspace_id: context.workspaceId,

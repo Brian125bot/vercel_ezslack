@@ -227,6 +227,75 @@ router.post('/slack/test', requireDashboardAuth, async (req: any, res: any) => {
   }
 });
 
+// ── W4-D: Health check endpoint (no auth) ──
+router.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
+// ── W3-C: Slack interactivity endpoint (Block Kit button callbacks) ──
+router.post('/slack/interactivity', async (req: any, res: any) => {
+  try {
+    // Slack sends the payload as a URL-encoded `payload` field
+    const rawPayload = req.body?.payload || req.body;
+    const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;
+    
+    if (!payload || !payload.actions || payload.actions.length === 0) {
+      return res.status(200).send('OK');
+    }
+
+    // ACK immediately
+    res.status(200).send('');
+
+    const action = payload.actions[0];
+    const actionId: string = action.action_id || '';
+    const approvalId: string = action.value || '';
+    const userId: string = payload.user?.id || '';
+    const channelId: string = payload.channel?.id || '';
+
+    if (!approvalId || (!actionId.startsWith('approval_approve') && !actionId.startsWith('approval_reject'))) {
+      return;
+    }
+
+    const newStatus: 'approved' | 'rejected' = actionId.includes('approve') ? 'approved' : 'rejected';
+
+    const approval = await agentStore.resolveApproval(approvalId, newStatus);
+
+    // Update the original Block Kit message to remove buttons
+    const { updateApprovalMessage } = await import('./tools/slack.js');
+    await updateApprovalMessage(approval, newStatus, channelId);
+
+    // Create audit event
+    if (approval.run_id) {
+      const trace = await agentStore.getRunTrace(approval.run_id);
+      await agentStore.appendAuditEvent({
+        workspace_id: trace.goal.workspace_id,
+        goal_id: approval.goal_id!,
+        run_id: approval.run_id,
+        type: `approval.${newStatus}`,
+        actor: userId,
+        summary: `User ${newStatus} execution via Block Kit button`,
+        payload: { approvalId: approval.id }
+      });
+    }
+
+    // Resume or cancel based on outcome
+    if (newStatus === 'approved' && approval.run_id) {
+      const { resumeAgentPipeline } = await import('./agent/orchestrator.js');
+      resumeAgentPipeline(approval.run_id).catch(e => console.error('Failed to resume pipeline', e));
+    } else if (newStatus === 'rejected' && approval.run_id) {
+      await agentStore.updateRunStatus(approval.run_id, 'cancelled', { failure_reason: 'User rejected via Slack button.' });
+      if (approval.goal_id) {
+        await agentStore.updateGoalStatus(approval.goal_id, 'cancelled');
+      }
+    }
+  } catch (err: any) {
+    console.error('[Interactivity Error]', err.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+});
+
 router.post('/slack/events', (req: any, res: any) => {
   try {
     const signature = req.headers['x-slack-signature'];

@@ -28,8 +28,11 @@ export interface PolicyDecision {
   reason: string;
 }
 
+export type StepKind = 'tool' | 'generate' | 'note';
+
 export interface PlannedAgentStep {
   title: string;
+  kind?: StepKind;
   toolName?: string;
   input?: any;
 }

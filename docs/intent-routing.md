@@ -1,113 +1,86 @@
-# Intent Routing Taxonomy
+# Intent Routing Architecture
 
-This document outlines the design and operational specifics of the robust runtime intent classification system implemented in the agent core. Refer to `src/server/agent/intent.ts` as the canonical source.
+## Overview
 
----
+Every incoming Slack message goes through intent classification before any processing.
+The classifier determines how the message should be handled: as a quick direct reply,
+a durable multi-step task, a status query, an approval response, a cancel/update, or
+flagged as unsafe.
 
-## 1. Intent Categories
+## Classification Flow
 
-The agent classifies every incoming message into exactly one of six distinct categories:
-
-1. **`direct_reply`**
-   * **Purpose**: General casual conversation, social pleasantries, greetings, chitchat, or direct questions seeking conversational explanations rather than multi-step tool executions.
-2. **`durable_task`**
-   * **Purpose**: Complex, multi-step actions or goals that require background tracking, plan formation, and automated tool executions (such as creating summaries, setting reminders, or creating tasks).
-3. **`status_query`**
-   * **Purpose**: Questions checking on previous/current execution processes, listing goals or runs, or tracking progress.
-4. **`approval_response`**
-   * **Purpose**: Interactive responses confirming or rejecting a drafted proposal (e.g. approving a plan to proceed or rejecting it).
-5. **`cancel_or_update`**
-   * **Purpose**: Requests to stop, kill, abort, or cancel an active background goal.
-6. **`unsafe_or_unsupported`**
-   * **Purpose**: Static boundaries catching malicious inputs, shell injection patterns, unauthorized system actions, or destructive request types.
-
----
-
-## 2. Classification Pipeline Flow
-
-The intent classifier runs through three chronological stages to resolve the intent:
-1. **Heuristic Patterns Check**: Low-latency, high-accuracy string match filters. If a strong heuristic matches, the model evaluation is bypassed entirely.
-2. **LLM Fallback Processing**: If heuristics are inconclusive, the active Gemini model is invoked with a structured classification prompt requesting a JSON response block.
-3. **Robust Default**: If errors occur during LLM evaluation, it gracefully falls back to a low-confidence `direct_reply`.
-
----
-
-## 3. Heuristic Matching Rules
-
-### 3.1 Unsafe or Unsupported Triggers
-Matches if the message contains any of the following substrings (case-insensitive):
-* `rm -rf`
-* `delete database`, `drop database`
-* `truncate table`, `drop table`
-* `delete from users`, `delete files`
-* `shutdown`
-* `wipe server`
-* `sudo `
-* `eval(`
-* `format c:`
-* `:(){ :|:& };:`
-* `privileged`
-
-### 3.2 Approval Responses
-Matches only if the lowercase word matches (or starts with) any of these phrases **and** `hasPendingApproval` context is active:
-* `approve`, `approved`
-* `reject`, `rejected`
-* `confirm`
-* `yes`, `no`
-* `proceed`
-* `deny`, `allow`, `disallow`
-* `go ahead`
-* `stop execution`
-* `cancel proposal`
-
-*Note*: If `hasPendingApproval` is `false`, simple approval words (e.g., `yes`, `no`) bypass this block and are treated as `direct_reply` to preserve conversational flow.
-
-### 3.3 Cancel or Update Triggers
-Matches if the message includes any of these phrases (case-insensitive):
-* `cancel run` / `cancel task` / `cancel goal`
-* `stop run` / `stop task`
-* `abort run` / `abort task`
-* `kill run` / `delete goal`
-* `update step` / `change plan` / `modify task`
-
-### 3.4 Status Queries
-Matches if the message contains any of these phrases (case-insensitive):
-* `status of` / `get status` / `check status` / `any status`
-* `what is the status` / `any update on` / `how is the task`
-* `show runs` / `list runs` / `list tasks` / `list goals`
-
-### 3.5 Durable Task Triggers
-Matches if the message includes any of these high-intent triggers (case-insensitive):
-* `remind`, `schedule`, `follow up`, `notify me`
-* `create`, `track`, `watch`, `summarize`, `draft`, `investigate`
-* `open a task`, `add issue`, `create ticket`, `alert`
-* `run task`, `execute command`, `monitor`, `backup`, `restore`
-
-### 3.6 Very Short Message Heuristic
-Any message under 8 characters that did not trigger any of the above heuristics defaults directly to `direct_reply` (e.g. "hey", "hello", "ok", "help").
-
----
-
-## 4. Pending Approval Constraint Rule
-
-The classifier is context-aware via `IntentContext`. Even if a message contains approval tokens ("yes", "approve") or is classified as such by the LLM layer, **it will be coerced to a `direct_reply` if there is no pending approval recorded in the active workspace channel thread.** This guarantees conversational queries are never hijacked by unintentional approval triggers.
-
----
-
-## 5. IntentResult Signature and Flow
-
-```typescript
-export interface IntentResult {
-  intent: IntentCategory;
-  confidence: 'high' | 'medium' | 'low';
-  source: 'heuristic' | 'llm' | 'fallback';
-}
+```
+Incoming Message
+  ├─ Heuristic rules (fast, no LLM call)
+  │   ├─ Unsafe patterns → unsafe_or_unsupported
+  │   ├─ Approval words + pending approval → approval_response
+  │   ├─ Cancel/stop words → cancel_or_update
+  │   ├─ Status query words → status_query
+  │   ├─ Durable task words → durable_task
+  │   └─ Short messages (<8 chars) → direct_reply
+  │
+  └─ LLM fallback (Gemini, structured JSON output)
+      └─ Returns { intent, confidence } or falls back to direct_reply
 ```
 
-The unified `classifyIntent` handler is dispatched directly by `orchestrator.ts` toward dedicated decoupled handlers in `src/server/agent/handlers/` directory:
-* `unsafe_or_unsupported` ➡️ `src/server/agent/handlers/unsafeUnsupported.ts`
-* `approval_response` ➡️ `src/server/agent/handlers/approvalResponse.ts`
-* `cancel_or_update` ➡️ `src/server/agent/handlers/cancelUpdate.ts`
-* `status_query` ➡️ `src/server/agent/handlers/statusQuery.ts`
-* `durable_task` ➡️ `src/server/agent/handlers/durableTask.ts`
-* `direct_reply` ➡️ `src/server/agent/handlers/directReply.ts`
+## Intent Categories
+
+| Intent | Handler | Pipeline |
+|---|---|---|
+| `direct_reply` | `handleDirectReply` | DB-less Gemini call → Slack reply |
+| `durable_task` | `handleDurableTask` | Goal → Run → Plan → Execute → Verify → Finalize |
+| `status_query` | `handleStatusQuery` | Query `agent_goals`/`agent_runs` → Slack reply |
+| `approval_response` | `handleApprovalResponse` | Resolve approval → Resume blocked run |
+| `cancel_or_update` | `handleCancelUpdate` | Cancel run + update status |
+| `unsafe_or_unsupported` | `handleUnsafeUnsupported` | Log + refusal message |
+
+## Step Kinds (W3)
+
+The planner can emit steps with different `kind` values:
+
+| Kind | Behaviour |
+|---|---|
+| `tool` | Executes a registered tool from the registry |
+| `generate` | Calls Gemini at execution time to produce content |
+| `note` | No-op conceptual step (always succeeds) |
+
+The `generate` kind solves the "chat wrapper" problem: instead of the planner baking
+reply content at plan time (when it doesn't have tool outputs yet), it defers content
+generation to execution time when upstream step outputs are available.
+
+## Tool Registry
+
+Tools are registered at startup:
+- **Core tools** (always available): `slack.replyInThread`, `memory.write`, `memory.search`, `task.record`
+- **External adapters** (conditional on env vars): `github.createIssue`, `email.send`
+
+External adapter tools declare `riskLevel: 'external_write'` and go through the
+policy gate, which requires explicit user approval via Block Kit buttons.
+
+## Approval Flow (W3-C)
+
+```
+Policy blocks tool → Post Block Kit message (Approve/Reject buttons)
+  → User clicks button
+  → POST /api/slack/interactivity
+  → Resolve approval in DB
+  → Update Block Kit message (remove buttons)
+  → If approved: resume pipeline
+  → If rejected: cancel run
+```
+
+## Plan Mutation (W4-C)
+
+Users can modify pending plan steps with natural language:
+- "Change step 2 to search memory instead"
+- "Add a step to post in #general"
+- "Remove the email step"
+
+The mutation engine uses Gemini to interpret the instruction and applies
+add/remove/replace/modify operations to pending steps.
+
+## Scheduled Triggers (W4-A)
+
+Goals can have associated `scheduled_triggers` with cron expressions or
+interval_seconds. The scheduler polls every 15 seconds, creates new runs
+for due triggers, and computes the next run time.
