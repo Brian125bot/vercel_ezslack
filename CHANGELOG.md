@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.1] - Pre-merge QA Bug Fixes - 2026-06-20
+
+### 🔒 Security
+* **Interactivity signature verification (W3-F7):** Extracted Slack HMAC-SHA256
+  verification into a shared `verifySlackSignature()` helper. Both `/api/slack/events`
+  and `/api/slack/interactivity` now verify request signatures, preventing forged
+  approval/rejection actions.
+
+### 🐛 Bug Fixes
+* **Expired approval guard (W3-F9):** `resolveApproval()` now checks
+  `status = 'pending' AND expires_at > now()`. Expired approvals can no longer be
+  approved to execute external tools. Returns descriptive errors for already-resolved,
+  expired, or not-found approvals.
+* **Scheduler atomic claim (W4-F3):** `getDueScheduledTriggers()` now uses
+  `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *` for atomic trigger claiming.
+  Multiple Cloud Run instances polling concurrently can no longer double-fire the same
+  trigger. Recurring triggers are re-inserted with the next run time after successful
+  claim; one-shot triggers are not re-inserted (effectively disabled).
+
 ## [3.0.0] - Weeks 3–4 (Real-World Action & Autonomy) - 2026-06-20
 
 ### Week 3: Real-World Action

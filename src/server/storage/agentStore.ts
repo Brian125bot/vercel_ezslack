@@ -142,11 +142,23 @@ export const agentStore = {
   },
 
   async resolveApproval(id: string, status: 'approved' | 'rejected'): Promise<ApprovalRequest> {
+    // Only resolve if still pending AND not expired (W3-F9: expired approvals must not execute)
     const rows = await query<ApprovalRequest>(
-      `UPDATE approval_requests SET status = $1, resolved_at = now() WHERE id = $2 RETURNING *`,
+      `UPDATE approval_requests SET status = $1, resolved_at = now()
+       WHERE id = $2 AND status = 'pending' AND expires_at > now()
+       RETURNING *`,
       [status, id]
     );
-    if (!rows.length) throw new Error(`Approval ${id} not found`);
+    if (!rows.length) {
+      // Distinguish: not found vs already resolved vs expired
+      const existing = await query<ApprovalRequest>(
+        `SELECT id, status, expires_at FROM approval_requests WHERE id = $1`, [id]
+      );
+      if (!existing.length) throw new Error(`Approval ${id} not found`);
+      if (existing[0].status !== 'pending') throw new Error(`Approval ${id} already resolved (status: ${existing[0].status})`);
+      if (new Date(existing[0].expires_at) <= new Date()) throw new Error(`Approval ${id} has expired`);
+      throw new Error(`Approval ${id} could not be resolved`);
+    }
     return rows[0];
   },
 
@@ -395,9 +407,29 @@ export const agentStore = {
   },
 
   async getDueScheduledTriggers(): Promise<ScheduledTrigger[]> {
+    // Atomic claim with FOR UPDATE SKIP LOCKED to prevent double-fire
+    // when multiple Cloud Run instances poll concurrently (W4-F3)
     return query<ScheduledTrigger>(
-      `SELECT * FROM scheduled_triggers WHERE enabled = true AND next_run_at <= now() ORDER BY next_run_at ASC LIMIT 20`
+      `DELETE FROM scheduled_triggers WHERE id IN (
+         SELECT id FROM scheduled_triggers
+         WHERE enabled = true AND next_run_at <= now()
+         ORDER BY next_run_at ASC
+         FOR UPDATE SKIP LOCKED
+         LIMIT 20
+       ) RETURNING *`
     );
+  },
+
+  async reinsertScheduledTrigger(trigger: ScheduledTrigger, nextRunAt: Date | null): Promise<void> {
+    // Re-insert recurring trigger with updated next_run_at after successful claim
+    if (nextRunAt) {
+      await query(
+        `INSERT INTO scheduled_triggers (id, goal_id, cron, interval_seconds, timezone, enabled, next_run_at, last_run_at)
+         VALUES ($1, $2, $3, $4, $5, true, $6, now())`,
+        [trigger.id, trigger.goal_id, trigger.cron || null, trigger.interval_seconds || null, trigger.timezone, nextRunAt]
+      );
+    }
+    // If nextRunAt is null → one-shot trigger, don't re-insert (effectively disabled)
   },
 
   async updateScheduledTriggerAfterRun(id: string, nextRunAt: Date | null): Promise<void> {

@@ -61,6 +61,8 @@ async function pollScheduledTriggers(): Promise<void> {
   try {
     const dueTriggers = await agentStore.getDueScheduledTriggers();
     
+    // getDueScheduledTriggers atomically claims (DELETE + RETURNING) so
+    // concurrent pollers on multiple Cloud Run instances never double-fire.
     for (const trigger of dueTriggers) {
       try {
         const goal = await agentStore.getGoal(trigger.goal_id);
@@ -82,14 +84,10 @@ async function pollScheduledTriggers(): Promise<void> {
           payload: { triggerId: trigger.id, cron: trigger.cron, interval_seconds: trigger.interval_seconds }
         });
 
-        // Compute and set the next run time
+        // Compute the next run time and re-insert for recurring triggers
         const nextRunAt = computeNextRunAt(trigger.cron, trigger.interval_seconds, trigger.timezone);
-        if (nextRunAt) {
-          await agentStore.updateScheduledTriggerAfterRun(trigger.id, nextRunAt);
-        } else {
-          // One-shot trigger: disable after firing
-          await agentStore.disableScheduledTrigger(trigger.id);
-        }
+        await agentStore.reinsertScheduledTrigger(trigger, nextRunAt);
+        // One-shot triggers (nextRunAt === null) are not re-inserted → effectively disabled
 
         // Reset goal status so the new run can process it
         await agentStore.updateGoalStatus(goal.id, 'running');
@@ -97,10 +95,8 @@ async function pollScheduledTriggers(): Promise<void> {
         slog('scheduler', 'trigger.fired', { trigger_id: trigger.id, run_id: run.id, next_run_at: nextRunAt?.toISOString() });
       } catch (err: any) {
         slog('scheduler', 'trigger.error', { trigger_id: trigger.id, error: err.message });
-        // Disable broken triggers to prevent infinite error loops
-        try {
-          await agentStore.disableScheduledTrigger(trigger.id);
-        } catch { /* best effort */ }
+        // Trigger was already deleted by the atomic claim, so broken triggers
+        // won't loop — they simply won't be re-inserted.
       }
     }
   } catch (err: any) {
