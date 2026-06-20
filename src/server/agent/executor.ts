@@ -228,7 +228,7 @@ export async function executeStep(
         risk_level: tool.riskLevel,
         proposed_action: { tool: tool.name, input: toolInput },
         status: 'pending',
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000)
+        expires_at: new Date(Date.now() + 30 * 60 * 1000)
       });
 
       // Post interactive Block Kit approval message

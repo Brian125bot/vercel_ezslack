@@ -12,7 +12,7 @@
 - [ ] `npm install` — completes without errors
 - [ ] `npm run lint` (`tsc --noEmit`) — zero type errors
 - [ ] `npm run build` — Vite frontend + esbuild backend compile successfully
-- [ ] `npm test` — all 8 suites pass (63+ tests)
+- [ ] `npm test` — all 8 suites pass (72 tests)
 - [ ] `npm run test:coverage` — review coverage report for gaps
 - [ ] `npm start` (or `node dist/server.cjs`) — server starts on port 3000
 - [ ] No new `npm audit` vulnerabilities introduced
@@ -27,7 +27,7 @@
 |-------|------|:-----:|:------:|
 | Intent Classification | `tests/intent.test.ts` | 11 | [ ] |
 | Policy Gate | `tests/policy.test.ts` | 6 | [ ] |
-| Secret Sanitization | `tests/sanitize.test.ts` | 8 | [ ] |
+| Secret Sanitization | `tests/sanitize.test.ts` | 11 | [ ] |
 | Rule Verifier | `tests/verifier.test.ts` | 6 | [ ] |
 | Action Reporter | `tests/reporter.test.ts` | 8 | [ ] |
 
@@ -35,7 +35,7 @@
 
 | Suite | File | Cases | Status |
 |-------|------|:-----:|:------:|
-| Deferral Detection | `tests/deferral.test.ts` | 15 | [ ] |
+| Deferral Detection | `tests/deferral.test.ts` | 17 | [ ] |
 | Agent Loop | `tests/loop.test.ts` | 4 | [ ] |
 | Migration Idempotency | `tests/migration.test.ts` | 9 | [ ] |
 
@@ -164,7 +164,7 @@
 
 - [ ] `src/server/agent/sanitize.ts` — blocks secrets from `memory.write`
 - [ ] Patterns: password, token, secret, api_key, credentials
-- [ ] `sanitize.test.ts` — 8 tests cover detection and redaction
+- [ ] `sanitize.test.ts` — 11 tests cover detection and redaction
 
 ---
 

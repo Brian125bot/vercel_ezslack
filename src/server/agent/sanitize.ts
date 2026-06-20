@@ -1,6 +1,7 @@
 export function containsSecret(text: string): boolean {
   if (typeof text !== 'string') return false;
   const secretPatterns = [
+    /(?:xox[bpoasr]-[a-zA-Z0-9-]{10,})/i, // Slack tokens
     /(?:sk-[a-zA-Z0-9]{20,})/i, // OpenAI-like
     /(?:AIza[0-9A-Za-z-_]{35})/i, // Google API Key
     /(?:AKIA[0-9A-Z]{16})/i, // AWS Access Key
@@ -12,34 +13,35 @@ export function containsSecret(text: string): boolean {
   return secretPatterns.some(pattern => pattern.test(text));
 }
 
+/**
+ * Each rule pairs a global regex with a string replacement template.
+ *
+ * Using string templates (instead of a function replacer) is deliberate: a
+ * function replacer receives `(match, p1, p2, …, offset, string)`, so patterns
+ * WITHOUT capture groups would expose `offset`/`string` as `p1`/`p2` and could
+ * accidentally re-emit the original (secret-bearing) text. String templates with
+ * `$1`/`$2` backreferences only substitute real capture groups, so a pattern with
+ * no groups always collapses to a literal `[REDACTED]`.
+ */
+const SANITIZE_RULES: ReadonlyArray<{ re: RegExp; replacement: string }> = [
+  // Opaque token formats — no capture groups, redact the whole match.
+  { re: /xox[bpoasr]-[a-zA-Z0-9-]{10,}/gi, replacement: '[REDACTED]' }, // Slack
+  { re: /sk-[a-zA-Z0-9]{20,}/gi, replacement: '[REDACTED]' }, // OpenAI
+  { re: /AIza[0-9A-Za-z-_]{35}/gi, replacement: '[REDACTED]' }, // Google
+  { re: /AKIA[0-9A-Z]{16}/gi, replacement: '[REDACTED]' }, // AWS
+  // Keyed assignments — keep the descriptive prefix ($1)/suffix ($2), redact the value.
+  { re: /(password\s*=\s*['"]?)[a-zA-Z0-9!@#$%^&*()_+]{8,}(['"]?)/gi, replacement: '$1[REDACTED]$2' },
+  { re: /(bearer\s+)[a-zA-Z0-9\-\._~+\/]+={0,2}/gi, replacement: '$1[REDACTED]' },
+  { re: /-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----[\s\S]+?-----END (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----/g, replacement: '[REDACTED]' },
+  { re: /(\b(?:secret|api[_|]?[0-9a-z]?key|token|pwd)[:=]\s*['"]?)[A-Za-z0-9\-\._~+\/]{8,}={0,2}/gi, replacement: '$1[REDACTED]' }
+];
+
 export function sanitizeString(text: string): string {
   if (typeof text !== 'string') return text;
   let sanitized = text;
-  const secretPatterns = [
-    /(xox[bp])(-[a-zA-Z0-9-]{10,})/gi,
-    /(sk-[a-zA-Z0-9]{20,})/gi,
-    /(AIza[0-9A-Za-z-_]{35})/gi,
-    /(AKIA[0-9A-Z]{16})/gi,
-    /(password\s*=\s*['"]?)[a-zA-Z0-9!@#$%^&*()_+]{8,}(['"]?)/gi,
-    /(bearer\s+)[a-zA-Z0-9\-\._~+\/]+={0,2}/gi,
-    /(-----BEGIN (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----[\s\S]+?-----END (?:RSA|DSA|EC|OPENSSH) PRIVATE KEY-----)/g,
-    /(\b(?:secret|api[_|]?[0-9a-z]?key|token|pwd)[:=]\s*['"]?)[A-Za-z0-9\-\._~+\/]{8,}={0,2}/gi
-  ];
-  
-  secretPatterns.forEach(pattern => {
-    sanitized = sanitized.replace(pattern, (match, p1, p2) => {
-      // If we have capture groups, we want to keep the prefixes/suffixes
-      if (p1 !== undefined && p2 !== undefined && typeof p1 === 'string' && typeof p2 === 'string') {
-        // This handles cases like password="...", keep password=" and "
-        return `${p1}[REDACTED]${p2}`;
-      }
-      if (p1 !== undefined && typeof p1 === 'string') {
-        // This handles cases like bearer ..., keep bearer
-        return `${p1}[REDACTED]`;
-      }
-      return '[REDACTED]';
-    });
-  });
+  for (const { re, replacement } of SANITIZE_RULES) {
+    sanitized = sanitized.replace(re, replacement);
+  }
   return sanitized;
 }
 

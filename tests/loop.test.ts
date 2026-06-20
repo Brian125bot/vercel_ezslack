@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// ---- Mocks must be declared before imports ----
-
+// ---- Mocks ----
+// Declared via vi.hoisted() so the objects exist when the hoisted vi.mock()
+// factories run. (A plain `const` would be in the temporal dead zone because
+// vi.mock calls are hoisted to the very top of the module.)
 const {
   mockAgentStore,
   mockCreatePlan,
   mockExecuteStep,
   mockFinalizeRun,
   mockVerifyRun,
-  mockVerifySemantically
+  mockVerifySemantically,
 } = vi.hoisted(() => ({
   mockAgentStore: {
     getGoal: vi.fn(),
@@ -131,15 +133,17 @@ describe('Agent Loop (W4-F6)', () => {
     // Default: getApprovalsForRun and getAuditEventsForRun return empty
     mockAgentStore.getApprovalsForRun.mockResolvedValue([]);
     mockAgentStore.getAuditEventsForRun.mockResolvedValue([]);
-    // Default: getRunTrace returns minimum hydrate-safe object
+    // buildScopedTrace() re-fetches the run + trace; provide sane defaults so
+    // the verification path doesn't throw when a test doesn't override them.
+    mockAgentStore.getRun.mockResolvedValue(makeRun({ status: 'running', plan_id: 'plan-1' }));
     mockAgentStore.getRunTrace.mockResolvedValue({
-      run: makeRun(),
+      run: makeRun({ status: 'running', plan_id: 'plan-1' }),
       goal: makeGoal(),
       plan: { id: 'plan-1', steps: [] },
       steps: [],
       toolCalls: [],
       approvals: [],
-      auditEvents: []
+      auditEvents: [],
     });
   });
 
@@ -150,7 +154,6 @@ describe('Agent Loop (W4-F6)', () => {
     const planDraft = makePlanDraft();
 
     mockAgentStore.getGoal.mockResolvedValue(goal);
-    mockAgentStore.getRun.mockResolvedValue(run);
     mockAgentStore.incrementRunIteration.mockResolvedValue({ ...run, iteration_count: 1 });
     mockCreatePlan.mockResolvedValue(planDraft);
     mockAgentStore.createPlan.mockResolvedValue({ id: 'plan-1', ...planDraft });
@@ -165,15 +168,7 @@ describe('Agent Loop (W4-F6)', () => {
     // Verification passes
     mockVerifyRun.mockReturnValue({ status: 'satisfied', confidence: 1, reasons: [], recommendedNextAction: 'complete' });
     mockVerifySemantically.mockResolvedValue({ satisfied: true, confidence: 0.95, reasoning: 'Looks good', source: 'llm' });
-    mockAgentStore.getRunTrace.mockResolvedValue({
-      run: { ...run, plan_id: 'plan-1' },
-      goal,
-      plan: { id: 'plan-1', steps: planDraft.steps },
-      steps: [{ ...step, status: 'succeeded' }],
-      toolCalls: [],
-      approvals: [],
-      auditEvents: []
-    });
+    mockAgentStore.getRunTrace.mockResolvedValue({ run, goal, plan: { id: 'plan-1' }, steps: [{ ...step, status: 'succeeded' }], toolCalls: [], approvals: [], auditEvents: [] });
 
     mockFinalizeRun.mockResolvedValue(undefined);
     mockAgentStore.appendAuditEvent.mockResolvedValue(undefined);
@@ -193,7 +188,6 @@ describe('Agent Loop (W4-F6)', () => {
     const planDraft = makePlanDraft();
 
     mockAgentStore.getGoal.mockResolvedValue(goal);
-    mockAgentStore.getRun.mockResolvedValue(run);
     mockAgentStore.incrementRunIteration.mockResolvedValue({ ...run, iteration_count: 1 });
     mockCreatePlan.mockResolvedValue(planDraft);
     mockAgentStore.createPlan.mockResolvedValue({ id: 'plan-1', ...planDraft });
@@ -206,15 +200,7 @@ describe('Agent Loop (W4-F6)', () => {
     // Rule verification passes but semantic fails
     mockVerifyRun.mockReturnValue({ status: 'satisfied', confidence: 1, reasons: [], recommendedNextAction: 'complete' });
     mockVerifySemantically.mockResolvedValue({ satisfied: false, confidence: 0.3, reasoning: 'Reply does not match goal', source: 'llm' });
-    mockAgentStore.getRunTrace.mockResolvedValue({
-      run: { ...run, plan_id: 'plan-1' },
-      goal,
-      plan: { id: 'plan-1', steps: planDraft.steps },
-      steps: [{ ...step, status: 'succeeded' }],
-      toolCalls: [],
-      approvals: [],
-      auditEvents: []
-    });
+    mockAgentStore.getRunTrace.mockResolvedValue({ run, goal, plan: { id: 'plan-1' }, steps: [{ ...step, status: 'succeeded' }], toolCalls: [], approvals: [], auditEvents: [] });
     mockAgentStore.appendAuditEvent.mockResolvedValue(undefined);
 
     // Spy on setImmediate to catch the recursive call without actually recursing
@@ -265,7 +251,6 @@ describe('Agent Loop (W4-F6)', () => {
     const planDraft = makePlanDraft();
 
     mockAgentStore.getGoal.mockResolvedValue(goal);
-    mockAgentStore.getRun.mockResolvedValue(run);
     mockAgentStore.incrementRunIteration.mockResolvedValue({ ...run, iteration_count: 1 });
     mockCreatePlan.mockResolvedValue(planDraft);
     mockAgentStore.createPlan.mockResolvedValue({ id: 'plan-1', ...planDraft });

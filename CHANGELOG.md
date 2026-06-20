@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.3.0] - Pre-merge QA Remediation - 2026-06-20
+
+Resolves every gap found during the `version-3` pre-merge QA review. The branch
+now passes its own CI gate (`npm run lint` + `npm test`) end-to-end.
+
+### 🔒 Security Fixes
+* **Secret sanitizer no longer leaks secrets.** `sanitizeString()` previously used
+  a function replacer that, for patterns *without* capture groups (Slack `xoxb-`,
+  OpenAI `sk-`, Google `AIza`, AWS `AKIA`), received `(match, offset, string)` and
+  re-emitted the original secret-bearing text via the "suffix" argument. Rewrote
+  the sanitizer as a table of `{ regex, stringReplacement }` rules using `$1`/`$2`
+  backreferences, so a no-group pattern always collapses to `[REDACTED]`. All four
+  opaque-token formats are now redacted; `tests/sanitize.test.ts` passes.
+
+### 🐛 Bug Fixes
+* **`tests/loop.test.ts` no longer crashes on load.** Replaced the top-level
+  `const mock…` declarations referenced inside hoisted `vi.mock()` factories with a
+  `vi.hoisted()` block (the consts were in the temporal dead zone). Added a default
+  `getRun`/`getRunTrace` mock in `beforeEach` so `buildScopedTrace()` resolves in the
+  verification path. All 4 Agent Loop cases now run and pass.
+* **`npm run lint` is clean.** Added the required `provider: 'v8'` to the `coverage`
+  block in `vitest.config.ts`, fixing the lone `tsc --noEmit` type error.
+* **Approval expiry now matches spec.** Plan/tool approval requests expire after
+  30 minutes (`executor.ts`, `loop.ts`) instead of 24 hours, matching the W3-C DoD
+  and the documented interactive-approval flow.
+
+### 📦 Dependencies
+* Added `cron-parser@^5.6.0` to `dependencies`. It was referenced via
+  `require('cron-parser')` in `scheduler.ts` (using the v5 `CronExpressionParser.parse`
+  API) but never declared, so cron triggers silently fell back to the naive parser.
+  Full cron expressions now compute accurate next-run times.
+* Added `@vitest/coverage-v8@^3.2.4` to `devDependencies` so `npm run test:coverage`
+  works out of the box.
+
+### ✅ Verification
+* `npm run lint` — 0 type errors.
+* `npm test` — 8/8 suites, 72/72 tests pass.
+* `npm run test:coverage` — runs successfully.
+* `npm run build` — Vite + esbuild compile cleanly.
+* `npm audit` — 0 vulnerabilities.
+
 ## [3.1.0] - Final W3+W4 DoD Completion - 2026-06-20
 
 ### ✨ Features
