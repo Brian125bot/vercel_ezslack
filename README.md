@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-2.5%20Flash%20%7C%203.5%20Flash-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Cloud%20Run-blue?style=flat-square&logo=google-cloud)](https://cloud.google.com/run)
-[![Tests](https://img.shields.io/badge/Tests-8%20suites%20%7C%2063+%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-8%20suites%20%7C%2072%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -350,7 +350,7 @@ Migrations are defined in `src/server/storage/schema.ts` and executed by `src/se
 
 ## 🧪 Test Suite
 
-8 test suites, 63+ test cases. Run with:
+8 test suites, 72 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -362,10 +362,10 @@ npm run test:coverage # With coverage report
 |-------|------|:-----:|-------|
 | Intent Classification | `tests/intent.test.ts` | 11 | Heuristic patterns for all 6 intent categories |
 | Policy Gate | `tests/policy.test.ts` | 6 | Risk-level-based allow/deny/approval decisions |
-| Secret Sanitization | `tests/sanitize.test.ts` | 8 | Token/password/key detection and redaction |
+| Secret Sanitization | `tests/sanitize.test.ts` | 11 | Token/password/key detection and redaction |
 | Rule Verifier | `tests/verifier.test.ts` | 6 | Post-execution rule-based outcome verification |
 | Action Reporter | `tests/reporter.test.ts` | 8 | Structured Slack report generation |
-| Deferral Detection | `tests/deferral.test.ts` | 15 | Time-deferred pattern matching, false positive prevention |
+| Deferral Detection | `tests/deferral.test.ts` | 17 | Time-deferred pattern matching, false positive prevention |
 | Agent Loop | `tests/loop.test.ts` | 4 | Full closed-loop integration (plan→execute→verify→finalize) |
 | Migration Idempotency | `tests/migration.test.ts` | 9 | Static SQL analysis for IF NOT EXISTS guards |
 

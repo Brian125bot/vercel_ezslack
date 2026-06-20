@@ -59,17 +59,65 @@ export const agentStore = {
   async updateRunStatus(id: string, status: RunStatus, patch?: UpdateRunInput): Promise<AgentRun> {
     let startedAt = status === 'running' && patch?.started_at !== undefined ? patch.started_at : undefined;
     let finishedAt = (['succeeded', 'failed', 'cancelled', 'blocked'].includes(status)) ? new Date() : undefined;
-    
+
+    // Build a dynamic SET clause so null values (e.g. plan_id=null, claimed_by=null) are actually written
+    const setClauses: string[] = ['status = $1', 'updated_at = now()'];
+    const params: any[] = [status];
+    let idx = 2;
+
+    if (startedAt !== undefined) {
+      setClauses.push(`started_at = $${idx}`);
+      params.push(startedAt);
+      idx++;
+    }
+    if (finishedAt !== undefined) {
+      setClauses.push(`finished_at = $${idx}`);
+      params.push(finishedAt);
+      idx++;
+    }
+
+    if (patch) {
+      if ('current_step_id' in patch) {
+        setClauses.push(`current_step_id = $${idx}`);
+        params.push(patch.current_step_id ?? null);
+        idx++;
+      }
+      if ('result_summary' in patch) {
+        setClauses.push(`result_summary = $${idx}`);
+        params.push(patch.result_summary ?? null);
+        idx++;
+      }
+      if ('failure_reason' in patch) {
+        setClauses.push(`failure_reason = $${idx}`);
+        params.push(patch.failure_reason ?? null);
+        idx++;
+      }
+      if ('plan_id' in patch) {
+        setClauses.push(`plan_id = $${idx}`);
+        params.push(patch.plan_id ?? null);
+        idx++;
+      }
+      if ('claimed_by' in patch) {
+        setClauses.push(`claimed_by = $${idx}`);
+        params.push(patch.claimed_by ?? null);
+        idx++;
+      }
+      if ('claimed_at' in patch) {
+        setClauses.push(`claimed_at = $${idx}`);
+        params.push(patch.claimed_at ?? null);
+        idx++;
+      }
+      if ('lease_expires_at' in patch) {
+        setClauses.push(`lease_expires_at = $${idx}`);
+        params.push(patch.lease_expires_at ?? null);
+        idx++;
+      }
+    }
+
+    params.push(id);
     const rows = await query<AgentRun>(
-      `UPDATE agent_runs SET status = $1, updated_at = now(), 
-        current_step_id = COALESCE($2, current_step_id),
-        result_summary = COALESCE($3, result_summary),
-        failure_reason = COALESCE($4, failure_reason),
-        started_at = COALESCE($5, started_at),
-        finished_at = COALESCE($6, finished_at),
-        plan_id = COALESCE($7, plan_id)
-       WHERE id = $8 RETURNING *`,
-      [status, patch?.current_step_id || null, patch?.result_summary || null, patch?.failure_reason || null, startedAt || null, finishedAt || null, patch?.plan_id || null, id]
+      `UPDATE agent_runs SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING *`,
+      params
     );
     if (!rows.length) throw new Error(`Run ${id} not found`);
     return rows[0];
@@ -314,6 +362,22 @@ export const agentStore = {
     return query<ApprovalRequest>(`SELECT * FROM approval_requests WHERE run_id = $1 ORDER BY created_at ASC`, [runId]);
   },
 
+  async getApprovedPlanApproval(runId: string): Promise<ApprovalRequest | null> {
+    const rows = await query<ApprovalRequest>(
+      `SELECT * FROM approval_requests WHERE run_id = $1 AND step_id IS NULL AND status = 'approved' LIMIT 1`,
+      [runId]
+    );
+    return rows.length ? rows[0] : null;
+  },
+
+  async getApprovedStepApproval(runId: string, stepId: string): Promise<ApprovalRequest | null> {
+    const rows = await query<ApprovalRequest>(
+      `SELECT * FROM approval_requests WHERE run_id = $1 AND step_id = $2 AND status = 'approved' LIMIT 1`,
+      [runId, stepId]
+    );
+    return rows.length ? rows[0] : null;
+  },
+
   async getAuditEventsForRun(runId: string): Promise<AuditEvent[]> {
     return query<AuditEvent>(`SELECT * FROM audit_events WHERE run_id = $1 ORDER BY created_at ASC`, [runId]);
   },
@@ -369,6 +433,38 @@ export const agentStore = {
       });
     }
     return rows.length;
+  },
+
+  async reapExpiredApprovals(): Promise<number> {
+    const expired = await query<ApprovalRequest>(
+      `UPDATE approval_requests SET status = 'expired', resolved_at = now()
+       WHERE status = 'pending' AND expires_at < now()
+       RETURNING *`
+    );
+
+    for (const approval of expired) {
+      if (approval.run_id) {
+        try {
+          await this.updateRunStatus(approval.run_id, 'cancelled', { failure_reason: 'Approval request expired' });
+        } catch { /* run may already be in terminal state */ }
+      }
+      if (approval.goal_id) {
+        try {
+          await this.updateGoalStatus(approval.goal_id, 'cancelled');
+        } catch { /* goal may already be in terminal state */ }
+      }
+      await this.appendAuditEvent({
+        workspace_id: null,
+        goal_id: approval.goal_id,
+        run_id: approval.run_id,
+        step_id: approval.step_id,
+        type: 'approval.expired',
+        actor: 'system',
+        summary: `Approval ${approval.id} expired and was auto-cancelled`,
+        payload: { title: approval.title }
+      });
+    }
+    return expired.length;
   },
 
   async countRunningRuns(): Promise<number> {

@@ -165,5 +165,50 @@ export const migrations = [
       CREATE INDEX IF NOT EXISTS idx_runs_lease ON agent_runs(lease_expires_at) WHERE status='running' OR claimed_by IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_steps_plan_id ON agent_steps(plan_id);
     `
+  },
+  {
+    version: 3,
+    name: 'multi_instance_state',
+    sql: `
+      CREATE TABLE IF NOT EXISTS slack_event_logs (
+        id text PRIMARY KEY,
+        timestamp timestamptz NOT NULL DEFAULT now(),
+        event_id text NOT NULL,
+        event_type text NOT NULL,
+        channel text,
+        "user" text,
+        text text,
+        status text NOT NULL,
+        signature_verified boolean NOT NULL DEFAULT false,
+        ai_response text,
+        error text,
+        intent text,
+        confidence numeric,
+        source text,
+        processing_time_ms integer,
+        run_id text,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS thread_memories (
+        thread_key text PRIMARY KEY,
+        messages jsonb NOT NULL DEFAULT '[]',
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS processed_events (
+        event_key text PRIMARY KEY,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key text PRIMARY KEY,
+        value text NOT NULL,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_slack_event_logs_created ON slack_event_logs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_processed_events_created ON processed_events(created_at);
+    `
   }
 ];

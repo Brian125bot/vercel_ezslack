@@ -14,6 +14,7 @@ export async function processQueue() {
   
   try {
     await agentStore.recoverStaleClaims();
+    await agentStore.reapExpiredApprovals();
     
     while (inFlightRuns.size < MAX_CONCURRENT) {
       if (isShuttingDown) break;

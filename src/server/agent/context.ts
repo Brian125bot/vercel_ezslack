@@ -1,7 +1,7 @@
 import { agentStore } from '../storage/agentStore.js';
 import type { AgentRunTrace, AgentRun, AgentGoal } from '../storage/types.js';
 import type { PlanningContext } from './types.js';
-import { threadMemory } from '../state.js';
+import { getThreadHistory } from '../state.js';
 
 export async function assembleContext(goal: AgentGoal, run: AgentRun): Promise<PlanningContext> {
   const workspaceId = goal.workspace_id;
@@ -12,7 +12,7 @@ export async function assembleContext(goal: AgentGoal, run: AgentRun): Promise<P
   let threadHistory: any[] = [];
   if (channelId) {
     const threadKeyStr = goal.source_thread_ts ? `chan-${channelId}-thread-${goal.source_thread_ts}` : `chan-${channelId}-single`;
-    threadHistory = threadMemory.get(threadKeyStr) || [];
+    threadHistory = await getThreadHistory(threadKeyStr);
   }
 
   // Retrieve relevant memory

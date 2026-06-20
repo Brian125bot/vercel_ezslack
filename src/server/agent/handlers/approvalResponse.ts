@@ -47,6 +47,12 @@ export async function handleApprovalResponse(
     const newStatus: 'approved' | 'rejected' = isApproving ? 'approved' : 'rejected';
     
     await agentStore.resolveApproval(targetApproval.id, newStatus);
+
+    // Update the Block Kit message if one exists
+    if (targetApproval.message_ts && targetApproval.channel_id) {
+      const { updateApprovalMessage } = await import('../../tools/slack.js');
+      await updateApprovalMessage(targetApproval, newStatus, targetApproval.channel_id);
+    }
     
     await agentStore.appendAuditEvent({
       workspace_id: input.workspaceId,

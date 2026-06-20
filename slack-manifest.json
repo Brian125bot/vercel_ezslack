@@ -34,10 +34,10 @@
   "settings": {
     "interactivity": {
       "is_enabled": true,
-      "request_url": "https://ais-pre-kawwjfy2r3vvrrcymajnyi-15858572775.us-east1.run.app/api/slack/interactivity"
+      "request_url": "https://YOUR-APP-URL.run.app/api/slack/interactivity"
     },
     "event_subscriptions": {
-      "request_url": "https://ais-pre-kawwjfy2r3vvrrcymajnyi-15858572775.us-east1.run.app/api/slack/events",
+      "request_url": "https://YOUR-APP-URL.run.app/api/slack/events",
       "bot_events": [
         "app_mention",
         "message.channels",

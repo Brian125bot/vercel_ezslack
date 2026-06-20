@@ -1,7 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { requireDashboardAuth } from './auth.js';
-import { logs, selectedModel, setSelectedModel, processedEventIds, processedMessageKeys, eventTimestamps, addLog, updateLog, threadMemory } from './state.js';
+import { selectedModel, setSelectedModel, addLog, updateLog, getLogs, clearLogs, getSelectedModel, isEventDuplicate, isMessageDuplicate } from './state.js';
 import { classifyIntent } from './agent/intent.js';
 import { GoogleGenAI } from '@google/genai';
 import { SlackEventLog } from '../types.js';
@@ -19,8 +19,11 @@ export const router = express.Router();
 function verifySlackSignature(req: any): { valid: boolean; error?: string } {
   const signingSecret = process.env.SLACK_SIGNING_SECRET?.trim();
   if (!signingSecret) {
-    console.warn('[Signature Warning] SLACK_SIGNING_SECRET not set. Skipping verification.');
-    return { valid: true }; // permissive for local dev
+    if (process.env.NODE_ENV === 'production') {
+      return { valid: false, error: 'SLACK_SIGNING_SECRET not configured (required in production)' };
+    }
+    console.warn('[Signature Warning] SLACK_SIGNING_SECRET not set. Skipping verification (dev mode only).');
+    return { valid: true };
   }
 
   const signature = req.headers['x-slack-signature'] as string | undefined;
@@ -61,6 +64,7 @@ router.get('/status', requireDashboardAuth, async (req, res) => {
   const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD?.trim();
   const dbConfigured = !!(process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST);
   const dbAvailable = dbConfigured ? await isDbAvailable() : false;
+  const currentModel = await getSelectedModel();
 
   res.json({
     geminiApiKeyConfigured: !!(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'),
@@ -70,7 +74,7 @@ router.get('/status', requireDashboardAuth, async (req, res) => {
     databaseAvailable: dbAvailable,
     appUrl: process.env.APP_URL || 'http://localhost:3000',
     dashboardPasswordRequired: !!DASHBOARD_PASSWORD,
-    selectedModel,
+    selectedModel: currentModel,
     availableModels: [
       { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', description: 'Default. Extra fast, low latency, perfect for messaging workflows.' },
       { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Ultimate intelligence/speed ratio. Incredible logic capabilities.' },
@@ -92,12 +96,13 @@ router.post('/model/select', requireDashboardAuth, (req, res) => {
   res.json({ success: true, selectedModel });
 });
 
-router.get('/logs', requireDashboardAuth, (req, res) => {
-  res.json({ logs });
+router.get('/logs', requireDashboardAuth, async (req, res) => {
+  const logData = await getLogs();
+  res.json({ logs: logData });
 });
 
-router.post('/logs/clear', requireDashboardAuth, (req, res) => {
-  logs.length = 0;
+router.post('/logs/clear', requireDashboardAuth, async (req, res) => {
+  await clearLogs();
   res.json({ success: true });
 });
 
@@ -349,7 +354,7 @@ router.post('/slack/interactivity', async (req: any, res: any) => {
   }
 });
 
-router.post('/slack/events', (req: any, res: any) => {
+router.post('/slack/events', async (req: any, res: any) => {
   try {
     if (req.body && req.body.type === 'url_verification') {
       const challengeClient = req.body.challenge;
@@ -382,12 +387,11 @@ router.post('/slack/events', (req: any, res: any) => {
 
     const eventId = req.body.event_id;
     if (eventId) {
-      if (processedEventIds.has(eventId)) {
+      const isDup = await isEventDuplicate(eventId);
+      if (isDup) {
         console.log(`[Deduplication] Dropping duplicate event: ${eventId}`);
         return res.status(200).send('OK (Duplicate event ignored)');
       }
-      processedEventIds.add(eventId);
-      eventTimestamps.set(eventId, Date.now());
     }
 
     const { event } = req.body;
@@ -404,12 +408,11 @@ router.post('/slack/events', (req: any, res: any) => {
     // They have different event_id values but identical event.client_msg_id and/or event.channel + event.ts
     const msgKey = event.client_msg_id ? `msgid-${event.client_msg_id}` : (event.channel && event.ts ? `msgts-${event.channel}-${event.ts}` : null);
     if (msgKey) {
-      if (processedMessageKeys.has(msgKey)) {
+      const isMsgDup = await isMessageDuplicate(msgKey);
+      if (isMsgDup) {
         console.log(`[Deduplication] Dropping duplicate event message: ${msgKey}`);
         return res.status(200).send('OK (Duplicate event message ignored)');
       }
-      processedMessageKeys.add(msgKey);
-      eventTimestamps.set(msgKey, Date.now());
     }
 
     const logItem: SlackEventLog = {

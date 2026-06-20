@@ -150,7 +150,7 @@ export async function postApprovalBlockKit(
  */
 export async function updateApprovalMessage(
   approval: ApprovalRequest,
-  status: 'approved' | 'rejected',
+  status: 'approved' | 'rejected' | 'expired',
   channelId: string
 ): Promise<void> {
   const token = process.env.SLACK_BOT_TOKEN;
@@ -160,8 +160,10 @@ export async function updateApprovalMessage(
     const { WebClient } = await import('@slack/web-api');
     const client = new WebClient(token);
 
-    const emoji = status === 'approved' ? '✅' : '❌';
-    const label = status === 'approved' ? 'Approved' : 'Rejected';
+    const emojiMap: Record<string, string> = { approved: '\u2705', rejected: '\u274c', expired: '\u23f0' };
+    const labelMap: Record<string, string> = { approved: 'Approved', rejected: 'Rejected', expired: 'Expired' };
+    const emoji = emojiMap[status];
+    const label = labelMap[status];
 
     await client.chat.update({
       channel: channelId,

@@ -23,6 +23,8 @@ const {
     getStep: vi.fn(),
     getRunTrace: vi.fn(),
     getApprovalsForRun: vi.fn().mockResolvedValue([]),
+    getApprovedPlanApproval: vi.fn().mockResolvedValue(null),
+    getApprovedStepApproval: vi.fn().mockResolvedValue(null),
     getAuditEventsForRun: vi.fn().mockResolvedValue([]),
     updateRunStatus: vi.fn(),
     updateGoalStatus: vi.fn(),

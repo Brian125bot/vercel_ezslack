@@ -27,7 +27,7 @@ app.use(helmet({
 
 // Security: Cross-Origin Resource Sharing (CORS)
 app.use(cors({
-  origin: process.env.APP_URL || "*",
+  origin: process.env.APP_URL || (process.env.NODE_ENV === 'production' ? false : '*'),
   methods: ["GET", "POST"]
 }));
 
@@ -83,6 +83,18 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Configure Vite middleware or static paths based on environment
 async function initServer() {
+  // Security: Refuse to start in production without required secrets
+  if (process.env.NODE_ENV === 'production') {
+    const missingSecrets: string[] = [];
+    if (!process.env.SLACK_SIGNING_SECRET?.trim()) missingSecrets.push('SLACK_SIGNING_SECRET');
+    if (!process.env.DASHBOARD_PASSWORD?.trim()) missingSecrets.push('DASHBOARD_PASSWORD');
+    if (missingSecrets.length > 0) {
+      console.error(`\n[FATAL] Production startup blocked: missing required secrets: ${missingSecrets.join(', ')}`);
+      console.error('[FATAL] Set these environment variables before deploying. Refusing to bind with permissive fallbacks.\n');
+      process.exit(1);
+    }
+  }
+
   try {
     if (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) {
       await runMigrations();

@@ -43,11 +43,13 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
     }
 
     let planId = run.plan_id;
-    let isPreApproved = false;
+    // Determine if the plan was approved wholesale (plan-level approval, not step-level)
+    let isPlanPreApproved = false;
 
     if (planId) {
-      // Resume path
-      isPreApproved = true;
+      // Resume path — check if there's a plan-level approval (step_id IS NULL)
+      const planApproval = await agentStore.getApprovedPlanApproval(run.id);
+      isPlanPreApproved = !!planApproval;
     } else {
       // Create new plan path
       run = await agentStore.incrementRunIteration(run.id);
@@ -92,7 +94,19 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
           status: 'pending',
           expires_at: new Date(Date.now() + 30 * 60 * 1000)
         });
-        
+
+        // Post Block Kit approval message to Slack (previously missing for plan-level)
+        const { postApprovalBlockKit } = await import('../tools/slack.js');
+        await postApprovalBlockKit(approval, {
+          runId: run.id,
+          stepId: '',
+          workspaceId: goal.workspace_id,
+          channelId: goal.source_channel_id || '',
+          userId: goal.created_by_user_id,
+          messageTs: goal.source_message_ts || '',
+          threadTs: goal.source_thread_ts || ''
+        });
+
         await agentStore.updateRunStatus(run.id, 'awaiting_approval', { plan_id: planId });
         return; // Yield
       }
@@ -130,6 +144,11 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
     for (const step of currentSteps) {
       if (step.status !== 'pending') continue;
 
+      // Pre-approved only if plan was approved wholesale OR this specific step was approved
+      const stepApproval = !isPlanPreApproved
+        ? await agentStore.getApprovedStepApproval(run.id, step.id)
+        : null;
+
       const context = {
         runId: run.id,
         stepId: step.id,
@@ -138,7 +157,7 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
         userId: goal.created_by_user_id,
         messageTs: goal.source_message_ts || '',
         threadTs: goal.source_thread_ts || '',
-        preApproved: isPreApproved
+        preApproved: isPlanPreApproved || !!stepApproval
       };
 
       await executeStep(run, step, context);
