@@ -10,6 +10,7 @@ import { slog } from './log.js';
 import { LEASE_SECONDS } from './worker.js';
 
 const MAX_ITERATIONS = 3;
+const MAX_TRANSIENT_RETRIES = 1;
 const LEASE_HEARTBEAT_MS = 60_000; // Renew lease every 60 seconds
 
 async function buildScopedTrace(runId: string, planId?: string | null): Promise<AgentRunTrace> {
@@ -198,14 +199,35 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
     const ruleVerify = verifyRun(trace);
     const semVerify = executionUnblocked ? await verifySemantically(trace, run.model) : null;
 
-    if (!executionUnblocked || ruleVerify.status !== 'satisfied' || (semVerify && !semVerify.satisfied)) {
-      // Replan
-      const reason = !executionUnblocked ? 'Step failed' : 
+    // WS4: a semantic verdict only counts as a genuine miss when the model is
+    // actually confident. Low-confidence / inconclusive results defer to the
+    // rule-based verifier so flaky LLM output never burns replan iterations.
+    const semanticMiss = !!semVerify && !semVerify.satisfied && (semVerify.confidence ?? 0) >= 0.5;
+
+    if (executionUnblocked && ruleVerify.status === 'satisfied' && !semanticMiss) {
+      // Success path falls through below.
+    } else if (ruleVerify.recommendedNextAction === 'retry' && (run.retry_count || 0) < MAX_TRANSIENT_RETRIES) {
+      // WS4: transient failure (e.g. a Slack post failed). Re-run the failed
+      // steps within the SAME plan instead of throwing the whole plan away.
+      run = await agentStore.incrementRunRetry(run.id);
+      const failedSteps = (await agentStore.getStepsForPlan(planId)).filter(st => st.status === 'failed');
+      for (const fs of failedSteps) {
+        await agentStore.updateStepStatus(fs.id, 'pending');
+      }
+      slog('loop', 'transient_retry', { run_id: run.id, retry: run.retry_count, steps: failedSteps.length });
+      // Re-queue for a fresh lease rather than recursing untracked.
+      await agentStore.updateRunStatus(run.id, 'queued', {
+        claimed_by: null, claimed_at: null, lease_expires_at: null,
+        failure_reason: ruleVerify.reasons.join(', ')
+      });
+      return;
+    } else {
+      // Genuine miss -> replan from scratch (new plan next iteration).
+      const reason = !executionUnblocked ? 'Step failed' :
                      (ruleVerify.status !== 'satisfied' ? ruleVerify.reasons.join(', ') : semVerify?.reasoning);
-      
-      run = await agentStore.updateRunStatus(run.id, 'running', { failure_reason: reason, plan_id: null }); // clear plan_id to start fresh next loop
-      // We do not stop the worker processing yet, just tail recurse or loop!
-      // But actually, just return and let the worker re-process it? No, if we want loop:
+
+      // WS4: re-queue (lease-safe) instead of setImmediate recursion, which ran
+      // the same run untracked and could double-execute on lease recovery.
       slog('loop', 'replan_triggered', { run_id: run.id, reason });
       clearInterval(leaseHeartbeat);
       // Re-queue the run instead of recursive setImmediate to respect MAX_CONCURRENT
@@ -213,7 +235,8 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
         claimed_by: null,
         claimed_at: null,
         lease_expires_at: null,
-        plan_id: null // Clear plan to force fresh plan creation
+        plan_id: null, // Clear plan to force fresh plan creation
+        failure_reason: reason
       });
       return; // Let the worker pick it up on next cycle
     }

@@ -1,0 +1,64 @@
+substitutions:
+  _REGION: us-west1
+  _REPO: my-artifact-repo
+  _IMAGE: my-service-image
+  _SERVICE_NAME: my-cloud-run-service
+
+steps:
+  # Step 1: Install dependencies and run linting/checks
+  - name: node:22
+    id: Lint
+    entrypoint: bash
+    args:
+      - '-c'
+      - 'npm ci && npm run lint --if-present'
+
+  # Step 2: Run unit testing suite
+  - name: node:22
+    id: Test
+    entrypoint: bash
+    args:
+      - '-c'
+      - 'npm ci && npm test --if-present'
+
+  # Step 3: Compile and build the container image
+  - name: gcr.io/cloud-builders/docker
+    id: Build
+    args:
+      - 'build'
+      - '--no-cache'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$COMMIT_SHA'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest'
+      - '.'
+
+  # Step 4: Push the container image to Google Artifact Registry
+  - name: gcr.io/cloud-builders/docker
+    id: Push
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$COMMIT_SHA'
+
+  # Step 5: Deploy the container image to Google Cloud Run
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    id: Deploy
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--platform=managed'
+      - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$COMMIT_SHA'
+      - '--region=${_REGION}'
+      - '--allow-unauthenticated' # Set to --no-allow-unauthenticated for private services
+      - '--labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID'
+      - '--quiet'
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:$COMMIT_SHA'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_IMAGE}:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  substitutionOption: ALLOW_LOOSE

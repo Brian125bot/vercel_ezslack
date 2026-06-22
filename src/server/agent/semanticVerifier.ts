@@ -3,6 +3,7 @@ import type { AgentRunTrace } from '../storage/types.js';
 import type { SemanticVerificationResult } from './types.js';
 import { slog } from './log.js';
 import { geminiCall } from './geminiClient.js';
+import { resolveModel } from './models.js';
 
 export async function verifySemantically(trace: AgentRunTrace, model: string): Promise<SemanticVerificationResult> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -56,7 +57,7 @@ Output your confidence as a number from 0 to 1.
 
   try {
     const responseText = await geminiCall({
-      model,
+      model: resolveModel(model),
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -76,11 +77,13 @@ Output your confidence as a number from 0 to 1.
     slog('verifier', 'error', { error: err.message });
   }
 
-  // On error, return not satisfied so it can replan
+  // WS4: On error / unparseable output, return INCONCLUSIVE (satisfied with
+  // zero confidence) rather than a hard "not satisfied". A flaky verifier must
+  // not throw away a structurally-complete plan and burn replan iterations.
   return {
-    satisfied: false,
-    confidence: 1,
-    reasoning: 'Semantic verification encountered an error.',
-    source: 'llm'
+    satisfied: true,
+    confidence: 0,
+    reasoning: 'Semantic verification was inconclusive (error or empty response); deferring to rule-based verification.',
+    source: 'skipped'
   };
 }

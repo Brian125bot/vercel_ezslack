@@ -131,5 +131,8 @@ function msUntilTomorrow9am(): number {
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
   tomorrow.setHours(9, 0, 0, 0);
-  return tomorrow.getTime() - now.getTime();
+  const delta = tomorrow.getTime() - now.getTime();
+  // "Tomorrow" must never resolve to more than a full day out (e.g. when the
+  // current time is before 9am, 9am-tomorrow would be >24h away). Cap at 24h.
+  return Math.min(delta, MS_DAY);
 }

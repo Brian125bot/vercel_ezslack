@@ -3,6 +3,7 @@ import type { AgentPlanDraft, PlannedAgentStep } from './types.js';
 import { agentStore } from '../storage/agentStore.js';
 import { slog } from './log.js';
 import { geminiCall } from './geminiClient.js';
+import { resolveModel } from './models.js';
 
 interface MutationInstruction {
   action: 'add' | 'remove' | 'replace' | 'modify';
@@ -69,7 +70,7 @@ export async function mutatePlan(
 
   try {
     const responseText = await geminiCall({
-      model,
+      model: resolveModel(model),
       contents: `You are a plan mutation engine. A user wants to modify an AI agent plan.
 
 Goal: ${goal.title}

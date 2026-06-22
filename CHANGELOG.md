@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [4.4.0] - Agentic base fixes (multistep & planning reliability) - 2026-06-22
+
+Fixes the durable-task plan-and-execute pipeline, which frequently failed on
+multistep and planning workflows in Slack. Branch: `agentic-base-fix`.
+
+### 🐛 Bug Fixes
+* **Planner tool hallucinations no longer fail or over-gate the whole plan (WS2).**
+  Introduced `planNormalize.ts`: unknown/unavailable tool names are degraded to a
+  safe `note` step (only that step is flagged) instead of redacting it into a
+  no-tool step that the executor failed and poisoning the entire plan to
+  `external_write` + `requiresApproval`. Plan `requiresApproval` is now derived
+  from whether any executable step actually maps to an external_write tool, and
+  free-text `riskLevel` values from the model (e.g. "low"/"medium"/"high") are
+  coerced to the strict `AgentRiskLevel` enum. `generate` steps are guaranteed a
+  prompt, and `kind`-in-`toolName` mistakes are normalised.
+* **Multistep state isolation (WS3).** Upstream-output gathering, the
+  `slack.replyInThread` auto-injection, and the empty-reply fallback now scope to
+  the current plan iteration (`plan_id`) instead of `getStepsForRun`, which mixed
+  steps across abandoned replans (whose `order_index` restarts at 1) and caused
+  wrong/blank replies.
+* **Verification & replan control loop (WS4).** Transient failures (e.g. a failed
+  Slack post) now retry the failed steps within the same plan (bounded by
+  `MAX_TRANSIENT_RETRIES`) instead of discarding the plan. Genuine replans and
+  retries re-queue the run (lease-safe) rather than recursing via `setImmediate`,
+  which executed the run untracked and could double-execute on lease recovery.
+  Semantic-verifier verdicts only trigger a replan when confidence ≥ 0.5; errors
+  and empty responses are treated as inconclusive (defer to rule-based verifier)
+  instead of forcing a replan. Added `agent_runs.retry_count` (migration v4).
+* **Accurate run reports (WS5).** `buildRunReport` now reports only the latest
+  plan iteration's steps, so abandoned earlier plans no longer appear as
+  duplicate/failed noise in the Slack run report.
+* **Time-deferred "tomorrow" capped (WS6).** `msUntilTomorrow9am` is capped at 24h
+  so "remind me tomorrow" before 9am no longer schedules >24h out; fixes the
+  failing `deferral` test.
+
+### 🛡️ Hardening
+* **Model configuration integrity (WS1).** New `agent/models.ts` is the single
+  source of truth for allowed Gemini models with a `resolveModel()` safe
+  fallback (`gemini-2.5-flash`). All LLM call sites (planner, executor generate
+  step, intent classifier, semantic verifier, plan mutation, direct reply, Slack
+  reply synthesis) and the persisted/selected model in `state.ts` + `routes.ts`
+  now resolve through it, so an unreleased or corrupted model id can never throw
+  a "model not found" error and cascade into multistep failure. (Note: the live
+  model list confirms `gemini-3.1-flash-lite` and `gemini-3.5-flash` are served,
+  so this is a guardrail, not the root cause.)
+
+### 🧪 Tests / CI
+* Added `tests/planNormalize.test.ts` and `tests/models.test.ts`; extended
+  `tests/loop.test.ts` (retry vs replan, lease-safe re-queue, inconclusive
+  semantic verdict) and `tests/reporter.test.ts` (plan-scoped report).
+* `vitest.config.ts` binds its internal API server to `127.0.0.1` and uses the
+  `forks` pool so the suite runs on a fresh clone with no `localhost` hosts entry.
+* Full suite: 83 passing; `tsc --noEmit` clean; server bundle builds.
+
 ## [4.3.0] - Pre-merge QA Remediation - 2026-06-20
 
 Resolves every gap found during the `version-3` pre-merge QA review. The branch

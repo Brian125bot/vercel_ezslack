@@ -1,4 +1,5 @@
 import { geminiCall } from './geminiClient.js';
+import { resolveModel } from './models.js';
 
 export type IntentCategory = 
   | 'direct_reply'
@@ -140,7 +141,7 @@ Respond with EXACTLY a JSON block matching this structure:
 Provide NO other text.`;
 
       const responseText = await geminiCall({
-        model: selectedModel,
+        model: resolveModel(selectedModel),
         contents: prompt,
         config: {
           responseMimeType: 'application/json'

@@ -1,5 +1,6 @@
 import { SlackEventLog, ThreadMessage } from '../types.js';
 import { sanitizeString } from './agent/sanitize.js';
+import { resolveModel, DEFAULT_MODEL } from './agent/models.js';
 
 // ── In-memory fallbacks (used when DB is unavailable) ──
 const memoryLogs: SlackEventLog[] = [];
@@ -7,7 +8,7 @@ const memoryThreads = new Map<string, ThreadMessage[]>();
 const memoryProcessedEvents = new Set<string>();
 const memoryProcessedMessages = new Set<string>();
 const memoryEventTimestamps = new Map<string, number>();
-let memorySelectedModel = 'gemini-3.1-flash-lite';
+let memorySelectedModel: string = DEFAULT_MODEL;
 
 export const maxLogs = 50;
 const MAX_DEDUP_SET_SIZE = 10000; // Prevent OOM under sustained load
@@ -142,7 +143,8 @@ export async function getSelectedModel(): Promise<string> {
     try {
       const rows = await q(`SELECT value FROM system_settings WHERE key = 'selected_model'`);
       if (rows.length) {
-        selectedModel = rows[0].value;
+        // WS1: never hand back an unreleased/invalid persisted model.
+        selectedModel = resolveModel(rows[0].value);
         return selectedModel;
       }
     } catch { /* fall through to memory */ }

@@ -1,0 +1,40 @@
+# Dependencies and modules
+node_modules/
+jspm_packages/
+web_modules/
+
+# Local configuration and environment secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+
+# Git directories
+.git/
+.gitignore
+.gitattributes
+
+# Build artifacts and compiled files
+dist/
+build/
+out/
+.next/
+.nuxt/
+.docusaurus/
+*.tsbuildinfo
+*.log
+
+# Editor configurations and system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# CI/CD and deployment configurations
+Dockerfile
+docker-compose.yml
+cloudbuild.yaml
+.agents/

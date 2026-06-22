@@ -45,6 +45,7 @@ export interface AgentRun {
   result_summary?: string | null;
   failure_reason?: string | null;
   iteration_count?: number;
+  retry_count?: number;
   claimed_by?: string | null;
   claimed_at?: Date | null;
   lease_expires_at?: Date | null;

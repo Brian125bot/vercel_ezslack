@@ -2,6 +2,7 @@ import type { AgentTool, ToolExecutionContext } from '../agent/types.js';
 import type { ApprovalRequest } from '../storage/types.js';
 import { agentStore } from '../storage/agentStore.js';
 import { geminiCall } from '../agent/geminiClient.js';
+import { resolveModel } from '../agent/models.js';
 
 const SLACK_MAX_TEXT = 39000;
 const SLACK_MAX_SECTION_TEXT = 2800;
@@ -19,15 +20,19 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
        if (context.runId) {
          try {
            const trace = await agentStore.getRunTrace(context.runId);
+           // WS3: only consider steps from the run's current plan iteration.
+           const planScoped = trace.run.plan_id
+             ? trace.steps.filter(s => s.plan_id === trace.run.plan_id)
+             : trace.steps;
            // Look for a generate step's output first
-           const generatedStep = trace.steps
+           const generatedStep = planScoped
              .filter(s => s.status === 'succeeded' && (s.output as any)?.generated)
              .pop();
            if (generatedStep) {
              replyText = (generatedStep.output as any).generated;
            } else {
              // Fallback: synthesise from all step outputs via Gemini
-             const previousOutputs = trace.steps
+             const previousOutputs = planScoped
                .filter(s => s.status === 'succeeded' && s.output)
                .map(s => `Step: ${s.title}\nOutput: ${JSON.stringify(s.output)}`)
                .join('\n\n');
@@ -35,7 +40,7 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
               const apiKey = process.env.GEMINI_API_KEY;
               if (apiKey && previousOutputs) {
                 const responseText = await geminiCall({
-                  model: 'gemini-2.5-flash',
+                  model: resolveModel(process.env.SELECTED_MODEL),
                   contents: `Based on the following execution trace for the goal "${trace.goal.title}", generate a concise and helpful Slack reply to the user summarize what was done. Keep it brief.\n\n${previousOutputs}`,
                   label: 'autoReply'
                 });
