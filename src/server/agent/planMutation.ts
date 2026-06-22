@@ -1,7 +1,8 @@
-import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { Type, Schema } from '@google/genai';
 import type { AgentPlanDraft, PlannedAgentStep } from './types.js';
 import { agentStore } from '../storage/agentStore.js';
 import { slog } from './log.js';
+import { geminiCall } from './geminiClient.js';
 
 interface MutationInstruction {
   action: 'add' | 'remove' | 'replace' | 'modify';
@@ -66,10 +67,8 @@ export async function mutatePlan(
     required: ['mutations', 'summary']
   };
 
-  const ai = new GoogleGenAI({ apiKey });
-
   try {
-    const response = await ai.models.generateContent({
+    const responseText = await geminiCall({
       model,
       contents: `You are a plan mutation engine. A user wants to modify an AI agent plan.
 
@@ -93,14 +92,15 @@ Generate the mutations as JSON.`,
       config: {
         responseMimeType: 'application/json',
         responseSchema: responseSchema
-      }
+      },
+      label: 'mutation'
     });
 
-    if (!response.text) {
+    if (!responseText) {
       return { success: false, summary: 'LLM returned empty response' };
     }
 
-    const parsed = JSON.parse(response.text);
+    const parsed = JSON.parse(responseText);
     const mutations = parsed.mutations || [];
 
     // Apply mutations

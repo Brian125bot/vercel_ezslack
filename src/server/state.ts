@@ -10,6 +10,7 @@ const memoryEventTimestamps = new Map<string, number>();
 let memorySelectedModel = 'gemini-3.1-flash-lite';
 
 export const maxLogs = 50;
+const MAX_DEDUP_SET_SIZE = 10000; // Prevent OOM under sustained load
 
 // ── DB availability check ──
 let dbModule: any = null;
@@ -199,6 +200,20 @@ export async function saveThreadHistory(threadKey: string, messages: ThreadMessa
 }
 
 // ── Event Deduplication ──
+function capDedupSet(set: Set<string>, map: Map<string, number>, key: string) {
+  if (set.size >= MAX_DEDUP_SET_SIZE) {
+    // Evict oldest 20% when cap reached
+    const entries = [...map.entries()].sort((a, b) => a[1] - b[1]);
+    const evictCount = Math.floor(MAX_DEDUP_SET_SIZE * 0.2);
+    for (let i = 0; i < evictCount && i < entries.length; i++) {
+      set.delete(entries[i][0]);
+      map.delete(entries[i][0]);
+    }
+  }
+  set.add(key);
+  map.set(key, Date.now());
+}
+
 export async function isEventDuplicate(eventKey: string): Promise<boolean> {
   if (memoryProcessedEvents.has(eventKey)) return true;
 
@@ -212,14 +227,12 @@ export async function isEventDuplicate(eventKey: string): Promise<boolean> {
         [eventKey]
       );
       if (rows.length === 0) return true;
-      memoryProcessedEvents.add(eventKey);
-      memoryEventTimestamps.set(eventKey, Date.now());
+      capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventKey);
       return false;
     } catch { /* fall through */ }
   }
 
-  memoryProcessedEvents.add(eventKey);
-  memoryEventTimestamps.set(eventKey, Date.now());
+  capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventKey);
   return false;
 }
 
@@ -236,14 +249,12 @@ export async function isMessageDuplicate(msgKey: string): Promise<boolean> {
         [msgKey]
       );
       if (rows.length === 0) return true;
-      memoryProcessedMessages.add(msgKey);
-      memoryEventTimestamps.set(msgKey, Date.now());
+      capDedupSet(memoryProcessedMessages, memoryEventTimestamps, msgKey);
       return false;
     } catch { /* fall through */ }
   }
 
-  memoryProcessedMessages.add(msgKey);
-  memoryEventTimestamps.set(msgKey, Date.now());
+  capDedupSet(memoryProcessedMessages, memoryEventTimestamps, msgKey);
   return false;
 }
 

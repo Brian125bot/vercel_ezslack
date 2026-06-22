@@ -1,7 +1,10 @@
 import type { AgentTool, ToolExecutionContext } from '../agent/types.js';
 import type { ApprovalRequest } from '../storage/types.js';
 import { agentStore } from '../storage/agentStore.js';
-import { GoogleGenAI } from '@google/genai';
+import { geminiCall } from '../agent/geminiClient.js';
+
+const SLACK_MAX_TEXT = 39000;
+const SLACK_MAX_SECTION_TEXT = 2800;
 
 export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
   name: 'slack.replyInThread',
@@ -29,17 +32,17 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
                .map(s => `Step: ${s.title}\nOutput: ${JSON.stringify(s.output)}`)
                .join('\n\n');
                
-             const apiKey = process.env.GEMINI_API_KEY;
-             if (apiKey && previousOutputs) {
-               const ai = new GoogleGenAI({ apiKey });
-               const response = await ai.models.generateContent({
-                 model: 'gemini-2.5-flash',
-                 contents: `Based on the following execution trace for the goal "${trace.goal.title}", generate a concise and helpful Slack reply to the user summarize what was done. Keep it brief.\n\n${previousOutputs}`
-               });
-               if (response.text) {
-                 replyText = response.text;
-               }
-             }
+              const apiKey = process.env.GEMINI_API_KEY;
+              if (apiKey && previousOutputs) {
+                const responseText = await geminiCall({
+                  model: 'gemini-2.5-flash',
+                  contents: `Based on the following execution trace for the goal "${trace.goal.title}", generate a concise and helpful Slack reply to the user summarize what was done. Keep it brief.\n\n${previousOutputs}`,
+                  label: 'autoReply'
+                });
+                if (responseText) {
+                  replyText = responseText;
+                }
+              }
            }
          } catch (e) {
            console.warn('Failed to dynamically generate empty Slack reply:', e);
@@ -48,9 +51,14 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
        if (!replyText || String(replyText).trim() === '') {
          replyText = 'I have completed the requested task, but the planner left my response blank.';
        }
-    }
+     }
 
-    const token = process.env.SLACK_BOT_TOKEN;
+     // Truncate to Slack limit to prevent API errors
+     if (replyText.length > SLACK_MAX_TEXT) {
+       replyText = replyText.substring(0, SLACK_MAX_TEXT) + '\n\n_...truncated (exceeded 40K characters)_';
+     }
+
+     const token = process.env.SLACK_BOT_TOKEN;
     if (!token || token.startsWith('xoxb-mock') || token.startsWith('mock:')) {
       return { status: 'simulated_dispatch', message: replyText };
     }
@@ -99,7 +107,7 @@ export async function postApprovalBlockKit(
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `✋ *Approval Required*\n\n*${approval.title}*\n${approval.description}`
+          text: `✋ *Approval Required*\n\n*${approval.title}*\n${approval.description}`.substring(0, SLACK_MAX_SECTION_TEXT)
         }
       },
       {
@@ -174,7 +182,7 @@ export async function updateApprovalMessage(
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `${emoji} *${label}*\n\n*${approval.title}*\n${approval.description}`
+            text: `${emoji} *${label}*\n\n*${approval.title}*\n${approval.description}`.substring(0, SLACK_MAX_SECTION_TEXT)
           }
         }
       ]

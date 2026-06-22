@@ -10,9 +10,8 @@ export function checkPolicy(riskLevel: AgentRiskLevel, requestedAction: string):
       return { allowed: true, requiresApproval: false, reason: 'Internal write permitted' };
       
     case 'external_write':
-      // V1 policy for external write is blocked unless explicit approval, 
-      // but without full approval flow we block or require approval.
-      return { allowed: false, requiresApproval: true, reason: 'External state modification requires explicit approval' };
+      // Allow execution but require explicit approval before proceeding
+      return { allowed: true, requiresApproval: true, reason: 'External state modification requires explicit approval' };
       
     case 'destructive':
       return { allowed: false, requiresApproval: false, reason: 'Destructive actions are strictly blocked' };

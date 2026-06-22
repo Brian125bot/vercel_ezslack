@@ -1,14 +1,13 @@
-import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { Type, Schema } from '@google/genai';
 import type { AgentPlanDraft } from './types.js';
 import { toolsRegistry } from '../tools/registry.js';
+import { geminiCall } from './geminiClient.js';
 
 export async function createPlan(goalTitle: string, originalInstruction: string, selectedModel: string, contextBlock?: string): Promise<AgentPlanDraft> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is missing');
   }
-
-  const ai = new GoogleGenAI({ apiKey });
 
   const responseSchema: Schema = {
     type: Type.OBJECT,
@@ -68,17 +67,18 @@ Planning rules:
 `;
 
   try {
-    const response = await ai.models.generateContent({
+    const responseText = await geminiCall({
       model: selectedModel,
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
         responseSchema: responseSchema
-      }
+      },
+      label: 'planner'
     });
 
-    if (response.text) {
-      const plan = JSON.parse(response.text) as AgentPlanDraft;
+    if (responseText) {
+      const plan = JSON.parse(responseText) as AgentPlanDraft;
       if (!plan.riskLevel) plan.riskLevel = 'internal_write';
       
       // Validate tool names against the live registry

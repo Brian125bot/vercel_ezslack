@@ -84,6 +84,8 @@ export function buildRunReport(trace: AgentRunTrace): string {
   return lines.join('\n');
 }
 
+const SLACK_MAX_TEXT = 39000; // 40K limit with headroom
+
 /**
  * Post an action-aware run report to Slack.
  */
@@ -91,7 +93,10 @@ export async function reportRunResult(
   trace: AgentRunTrace,
   context: ToolExecutionContext
 ): Promise<void> {
-  const report = buildRunReport(trace);
+  let report = buildRunReport(trace);
+  if (report.length > SLACK_MAX_TEXT) {
+    report = report.substring(0, SLACK_MAX_TEXT) + '\n\n_...truncated (report exceeded 40K characters)_';
+  }
   try {
     await slackReplyInThreadTool.execute({ text: report }, context);
   } catch (err) {

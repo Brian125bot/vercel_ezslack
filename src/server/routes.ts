@@ -3,11 +3,15 @@ import crypto from 'crypto';
 import { requireDashboardAuth } from './auth.js';
 import { selectedModel, setSelectedModel, addLog, updateLog, getLogs, clearLogs, getSelectedModel, isEventDuplicate, isMessageDuplicate } from './state.js';
 import { classifyIntent } from './agent/intent.js';
-import { GoogleGenAI } from '@google/genai';
+
 import { SlackEventLog } from '../types.js';
 import { agentStore } from './storage/agentStore.js';
 import { isDbAvailable } from './storage/db.js';
 import { runAgentPipeline } from './agent/orchestrator.js';
+import { Semaphore } from './agent/semaphore.js';
+
+const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
+const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
 
 export const router = express.Router();
 
@@ -440,7 +444,7 @@ router.post('/slack/events', async (req: any, res: any) => {
           throw new Error('GEMINI_API_KEY is not configured or set to default example value.');
         }
 
-        const promptText = event.text || "";
+        const promptText = (event.text || "").substring(0, 50000); // Cap to prevent cost amplification
         const threadTsTarget = event.thread_ts || event.ts;
         const threadKeyStr = threadTsTarget ? `chan-${event.channel}-thread-${threadTsTarget}` : `chan-${event.channel}-single`;
         const workspaceId = req.body?.team_id || 'T_UNKNOWN';
@@ -448,9 +452,7 @@ router.post('/slack/events', async (req: any, res: any) => {
 
         const hasPendingApproval = dbAvailable ? await agentStore.hasPendingApproval(workspaceId, event.channel) : false;
 
-        const ai = new GoogleGenAI({ apiKey: geminiApiKey });
         const intentResult = await classifyIntent(promptText, selectedModel, {
-          ai,
           context: {
             workspaceId,
             channelId: event.channel,
@@ -461,20 +463,32 @@ router.post('/slack/events', async (req: any, res: any) => {
         });
         const { intent, confidence, source } = intentResult;
 
-        const result = await runAgentPipeline({
-          workspaceId,
-          channelId: event.channel,
-          userId: event.user,
-          messageText: promptText,
-          eventId: eventId,
-          messageTs: event.ts,
-          threadTs: threadTsTarget,
-          selectedModel,
-          signatureValid: signatureVerified,
-          sourceType: 'slack',
-          dbAvailable,
-          intentResult
-        });
+        // Apply backpressure for direct_reply to limit concurrent Gemini calls
+        if (intent === 'direct_reply') {
+          await directReplySemaphore.acquire();
+        }
+        
+        let result;
+        try {
+          result = await runAgentPipeline({
+            workspaceId,
+            channelId: event.channel,
+            userId: event.user,
+            messageText: promptText,
+            eventId: eventId,
+            messageTs: event.ts,
+            threadTs: threadTsTarget,
+            selectedModel,
+            signatureValid: signatureVerified,
+            sourceType: 'slack',
+            dbAvailable,
+            intentResult
+          });
+        } finally {
+          if (intent === 'direct_reply') {
+            directReplySemaphore.release();
+          }
+        }
 
         const durationMs = Date.now() - startTime;
         updateLog(logItem.id, {

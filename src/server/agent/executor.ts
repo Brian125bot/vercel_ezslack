@@ -3,7 +3,9 @@ import { agentStore } from '../storage/agentStore.js';
 import { toolsRegistry } from '../tools/registry.js';
 import { checkPolicy } from './policy.js';
 import type { ToolExecutionContext, StepKind } from './types.js';
-import { GoogleGenAI } from '@google/genai';
+import { geminiCall } from './geminiClient.js';
+
+const TOOL_TIMEOUT_MS = parseInt(process.env.TOOL_TIMEOUT_MS || '60000');
 
 /**
  * Runs a `generate` step: calls Gemini with a prompt (and optional upstream
@@ -41,13 +43,13 @@ ${prompt ? `Additional instructions: ${prompt}` : ''}
 Generate the requested content. Be concise and use Slack-compatible markdown.`;
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
+    const responseText = await geminiCall({
       model: run.model,
-      contents: fullPrompt
+      contents: fullPrompt,
+      label: 'generateStep'
     });
 
-    const generatedText = response.text || '(Empty generation)';
+    const generatedText = responseText || '(Empty generation)';
     await agentStore.updateStepStatus(step.id, 'succeeded', {
       output: { generated: generatedText }
     });
@@ -277,7 +279,15 @@ export async function executeStep(
   });
 
   try {
-    const output = await tool.execute(toolInput, context);
+    // Wrap tool execution with timeout to prevent hung external API calls from blocking
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const output = await Promise.race([
+      tool.execute(toolInput, context),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Tool ${toolName} timed out after ${TOOL_TIMEOUT_MS}ms`)), TOOL_TIMEOUT_MS);
+      })
+    ]);
+    if (timer) clearTimeout(timer);
     await agentStore.updateToolCallStatus(toolCall.id, 'succeeded', { output });
     await agentStore.updateStepStatus(step.id, 'succeeded', { output });
 

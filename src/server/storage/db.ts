@@ -9,7 +9,7 @@ export async function getAdminDbPool(): Promise<Pool> {
   if (adminPool) return adminPool;
 
   const config: PoolConfig = {
-    max: 2,
+    max: parseInt(process.env.DB_ADMIN_POOL_MAX || '2'),
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
   };
@@ -63,7 +63,7 @@ export async function getDbPool(): Promise<Pool> {
   if (pool) return pool;
 
   const config: PoolConfig = {
-    max: 5,
+    max: parseInt(process.env.DB_POOL_MAX || '5'),
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
   };

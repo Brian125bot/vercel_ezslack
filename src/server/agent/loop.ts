@@ -7,37 +7,48 @@ import { finalizeRun } from './finalize.js';
 import { verifyRun } from './verifier.js';
 import { verifySemantically } from './semanticVerifier.js';
 import { slog } from './log.js';
+import { LEASE_SECONDS } from './worker.js';
 
 const MAX_ITERATIONS = 3;
+const LEASE_HEARTBEAT_MS = 60_000; // Renew lease every 60 seconds
 
 async function buildScopedTrace(runId: string, planId?: string | null): Promise<AgentRunTrace> {
+  // Single call fetches run, goal, plan, steps, toolCalls, approvals, and auditEvents
+  const trace = await agentStore.getRunTrace(runId);
+  
+  // Filter steps to the specific plan if provided
   const steps = planId 
-    ? await agentStore.getStepsForPlan(planId)
-    : await agentStore.getStepsForRun(runId);
-  const run = await agentStore.getRun(runId);
-  const goal = await agentStore.getGoal(run.goal_id);
-  const plan = planId ? (await agentStore.getRunTrace(runId)).plan : undefined;
-  const allToolCalls = (await agentStore.getRunTrace(runId)).toolCalls;
+    ? trace.steps.filter(s => s.plan_id === planId)
+    : trace.steps;
+  
   const stepIds = new Set(steps.map(s => s.id));
-  const toolCalls = allToolCalls.filter(tc => tc.step_id && stepIds.has(tc.step_id));
+  const toolCalls = trace.toolCalls.filter(tc => tc.step_id && stepIds.has(tc.step_id));
   
   return {
-    run,
-    goal,
-    plan,
+    run: trace.run,
+    goal: trace.goal,
+    plan: trace.plan,
     steps,
     toolCalls,
-    approvals: await agentStore.getApprovalsForRun(runId),
-    auditEvents: await agentStore.getAuditEventsForRun(runId)
+    approvals: trace.approvals,
+    auditEvents: trace.auditEvents
   };
 }
 
-export async function runLoop(runIn: AgentRun): Promise<void> {
+export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void> {
   let run = runIn;
   const goal = await agentStore.getGoal(run.goal_id);
 
+  // Start lease heartbeat to prevent stale claim recovery during long operations
+  const leaseHeartbeat = setInterval(() => {
+    agentStore.renewLease(run.id, LEASE_SECONDS).catch(err => {
+      slog('loop', 'lease_renewal_failed', { run_id: run.id, error: err.message });
+    });
+  }, LEASE_HEARTBEAT_MS);
+
   try {
     if (run.iteration_count && run.iteration_count >= MAX_ITERATIONS) {
+      clearInterval(leaseHeartbeat);
       await finalizeRun(run, 'failed', `Max iterations (${MAX_ITERATIONS}) exhausted.`);
       return;
     }
@@ -50,6 +61,11 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
       // Resume path — check if there's a plan-level approval (step_id IS NULL)
       const planApproval = await agentStore.getApprovedPlanApproval(run.id);
       isPlanPreApproved = !!planApproval;
+
+      // Transition from queued to running if resuming a previously approved plan
+      if (run.status === 'queued') {
+        run = await agentStore.updateRunStatus(run.id, 'running');
+      }
     } else {
       // Create new plan path
       run = await agentStore.incrementRunIteration(run.id);
@@ -108,6 +124,7 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
         });
 
         await agentStore.updateRunStatus(run.id, 'awaiting_approval', { plan_id: planId });
+        clearInterval(leaseHeartbeat);
         return; // Yield
       }
       
@@ -164,6 +181,7 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
 
       const updatedStep = await agentStore.getStep(step.id);
       if (updatedStep.status === 'blocked') {
+        clearInterval(leaseHeartbeat);
         await agentStore.updateRunStatus(run.id, 'blocked');
         await finalizeRun(run, 'blocked', `Step ${updatedStep.title} is blocked.`);
         return;
@@ -189,8 +207,15 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
       // We do not stop the worker processing yet, just tail recurse or loop!
       // But actually, just return and let the worker re-process it? No, if we want loop:
       slog('loop', 'replan_triggered', { run_id: run.id, reason });
-      setImmediate(() => runLoop(run)); // recursive without blocking
-      return;
+      clearInterval(leaseHeartbeat);
+      // Re-queue the run instead of recursive setImmediate to respect MAX_CONCURRENT
+      await agentStore.updateRunStatus(run.id, 'queued', {
+        claimed_by: null,
+        claimed_at: null,
+        lease_expires_at: null,
+        plan_id: null // Clear plan to force fresh plan creation
+      });
+      return; // Let the worker pick it up on next cycle
     }
 
     // Success
@@ -203,9 +228,11 @@ export async function runLoop(runIn: AgentRun): Promise<void> {
       summary: 'Semantic verification satisfied',
       payload: semVerify
     });
+    clearInterval(leaseHeartbeat);
     await finalizeRun(run, 'succeeded');
 
   } catch (err: any) {
+    clearInterval(leaseHeartbeat);
     slog('loop', 'runLoop.error', { run_id: run.id, error: err.message });
     await finalizeRun(run, 'failed', err.message);
   }

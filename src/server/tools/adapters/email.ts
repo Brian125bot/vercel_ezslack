@@ -1,6 +1,8 @@
 import type { ExternalAdapter } from './base.js';
 import type { AgentTool, ToolExecutionContext } from '../../agent/types.js';
 
+const TOOL_TIMEOUT_MS = parseInt(process.env.TOOL_TIMEOUT_MS || '60000');
+
 interface SendEmailInput {
   to: string;
   subject: string;
@@ -47,7 +49,8 @@ export class EmailAdapter implements ExternalAdapter {
       const response = await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to, subject, body })
+        body: JSON.stringify({ to, subject, body }),
+        signal: AbortSignal.timeout(TOOL_TIMEOUT_MS)
       });
 
       if (!response.ok) {

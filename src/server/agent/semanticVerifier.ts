@@ -1,7 +1,8 @@
-import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { Type, Schema } from '@google/genai';
 import type { AgentRunTrace } from '../storage/types.js';
 import type { SemanticVerificationResult } from './types.js';
 import { slog } from './log.js';
+import { geminiCall } from './geminiClient.js';
 
 export async function verifySemantically(trace: AgentRunTrace, model: string): Promise<SemanticVerificationResult> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -14,8 +15,6 @@ export async function verifySemantically(trace: AgentRunTrace, model: string): P
       source: 'skipped'
     };
   }
-
-  const ai = new GoogleGenAI({ apiKey });
 
   const responseSchema: Schema = {
     type: Type.OBJECT,
@@ -56,17 +55,18 @@ Output your confidence as a number from 0 to 1.
 `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: model,
+    const responseText = await geminiCall({
+      model,
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
         responseSchema: responseSchema
-      }
+      },
+      label: 'verifier'
     });
 
-    if (response.text) {
-      const result = JSON.parse(response.text) as Omit<SemanticVerificationResult, 'source'>;
+    if (responseText) {
+      const result = JSON.parse(responseText) as Omit<SemanticVerificationResult, 'source'>;
       return {
         ...result,
         source: 'llm'
