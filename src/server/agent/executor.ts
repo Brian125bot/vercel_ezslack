@@ -3,7 +3,21 @@ import { agentStore } from '../storage/agentStore.js';
 import { toolsRegistry } from '../tools/registry.js';
 import { checkPolicy } from './policy.js';
 import type { ToolExecutionContext, StepKind } from './types.js';
-import { GoogleGenAI } from '@google/genai';
+import { geminiCall } from './geminiClient.js';
+import { resolveModel } from './models.js';
+
+const TOOL_TIMEOUT_MS = parseInt(process.env.TOOL_TIMEOUT_MS || '60000');
+
+/**
+ * WS3 — Multistep state isolation.
+ * Return the steps that belong to the SAME plan iteration as `step`, so that
+ * upstream-output gathering and reply injection never pull in stale steps from
+ * an abandoned earlier plan (whose order_index restarts at 1).
+ */
+async function getSiblingSteps(run: AgentRun, step: AgentStep) {
+  if (step.plan_id) return agentStore.getStepsForPlan(step.plan_id);
+  return agentStore.getStepsForRun(run.id);
+}
 
 /**
  * Runs a `generate` step: calls Gemini with a prompt (and optional upstream
@@ -25,8 +39,8 @@ async function executeGenerateStep(
   const stepInput = step.input as any;
   const prompt = stepInput?.prompt || stepInput?.input?.prompt || '';
 
-  // Gather outputs of all preceding succeeded steps for context
-  const priorSteps = await agentStore.getStepsForRun(run.id);
+  // Gather outputs of all preceding succeeded steps for context (current plan only)
+  const priorSteps = await getSiblingSteps(run, step);
   const upstreamOutputs = priorSteps
     .filter(s => s.order_index < step.order_index && s.status === 'succeeded' && s.output)
     .map(s => `[${s.title}]: ${JSON.stringify(s.output)}`)
@@ -41,13 +55,13 @@ ${prompt ? `Additional instructions: ${prompt}` : ''}
 Generate the requested content. Be concise and use Slack-compatible markdown.`;
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: run.model,
-      contents: fullPrompt
+    const responseText = await geminiCall({
+      model: resolveModel(run.model),
+      contents: fullPrompt,
+      label: 'generateStep'
     });
 
-    const generatedText = response.text || '(Empty generation)';
+    const generatedText = responseText || '(Empty generation)';
     await agentStore.updateStepStatus(step.id, 'succeeded', {
       output: { generated: generatedText }
     });
@@ -134,7 +148,7 @@ export async function executeStep(
 
   // W3-A: If the tool input references upstream generated content, inject it
   if (toolName === 'slack.replyInThread' && (!toolInput.text || String(toolInput.text).trim() === '')) {
-    const priorSteps = await agentStore.getStepsForRun(run.id);
+    const priorSteps = await getSiblingSteps(run, step);
     const generatedStep = priorSteps
       .filter(s => s.order_index < step.order_index && s.status === 'succeeded')
       .reverse()
@@ -277,7 +291,15 @@ export async function executeStep(
   });
 
   try {
-    const output = await tool.execute(toolInput, context);
+    // Wrap tool execution with timeout to prevent hung external API calls from blocking
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const output = await Promise.race([
+      tool.execute(toolInput, context),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Tool ${toolName} timed out after ${TOOL_TIMEOUT_MS}ms`)), TOOL_TIMEOUT_MS);
+      })
+    ]);
+    if (timer) clearTimeout(timer);
     await agentStore.updateToolCallStatus(toolCall.id, 'succeeded', { output });
     await agentStore.updateStepStatus(step.id, 'succeeded', { output });
 

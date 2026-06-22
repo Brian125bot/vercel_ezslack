@@ -1,6 +1,8 @@
 import type { ExternalAdapter } from './base.js';
 import type { AgentTool, ToolExecutionContext } from '../../agent/types.js';
 
+const TOOL_TIMEOUT_MS = parseInt(process.env.TOOL_TIMEOUT_MS || '60000');
+
 interface GitHubIssueInput {
   owner: string;
   repo: string;
@@ -54,7 +56,8 @@ export class GitHubIssueAdapter implements ExternalAdapter {
           'X-GitHub-Api-Version': '2022-11-28',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(TOOL_TIMEOUT_MS)
       });
 
       if (!response.ok) {

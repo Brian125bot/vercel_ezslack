@@ -1,4 +1,5 @@
-import { GoogleGenAI } from '@google/genai';
+import { geminiCall } from './geminiClient.js';
+import { resolveModel } from './models.js';
 
 export type IntentCategory = 
   | 'direct_reply'
@@ -25,7 +26,7 @@ export interface IntentResult {
 export async function classifyIntent(
   text: string,
   selectedModel: string,
-  options?: { ai?: GoogleGenAI; context?: IntentContext }
+  options?: { context?: IntentContext }
 ): Promise<IntentResult> {
   const lowercase = text.toLowerCase().trim();
   const hasPendingApproval = !!options?.context?.hasPendingApproval;
@@ -120,15 +121,7 @@ export async function classifyIntent(
   }
 
   // Fallback to LLM
-  let ai = options?.ai;
-  if (!ai) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey) {
-      ai = new GoogleGenAI({ apiKey });
-    }
-  }
-
-  if (ai) {
+  if (process.env.GEMINI_API_KEY) {
     try {
       const prompt = `Analyze the following user instruction and classify its primary intent into exactly one of these six categories:
 - 'direct_reply': General casual conversation, greetings, social pleasantries, simple questions with direct answers, or explanations.
@@ -147,15 +140,16 @@ Respond with EXACTLY a JSON block matching this structure:
 }
 Provide NO other text.`;
 
-      const response = await ai.models.generateContent({
-        model: selectedModel,
+      const responseText = await geminiCall({
+        model: resolveModel(selectedModel),
         contents: prompt,
         config: {
           responseMimeType: 'application/json'
-        }
+        },
+        label: 'intent'
       });
 
-      const parsed = JSON.parse(response.text?.trim() || '{}');
+      const parsed = JSON.parse(responseText?.trim() || '{}');
       let intentStr = parsed.intent as IntentCategory;
       const confidence = (parsed.confidence || 'medium') as 'high' | 'medium' | 'low';
       

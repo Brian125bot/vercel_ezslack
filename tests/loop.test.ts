@@ -28,6 +28,8 @@ const {
     getAuditEventsForRun: vi.fn().mockResolvedValue([]),
     updateRunStatus: vi.fn(),
     updateGoalStatus: vi.fn(),
+    incrementRunRetry: vi.fn(),
+    updateStepStatus: vi.fn(),
     appendAuditEvent: vi.fn(),
     createApprovalRequest: vi.fn(),
   },
@@ -183,7 +185,7 @@ describe('Agent Loop (W4-F6)', () => {
     );
   });
 
-  it('semantic failure triggers replan via setImmediate', async () => {
+  it('high-confidence semantic failure triggers replan via lease-safe re-queue', async () => {
     const run = makeRun();
     const goal = makeGoal();
     const step = makeStep();
@@ -199,31 +201,96 @@ describe('Agent Loop (W4-F6)', () => {
     mockExecuteStep.mockResolvedValue(undefined);
     mockAgentStore.getStep.mockResolvedValue({ ...step, status: 'succeeded' });
 
-    // Rule verification passes but semantic fails
+    // Rule verification passes but semantic fails WITH HIGH CONFIDENCE
     mockVerifyRun.mockReturnValue({ status: 'satisfied', confidence: 1, reasons: [], recommendedNextAction: 'complete' });
-    mockVerifySemantically.mockResolvedValue({ satisfied: false, confidence: 0.3, reasoning: 'Reply does not match goal', source: 'llm' });
+    mockVerifySemantically.mockResolvedValue({ satisfied: false, confidence: 0.9, reasoning: 'Reply does not match goal', source: 'llm' });
     mockAgentStore.getRunTrace.mockResolvedValue({ run, goal, plan: { id: 'plan-1' }, steps: [{ ...step, status: 'succeeded' }], toolCalls: [], approvals: [], auditEvents: [] });
     mockAgentStore.appendAuditEvent.mockResolvedValue(undefined);
 
-    // Spy on setImmediate to catch the recursive call without actually recursing
     const setImmediateSpy = vi.spyOn(global, 'setImmediate').mockImplementation((() => {}) as any);
 
     await runLoop(run);
 
-    // Should have cleared the plan_id to trigger a fresh replan
+    // WS4: should RE-QUEUE (lease-safe) with plan_id cleared, not recurse in-process.
     expect(mockAgentStore.updateRunStatus).toHaveBeenCalledWith(
       'run-1',
-      'running',
-      expect.objectContaining({ plan_id: null })
+      'queued',
+      expect.objectContaining({ plan_id: null, claimed_by: null, lease_expires_at: null })
     );
 
-    // Should have scheduled a recursive call
-    expect(setImmediateSpy).toHaveBeenCalled();
+    // Must NOT use untracked setImmediate recursion anymore.
+    expect(setImmediateSpy).not.toHaveBeenCalled();
 
-    // finalizeRun should NOT have been called
+    // finalizeRun should NOT have been called (run will be re-claimed by worker).
     expect(mockFinalizeRun).not.toHaveBeenCalled();
 
     setImmediateSpy.mockRestore();
+  });
+
+  it('low-confidence semantic failure is inconclusive and does NOT replan', async () => {
+    const run = makeRun();
+    const goal = makeGoal();
+    const step = makeStep();
+    const planDraft = makePlanDraft();
+
+    mockAgentStore.getGoal.mockResolvedValue(goal);
+    mockAgentStore.incrementRunIteration.mockResolvedValue({ ...run, iteration_count: 1 });
+    mockCreatePlan.mockResolvedValue(planDraft);
+    mockAgentStore.createPlan.mockResolvedValue({ id: 'plan-1', ...planDraft });
+    mockAgentStore.updateRunStatus.mockResolvedValue({ ...run, status: 'running', plan_id: 'plan-1' });
+    mockAgentStore.getStepsForPlan.mockResolvedValue([step]);
+    mockAgentStore.createStep.mockResolvedValue(step);
+    mockExecuteStep.mockResolvedValue(undefined);
+    mockAgentStore.getStep.mockResolvedValue({ ...step, status: 'succeeded' });
+
+    mockVerifyRun.mockReturnValue({ status: 'satisfied', confidence: 1, reasons: [], recommendedNextAction: 'complete' });
+    // Low confidence -> inconclusive -> treated as success.
+    mockVerifySemantically.mockResolvedValue({ satisfied: false, confidence: 0.2, reasoning: 'unsure', source: 'llm' });
+    mockAgentStore.getRunTrace.mockResolvedValue({ run, goal, plan: { id: 'plan-1' }, steps: [{ ...step, status: 'succeeded' }], toolCalls: [], approvals: [], auditEvents: [] });
+    mockAgentStore.appendAuditEvent.mockResolvedValue(undefined);
+
+    await runLoop(run);
+
+    expect(mockFinalizeRun).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'run-1' }),
+      'succeeded'
+    );
+  });
+
+  it('transient (retry) verification re-runs failed steps in the same plan', async () => {
+    const run = makeRun();
+    const goal = makeGoal();
+    const step = makeStep();
+    const planDraft = makePlanDraft();
+
+    mockAgentStore.getGoal.mockResolvedValue(goal);
+    mockAgentStore.incrementRunIteration.mockResolvedValue({ ...run, iteration_count: 1 });
+    mockCreatePlan.mockResolvedValue(planDraft);
+    mockAgentStore.createPlan.mockResolvedValue({ id: 'plan-1', ...planDraft });
+    mockAgentStore.updateRunStatus.mockResolvedValue({ ...run, status: 'running', plan_id: 'plan-1' });
+    mockAgentStore.getStepsForPlan.mockResolvedValue([{ ...step, status: 'failed' }]);
+    mockAgentStore.createStep.mockResolvedValue(step);
+    mockExecuteStep.mockResolvedValue(undefined);
+    mockAgentStore.getStep.mockResolvedValue({ ...step, status: 'failed' });
+    mockAgentStore.incrementRunRetry.mockResolvedValue({ ...run, retry_count: 1 });
+    mockAgentStore.updateStepStatus.mockResolvedValue(step);
+
+    // Rule verifier asks for a retry (e.g. transient Slack failure).
+    mockVerifyRun.mockReturnValue({ status: 'not_satisfied', confidence: 1, reasons: ['slack failed'], recommendedNextAction: 'retry' });
+    mockVerifySemantically.mockResolvedValue({ satisfied: true, confidence: 0, reasoning: '', source: 'skipped' });
+    mockAgentStore.getRunTrace.mockResolvedValue({ run, goal, plan: { id: 'plan-1' }, steps: [{ ...step, status: 'failed' }], toolCalls: [], approvals: [], auditEvents: [] });
+    mockAgentStore.appendAuditEvent.mockResolvedValue(undefined);
+
+    await runLoop(run);
+
+    expect(mockAgentStore.incrementRunRetry).toHaveBeenCalledWith('run-1');
+    // Re-queued (not finalized as failed) for a fresh attempt at the same plan.
+    expect(mockAgentStore.updateRunStatus).toHaveBeenCalledWith(
+      'run-1',
+      'queued',
+      expect.objectContaining({ claimed_by: null })
+    );
+    expect(mockFinalizeRun).not.toHaveBeenCalled();
   });
 
   it('max iterations → failed without plan creation', async () => {

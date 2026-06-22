@@ -81,6 +81,17 @@ async function gracefulShutdown(signal: string) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
+// ── P0: Global crash handlers ──
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL] Unhandled Promise Rejection:', reason);
+  // Log but do not exit — Cloud Run will restart the container if needed
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught Exception:', err);
+  process.exit(1); // Exit immediately — process is in an undefined state
+});
+
 // Configure Vite middleware or static paths based on environment
 async function initServer() {
   // Security: Refuse to start in production without required secrets
@@ -128,4 +139,7 @@ async function initServer() {
   });
 }
 
-initServer();
+initServer().catch((err) => {
+  console.error('[FATAL] Server startup failed:', err);
+  process.exit(1);
+});

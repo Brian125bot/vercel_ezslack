@@ -1,5 +1,6 @@
 import { SlackEventLog, ThreadMessage } from '../types.js';
 import { sanitizeString } from './agent/sanitize.js';
+import { resolveModel, DEFAULT_MODEL } from './agent/models.js';
 
 // ── In-memory fallbacks (used when DB is unavailable) ──
 const memoryLogs: SlackEventLog[] = [];
@@ -7,9 +8,10 @@ const memoryThreads = new Map<string, ThreadMessage[]>();
 const memoryProcessedEvents = new Set<string>();
 const memoryProcessedMessages = new Set<string>();
 const memoryEventTimestamps = new Map<string, number>();
-let memorySelectedModel = 'gemini-3.1-flash-lite';
+let memorySelectedModel: string = DEFAULT_MODEL;
 
 export const maxLogs = 50;
+const MAX_DEDUP_SET_SIZE = 10000; // Prevent OOM under sustained load
 
 // ── DB availability check ──
 let dbModule: any = null;
@@ -141,7 +143,8 @@ export async function getSelectedModel(): Promise<string> {
     try {
       const rows = await q(`SELECT value FROM system_settings WHERE key = 'selected_model'`);
       if (rows.length) {
-        selectedModel = rows[0].value;
+        // WS1: never hand back an unreleased/invalid persisted model.
+        selectedModel = resolveModel(rows[0].value);
         return selectedModel;
       }
     } catch { /* fall through to memory */ }
@@ -199,6 +202,20 @@ export async function saveThreadHistory(threadKey: string, messages: ThreadMessa
 }
 
 // ── Event Deduplication ──
+function capDedupSet(set: Set<string>, map: Map<string, number>, key: string) {
+  if (set.size >= MAX_DEDUP_SET_SIZE) {
+    // Evict oldest 20% when cap reached
+    const entries = [...map.entries()].sort((a, b) => a[1] - b[1]);
+    const evictCount = Math.floor(MAX_DEDUP_SET_SIZE * 0.2);
+    for (let i = 0; i < evictCount && i < entries.length; i++) {
+      set.delete(entries[i][0]);
+      map.delete(entries[i][0]);
+    }
+  }
+  set.add(key);
+  map.set(key, Date.now());
+}
+
 export async function isEventDuplicate(eventKey: string): Promise<boolean> {
   if (memoryProcessedEvents.has(eventKey)) return true;
 
@@ -212,14 +229,12 @@ export async function isEventDuplicate(eventKey: string): Promise<boolean> {
         [eventKey]
       );
       if (rows.length === 0) return true;
-      memoryProcessedEvents.add(eventKey);
-      memoryEventTimestamps.set(eventKey, Date.now());
+      capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventKey);
       return false;
     } catch { /* fall through */ }
   }
 
-  memoryProcessedEvents.add(eventKey);
-  memoryEventTimestamps.set(eventKey, Date.now());
+  capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventKey);
   return false;
 }
 
@@ -236,14 +251,12 @@ export async function isMessageDuplicate(msgKey: string): Promise<boolean> {
         [msgKey]
       );
       if (rows.length === 0) return true;
-      memoryProcessedMessages.add(msgKey);
-      memoryEventTimestamps.set(msgKey, Date.now());
+      capDedupSet(memoryProcessedMessages, memoryEventTimestamps, msgKey);
       return false;
     } catch { /* fall through */ }
   }
 
-  memoryProcessedMessages.add(msgKey);
-  memoryEventTimestamps.set(msgKey, Date.now());
+  capDedupSet(memoryProcessedMessages, memoryEventTimestamps, msgKey);
   return false;
 }
 

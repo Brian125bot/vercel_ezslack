@@ -236,7 +236,8 @@ export const agentStore = {
       params.push(input.kind);
       sql += ` AND kind = $${params.length}`;
     }
-    sql += ` ORDER BY created_at DESC LIMIT ${input.limit || 50}`;
+    params.push(input.limit || 50);
+    sql += ` ORDER BY created_at DESC LIMIT $${params.length}`;
     return query<MemoryRecord>(sql, params);
   },
 
@@ -285,7 +286,10 @@ export const agentStore = {
       params.push(filter.status);
       sql += ` AND status = $${params.length}`;
     }
-    sql += ` ORDER BY created_at DESC LIMIT ${filter.limit || 50} OFFSET ${filter.offset || 0}`;
+    params.push(filter.limit || 50);
+    sql += ` ORDER BY created_at DESC LIMIT $${params.length}`;
+    params.push(filter.offset || 0);
+    sql += ` OFFSET $${params.length}`;
     return query<AgentRun>(sql, params);
   },
 
@@ -391,6 +395,15 @@ export const agentStore = {
     return rows[0];
   },
 
+  async incrementRunRetry(runId: string): Promise<AgentRun> {
+    const rows = await query<AgentRun>(
+      `UPDATE agent_runs SET retry_count = COALESCE(retry_count, 0) + 1, updated_at = now() WHERE id = $1 RETURNING *`,
+      [runId]
+    );
+    if (!rows.length) throw new Error(`Run ${runId} not found`);
+    return rows[0];
+  },
+
   async claimNextQueuedRun(workerId: string, leaseSeconds: number): Promise<AgentRun | null> {
     const rows = await query<AgentRun>(
       `UPDATE agent_runs 
@@ -435,7 +448,7 @@ export const agentStore = {
     return rows.length;
   },
 
-  async reapExpiredApprovals(): Promise<number> {
+  async reapExpiredApprovals(): Promise<ApprovalRequest[]> {
     const expired = await query<ApprovalRequest>(
       `UPDATE approval_requests SET status = 'expired', resolved_at = now()
        WHERE status = 'pending' AND expires_at < now()
@@ -464,12 +477,22 @@ export const agentStore = {
         payload: { title: approval.title }
       });
     }
-    return expired.length;
+    return expired;
   },
 
   async countRunningRuns(): Promise<number> {
     const rows = await query<{ count: number }>(`SELECT count(*) as count FROM agent_runs WHERE status = 'running'`);
     return Number(rows[0]?.count || 0);
+  },
+
+  async detectStuckRuns(leaseGraceSeconds: number): Promise<AgentRun[]> {
+    return query<AgentRun>(
+      `SELECT * FROM agent_runs
+       WHERE status = 'running'
+       AND lease_expires_at IS NOT NULL
+       AND lease_expires_at < now() - interval '1 second' * $1`,
+      [leaseGraceSeconds]
+    );
   },
 
   // ── W3-A: Update a step's input (e.g. inject generated content) ──
