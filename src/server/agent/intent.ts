@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { resolveModel } from './models.js';
 
 export type IntentCategory = 
   | 'direct_reply'
@@ -148,7 +149,7 @@ Respond with EXACTLY a JSON block matching this structure:
 Provide NO other text.`;
 
       const response = await ai.models.generateContent({
-        model: selectedModel,
+        model: resolveModel(selectedModel),
         contents: prompt,
         config: {
           responseMimeType: 'application/json'

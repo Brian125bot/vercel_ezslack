@@ -391,6 +391,15 @@ export const agentStore = {
     return rows[0];
   },
 
+  async incrementRunRetry(runId: string): Promise<AgentRun> {
+    const rows = await query<AgentRun>(
+      `UPDATE agent_runs SET retry_count = COALESCE(retry_count, 0) + 1, updated_at = now() WHERE id = $1 RETURNING *`,
+      [runId]
+    );
+    if (!rows.length) throw new Error(`Run ${runId} not found`);
+    return rows[0];
+  },
+
   async claimNextQueuedRun(workerId: string, leaseSeconds: number): Promise<AgentRun | null> {
     const rows = await query<AgentRun>(
       `UPDATE agent_runs 

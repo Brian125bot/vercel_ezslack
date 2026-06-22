@@ -2,6 +2,7 @@ import { GoogleGenAI, Type, Schema } from '@google/genai';
 import type { AgentPlanDraft, PlannedAgentStep } from './types.js';
 import { agentStore } from '../storage/agentStore.js';
 import { slog } from './log.js';
+import { resolveModel } from './models.js';
 
 interface MutationInstruction {
   action: 'add' | 'remove' | 'replace' | 'modify';
@@ -70,7 +71,7 @@ export async function mutatePlan(
 
   try {
     const response = await ai.models.generateContent({
-      model,
+      model: resolveModel(model),
       contents: `You are a plan mutation engine. A user wants to modify an AI agent plan.
 
 Goal: ${goal.title}

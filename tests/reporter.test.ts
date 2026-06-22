@@ -15,6 +15,20 @@ function makeTrace(overrides: Partial<AgentRunTrace> = {}): AgentRunTrace {
 }
 
 describe('Action-Aware Reporter', () => {
+  it('WS5: scopes the report to the latest plan iteration only', () => {
+    const old = new Date('2020-01-01T00:00:00Z');
+    const recent = new Date('2020-01-02T00:00:00Z');
+    const report = buildRunReport(makeTrace({
+      run: { id: 'r1', goal_id: 'g1', status: 'succeeded', model: 'test', plan_id: 'plan-2', created_at: new Date(), updated_at: new Date() } as any,
+      steps: [
+        { id: 's1', run_id: 'r1', plan_id: 'plan-1', order_index: 1, title: 'Stale failed step', status: 'failed', error: 'boom', input: {}, created_at: old } as any,
+        { id: 's2', run_id: 'r1', plan_id: 'plan-2', order_index: 1, title: 'Fresh good step', status: 'succeeded', input: {}, created_at: recent } as any,
+      ]
+    }));
+    expect(report).toContain('Fresh good step');
+    expect(report).not.toContain('Stale failed step');
+  });
+
   it('generates a report with success emoji for succeeded runs', () => {
     const report = buildRunReport(makeTrace());
     expect(report).toContain('✅');

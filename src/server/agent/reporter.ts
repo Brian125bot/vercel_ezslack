@@ -9,7 +9,18 @@ import type { ToolExecutionContext } from './types.js';
  * rather than just a generic status emoji.
  */
 export function buildRunReport(trace: AgentRunTrace): string {
-  const { run, goal, steps, toolCalls, approvals } = trace;
+  const { run, goal, toolCalls, approvals } = trace;
+
+  // WS5: report only the steps of the run's CURRENT (latest) plan iteration so
+  // abandoned earlier plans never show up as duplicate/failed noise.
+  const allSteps = trace.steps || [];
+  let targetPlanId: string | null | undefined = run.plan_id;
+  if (!targetPlanId && allSteps.length > 0) {
+    targetPlanId = allSteps.reduce((a, b) =>
+      new Date(a.created_at).getTime() >= new Date(b.created_at).getTime() ? a : b
+    ).plan_id;
+  }
+  const steps = targetPlanId ? allSteps.filter(s => s.plan_id === targetPlanId) : allSteps;
 
   const lines: string[] = [];
 

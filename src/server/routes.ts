@@ -8,6 +8,7 @@ import { SlackEventLog } from '../types.js';
 import { agentStore } from './storage/agentStore.js';
 import { isDbAvailable } from './storage/db.js';
 import { runAgentPipeline } from './agent/orchestrator.js';
+import { ALLOWED_MODELS } from './agent/models.js';
 
 export const router = express.Router();
 
@@ -87,7 +88,7 @@ router.get('/status', requireDashboardAuth, async (req, res) => {
 
 router.post('/model/select', requireDashboardAuth, (req, res) => {
   const { model } = req.body;
-  const allowed = ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  const allowed = ALLOWED_MODELS as readonly string[];
   if (!allowed.includes(model)) {
     return res.status(400).json({ error: 'Unsupported or unreleased model selection ID.' });
   }

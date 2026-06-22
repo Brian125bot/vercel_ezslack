@@ -210,5 +210,12 @@ export const migrations = [
       CREATE INDEX IF NOT EXISTS idx_slack_event_logs_created ON slack_event_logs(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_processed_events_created ON processed_events(created_at);
     `
+  },
+  {
+    version: 4,
+    name: 'run_retry_count',
+    sql: `
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS retry_count integer NOT NULL DEFAULT 0;
+    `
   }
 ];

@@ -1,6 +1,9 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import type { AgentPlanDraft } from './types.js';
 import { toolsRegistry } from '../tools/registry.js';
+import { normalizePlanDraft } from './planNormalize.js';
+import { resolveModel } from './models.js';
+import { slog } from './log.js';
 
 export async function createPlan(goalTitle: string, originalInstruction: string, selectedModel: string, contextBlock?: string): Promise<AgentPlanDraft> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -9,6 +12,7 @@ export async function createPlan(goalTitle: string, originalInstruction: string,
   }
 
   const ai = new GoogleGenAI({ apiKey });
+  const model = resolveModel(selectedModel);
 
   const responseSchema: Schema = {
     type: Type.OBJECT,
@@ -39,6 +43,7 @@ export async function createPlan(goalTitle: string, originalInstruction: string,
   const toolDescriptions = allTools
     .map(t => `- ${t.name} (risk: ${t.riskLevel}) — ${t.description}`)
     .join('\n');
+  const toolNames = allTools.map(t => t.name).join(', ');
 
   let prompt = `
 You are an AI agent planning a response to:
@@ -51,7 +56,7 @@ Instruction: ${originalInstruction}
   }
 
   prompt += `
-Available tools:
+Available tools (these are the ONLY tools that exist):
 ${toolDescriptions}
 
 Step kinds:
@@ -61,15 +66,15 @@ Step kinds:
 
 Planning rules:
 1. Generate a 1-5 step plan. Prefer "generate" kind when the final reply needs content that depends on tool outputs from earlier steps (e.g. search results, memory lookups). Follow a "generate" step with a "slack.replyInThread" step — the reply text will be auto-injected from the generated output.
-2. You MUST fully populate each step's \`input\` object using the information from the context.
-3. For "tool" steps, include \`kind: "tool"\` (or omit kind), set \`toolName\`, and set \`input\`.
-4. If a step requires an external tool not listed above, set riskLevel="external_write" and requiresApproval=true, and describe the action in the step title without a toolName.
-5. Otherwise, use riskLevel="internal_write" or "read" or "draft".
+2. You MUST fully populate each step's \`input\` object using the information from the context. For "generate" steps, ALWAYS set \`input.prompt\`.
+3. For "tool" steps, include \`kind: "tool"\`, set \`toolName\` to one of EXACTLY these names: ${toolNames}. Do NOT invent tool names.
+4. If the task needs an action for which no tool exists above, do NOT fabricate a tool. Instead use a "generate" step to draft the content and a "slack.replyInThread" step to tell the user what was prepared and that the action could not be executed automatically.
+5. Set riskLevel to one of: read, draft, internal_write, external_write. Set requiresApproval=true ONLY if a step uses an external_write tool.
 `;
 
   try {
     const response = await ai.models.generateContent({
-      model: selectedModel,
+      model,
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -78,29 +83,10 @@ Planning rules:
     });
 
     if (response.text) {
-      const plan = JSON.parse(response.text) as AgentPlanDraft;
-      if (!plan.riskLevel) plan.riskLevel = 'internal_write';
-      
-      // Validate tool names against the live registry
-      if (plan.steps) {
-        plan.steps = plan.steps.map(step => {
-          // If kind is generate or note, no tool needed
-          if (step.kind === 'generate' || step.kind === 'note') {
-            step.toolName = undefined;
-            return step;
-          }
-          // Default kind to 'tool' if toolName is specified
-          if (step.toolName) {
-            step.kind = step.kind || 'tool';
-            if (!toolsRegistry.get(step.toolName)) {
-              console.warn(`Planner generated unknown toolName: ${step.toolName}. Redacting for safety.`);
-              step.toolName = undefined;
-              plan.requiresApproval = true;
-              plan.riskLevel = 'external_write';
-            }
-          }
-          return step;
-        });
+      const raw = JSON.parse(response.text) as AgentPlanDraft;
+      const { plan, redactedTools } = normalizePlanDraft(raw, toolsRegistry);
+      if (redactedTools.length > 0) {
+        slog('planner', 'tools_redacted', { tools: redactedTools });
       }
       return plan;
     }
