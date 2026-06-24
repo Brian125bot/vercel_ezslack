@@ -55,9 +55,7 @@ function computeNextRunAt(
 /**
  * Poll the `scheduled_triggers` table for due triggers, enqueue new runs.
  */
-async function pollScheduledTriggers(): Promise<void> {
-  if (isShuttingDown) return;
-
+export async function pollScheduledTriggers(): Promise<void> {
   try {
     const dueTriggers = await agentStore.getDueScheduledTriggers();
     
@@ -100,6 +98,11 @@ async function pollScheduledTriggers(): Promise<void> {
         await agentStore.updateGoalStatus(goal.id, 'running');
 
         slog('scheduler', 'trigger.fired', { trigger_id: trigger.id, run_id: run.id, next_run_at: nextRunAt?.toISOString() });
+        
+        // IMPORTANT: Enqueue the task immediately to Cloud Tasks
+        const { enqueueRunTask } = await import('./taskClient.js');
+        await enqueueRunTask(run.id);
+        
       } catch (err: any) {
         slog('scheduler', 'trigger.error', { trigger_id: trigger.id, error: err.message });
         // Trigger was already deleted by the atomic claim, so broken triggers
@@ -111,19 +114,11 @@ async function pollScheduledTriggers(): Promise<void> {
   }
 }
 
+// Stubs to avoid breaking server.ts
 export function startScheduler(): void {
-  if (schedulerInterval) return;
-  isShuttingDown = false;
-  slog('scheduler', 'started', { pollIntervalMs: POLL_INTERVAL_MS });
-  pollScheduledTriggers(); // initial poll
-  schedulerInterval = setInterval(pollScheduledTriggers, POLL_INTERVAL_MS);
+  slog('scheduler', 'started', { mode: 'cloud-tasks' });
 }
 
 export function stopScheduler(): void {
-  isShuttingDown = true;
-  if (schedulerInterval) {
-    clearInterval(schedulerInterval);
-    schedulerInterval = undefined;
-  }
-  slog('scheduler', 'stopped', {});
+  slog('scheduler', 'stopped', { mode: 'cloud-tasks' });
 }

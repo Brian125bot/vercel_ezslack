@@ -2,6 +2,7 @@ import { agentStore } from '../../storage/agentStore.js';
 import { slackReplyInThreadTool } from '../../tools/slack.js';
 import type { AgentPipelineInput, AgentPipelineResult, ToolExecutionContext } from '../types.js';
 import { detectDeferral } from '../deferral.js';
+import { enqueueRunTask } from '../taskClient.js';
 
 export async function handleDurableTask(
   input: AgentPipelineInput,
@@ -89,6 +90,9 @@ export async function handleDurableTask(
       summary: 'Run enqueued for worker processing',
       payload: {}
     });
+
+    // Fire the run to Cloud Tasks (doesn't block)
+    await enqueueRunTask(run.id);
 
     await slackReplyInThreadTool.execute({
       text: `I have accepted your goal: "${goal.title}". Analyzing constraints and drafting a plan...`

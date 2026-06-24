@@ -15,7 +15,7 @@ dotenv.config();
 
 const app = express();
 app.set('trust proxy', 1);
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000');
 
 // Security: Expose minimal server information
 app.disable('x-powered-by');

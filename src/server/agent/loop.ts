@@ -7,8 +7,8 @@ import { finalizeRun } from './finalize.js';
 import { verifyRun } from './verifier.js';
 import { verifySemantically } from './semanticVerifier.js';
 import { slog } from './log.js';
-import { LEASE_SECONDS } from './worker.js';
 
+const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
 const MAX_ITERATIONS = 3;
 const MAX_TRANSIENT_RETRIES = 1;
 const LEASE_HEARTBEAT_MS = 60_000; // Renew lease every 60 seconds
@@ -114,17 +114,23 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
 
         // Post Block Kit approval message to Slack (previously missing for plan-level)
         const { postApprovalBlockKit } = await import('../tools/slack.js');
-        await postApprovalBlockKit(approval, {
-          runId: run.id,
-          stepId: '',
-          workspaceId: goal.workspace_id,
-          channelId: goal.source_channel_id || '',
-          userId: goal.created_by_user_id,
-          messageTs: goal.source_message_ts || '',
-          threadTs: goal.source_thread_ts || ''
-        });
+        try {
+          await postApprovalBlockKit(approval, {
+            runId: run.id,
+            stepId: '',
+            workspaceId: goal.workspace_id,
+            channelId: goal.source_channel_id || '',
+            userId: goal.created_by_user_id,
+            messageTs: goal.source_message_ts || '',
+            threadTs: goal.source_thread_ts || ''
+          });
 
-        await agentStore.updateRunStatus(run.id, 'awaiting_approval', { plan_id: planId });
+          await agentStore.updateRunStatus(run.id, 'awaiting_approval', { plan_id: planId });
+        } catch (err: any) {
+          slog('loop', 'postApprovalBlockKit.error', { run_id: run.id, err: err.message });
+          await agentStore.updateApprovalStatus(approval.id, 'failed');
+          throw new Error(`Failed to post plan approval to Slack: ${err.message}`);
+        }
         clearInterval(leaseHeartbeat);
         return; // Yield
       }

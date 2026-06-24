@@ -2,6 +2,7 @@ import type { AgentRun, AgentStep } from '../storage/types.js';
 import { agentStore } from '../storage/agentStore.js';
 import { toolsRegistry } from '../tools/registry.js';
 import { checkPolicy } from './policy.js';
+import { slog } from './log.js';
 import type { ToolExecutionContext, StepKind } from './types.js';
 import { geminiCall } from './geminiClient.js';
 import { resolveModel } from './models.js';
@@ -245,22 +246,30 @@ export async function executeStep(
         expires_at: new Date(Date.now() + 30 * 60 * 1000)
       });
 
-      // Post interactive Block Kit approval message
-      await postApprovalBlockKit(approval, context);
+      try {
+        // Post interactive Block Kit approval message
+        await postApprovalBlockKit(approval, context);
 
-      await agentStore.appendAuditEvent({
-        workspace_id: context.workspaceId,
-        goal_id: run.goal_id,
-        run_id: run.id,
-        step_id: step.id,
-        type: 'approval.requested',
-        actor: 'system',
-        summary: `Approval requested for tool ${tool.name} due to ${policy.reason}`,
-        payload: { approvalId: approval.id }
-      });
+        await agentStore.appendAuditEvent({
+          workspace_id: context.workspaceId,
+          goal_id: run.goal_id,
+          run_id: run.id,
+          step_id: step.id,
+          type: 'approval.requested',
+          actor: 'system',
+          summary: `Approval requested for tool ${tool.name} due to ${policy.reason}`,
+          payload: { approvalId: approval.id }
+        });
 
-      await agentStore.updateToolCallStatus(toolCall.id, 'requires_approval', { approval_id: approval.id, error: policy.reason });
-      await agentStore.updateStepStatus(step.id, 'blocked', { error: policy.reason });
+        await agentStore.updateToolCallStatus(toolCall.id, 'requires_approval', { approval_id: approval.id, error: policy.reason });
+        await agentStore.updateStepStatus(step.id, 'blocked', { error: policy.reason });
+      } catch (err: any) {
+        slog('executor', 'postApprovalBlockKit.error', { run_id: run.id, step_id: step.id, err: err.message });
+        await agentStore.updateApprovalStatus(approval.id, 'failed');
+        await agentStore.updateToolCallStatus(toolCall.id, 'failed', { error: `Failed to post approval to Slack: ${err.message}` });
+        await agentStore.updateStepStatus(step.id, 'failed', { error: `Failed to post approval to Slack: ${err.message}` });
+        throw err;
+      }
     } else {
       await agentStore.appendAuditEvent({
         workspace_id: context.workspaceId,
