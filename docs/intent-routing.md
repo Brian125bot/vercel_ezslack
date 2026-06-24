@@ -116,6 +116,8 @@ modifies pending steps rather than cancelling the entire run.
 ## Scheduled Triggers (W4-A)
 
 Goals can have associated `scheduled_triggers` with cron expressions or
-interval_seconds. The scheduler polls every 15 seconds, creates new runs
-for due triggers, and computes the next run time. Scheduled runs inherit
-the model from the goal's most recent run.
+interval_seconds. The scheduler is triggered on-demand via a POST request to
+`/api/internal/scheduler/poll` (which can be called periodically by Google Cloud
+Scheduler or another cron utility). It checks for due triggers, creates new runs,
+and enqueues them via Google Cloud Tasks. Scheduled runs inherit the model from the
+goal's most recent run.

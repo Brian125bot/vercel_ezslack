@@ -292,13 +292,13 @@ Supported patterns:
 
 ### Scheduled Triggers Poller
 
-- Triggered on-demand via Google Cloud Tasks polling mechanism.
+- Triggered on-demand via the scheduler poll webhook endpoint.
 - Atomic `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *` prevents double-firing.
 - Recurring triggers (cron/interval): re-inserted with next run time after claim.
 - One-shot triggers: not re-inserted after firing.
 - `cron-parser` (v5) for full cron expression support.
 - Scheduled runs inherit the model from the goal's most recent run.
-- Starts alongside the worker in `server.ts`; gracefully stops on SIGTERM/SIGINT.
+- Lifecycle is handled on-demand via HTTP webhooks, replacing persistent setInterval polling loops.
 
 ---
 
@@ -457,8 +457,9 @@ steps:
 │       │   ├── reporter.ts           # Action-aware Slack run reports
 │       │   ├── policy.ts             # Risk-level policy gate
 │       │   ├── sanitize.ts           # Secret detection and redaction
-│       │   ├── worker.ts             # Background queue poller
-│       │   ├── scheduler.ts          # Scheduled trigger poller (15s)
+│       │   ├── worker.ts             # Webhook execution handler (formerly queue poller)
+│       │   ├── scheduler.ts          # Scheduled trigger processor (formerly trigger poller)
+│       │   ├── taskClient.ts         # Google Cloud Tasks client wrapper
 │       │   ├── deferral.ts           # Time-deferred language detection
 │       │   ├── planMutation.ts       # NL plan modification via Gemini
 │       │   ├── log.ts                # Structured logging utility
@@ -525,7 +526,7 @@ steps:
 | Variable | Description |
 |----------|-------------|
 | `DASHBOARD_PASSWORD` | Password for the admin dashboard |
-| `APP_URL` | Public URL (for self-referential links) |
+| `APP_URL` | Public URL of the app (required for Google Cloud Tasks webhook callbacks) |
 | `GITHUB_TOKEN` | Enables the GitHub Issue adapter |
 | `EMAIL_WEBHOOK_URL` | Enables the Email adapter |
 
@@ -548,6 +549,18 @@ Enable the API and create your worker queue:
 gcloud services enable cloudtasks.googleapis.com
 gcloud tasks queues create slack-agent-queue --location="us-west1"
 ```
+
+### Step 0.5: Provision Cloud Scheduler (for scheduled tasks)
+Since the local `setInterval` loops are decommissioned, you must configure a scheduler to invoke the polling endpoint `/api/internal/scheduler/poll` periodically (e.g. every minute):
+```bash
+gcloud scheduler jobs create http slack-agent-scheduler-poll \
+  --schedule="* * * * *" \
+  --uri="https://YOUR_APP_URL/api/internal/scheduler/poll" \
+  --http-method=POST \
+  --headers="Authorization=Bearer YOUR_INTERNAL_API_SECRET,Content-Type=application/json" \
+  --location="us-west1"
+```
+Ensure `YOUR_INTERNAL_API_SECRET` matches the value deployed in the Cloud Run service environment variables.
 
 ### Option 1: Cloud Buildpacks (Source Deploy)
 ```bash
@@ -585,8 +598,8 @@ gcloud builds triggers run <TRIGGER_ID> --branch=main --project=<PROJECT_ID>
 ### Lifecycle
 
 ```
-Start: migrations → startWorker() → startScheduler() → listen(:3000)
-Stop:  SIGTERM → stopWorker() → stopScheduler() → drain HTTP → closeDb() → exit
+Start: migrations → worker/scheduler stubs initialized → listen(:3000)
+Stop:  SIGTERM → worker/scheduler stubs shutdown → drain HTTP → closeDb() → exit
 ```
 
 ---
@@ -666,3 +679,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v3.0.0 | ✅ Done | Weeks 3–4: Real-World Action, Autonomy & Hardening |
 | v3.0.1 | ✅ Done | Pre-merge QA Bug Fixes (3 security/correctness) |
 | v3.1.0 | ✅ Done | Final DoD Gaps: Deferral, Plan Mutation, Loop Tests |
+| v5.0.0 | ✅ Done | Google Cloud Tasks migration, error boundary hardening, and reporting resilience |

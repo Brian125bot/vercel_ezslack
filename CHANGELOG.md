@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0] - Google Cloud Tasks Migration & Resilience Hardening - 2026-06-24
+
+Migrates the background processing system to Google Cloud Tasks for serverless task execution and hardens error boundaries for Slack API calls (approvals and reports).
+
+### 🚀 Features & Infrastructure
+* **Google Cloud Tasks Integration:** Replaced legacy in-memory `setInterval` polling loops in `worker.ts` and `scheduler.ts` with serverless executions triggered by Google Cloud Tasks webhooks.
+  * Added `src/server/agent/taskClient.ts` to enqueue task execution requests to Google Cloud Tasks.
+  * Exposed authenticated internal webhook endpoints: `POST /api/internal/worker/execute` for running tasks and `POST /api/internal/scheduler/poll` for evaluating scheduled triggers.
+  * Added configuration environment variables: `GCP_PROJECT_ID`, `GCP_LOCATION`, `CLOUD_TASKS_QUEUE_NAME`, and `INTERNAL_API_SECRET`.
+  * Decommissioned `setInterval` tasks in the worker and scheduler, keeping lifecycle hooks as lightweight stubs.
+
+### 🛡️ Error Handling & Hardening
+* **Slack Approval Posting Safety:** Wrapped `postApprovalBlockKit` in try-catch in both the plan loop (`loop.ts`) and step execution (`executor.ts`). If posting to Slack fails (e.g. invalid message TS, slack timeout), the approval is marked as `failed` in the database, and the run fails with a user-facing Slack message instead of hanging indefinitely.
+* **Slack Reporting Resilience:** Wrapped final `reportRunResult` in a try-catch block inside `finalize.ts`. If posting the rich execution report fails, it falls back to a simpler status notification and logs details via `slog` at the error level to prevent silent run execution hangs.
+
+### 🐛 Bug Fixes
+* Fixed concurrency issues where multi-instance deployments could double-claim or clash on runs by delegating scheduling and execution orchestration entirely to Cloud Tasks queues.
+
 ## [4.4.0] - Agentic base fixes (multistep & planning reliability) - 2026-06-22
 
 Fixes the durable-task plan-and-execute pipeline, which frequently failed on

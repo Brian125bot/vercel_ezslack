@@ -46,7 +46,7 @@ To provide a secure, reliable, and intelligent AI agent platform that enhances S
 │  │ direct_reply  durable_task                status_query      │   │
 │  │ approval_response  cancel_or_update                        │   │
 │  │                                                           │   │
-│  │    └──► Worker Queue ──► Agent Pipeline ──► Response      │   │
+│  │    └──► Google Cloud Tasks ──► Webhook ──► Agent Loop     │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
@@ -69,7 +69,7 @@ To provide a secure, reliable, and intelligent AI agent platform that enhances S
 - **Security:** Helmet, CORS, Rate limiting
 - **Middleware:** JSON parsing with raw body preservation
 - **Graceful Shutdown:** Handles SIGTERM/SIGINT signals
-- **Lifecycle:** Database migrations → Worker start → Scheduler start → HTTP listener
+- **Lifecycle:** Database migrations → worker/scheduler stubs initialized → HTTP listener
 
 #### 2. **Intent Classification System** (`src/server/agent/intent.ts`)
 Six distinct intent categories:
@@ -159,8 +159,9 @@ slackcloud/
 │       │   ├── verifier.ts           # Rule-based verification
 │       │   ├── semanticVerifier.ts   # LLM-based verification
 │       │   ├── loop.ts               # Closed loop system
-│       │   ├── worker.ts             # Background queue poller
-│       │   ├── scheduler.ts          # Scheduled trigger poller
+│       │   ├── worker.ts             # Webhook execution handler (formerly queue poller)
+│       │   ├── scheduler.ts          # Scheduled trigger processor (formerly trigger poller)
+│       │   ├── taskClient.ts         # Google Cloud Tasks client wrapper
 │       │   └── policy.ts             # Risk-level policy gate
 │       ├── storage/
 │       │   ├── schema.ts             # Migration SQL definitions
@@ -219,9 +220,9 @@ slackcloud/
 - **CI/CD Integration:** Automated testing before deployment
 
 ### 6. **Scalability Features**
-- FOR UPDATE SKIP LOCKED for concurrent instance safety
-- Configurable poll intervals and lease TTLs
-- Resource-aware execution
+- Google Cloud Tasks integration for serverless, resource-efficient background execution
+- Native retry, backoff, and concurrency management by Google Cloud Tasks
+- FOR UPDATE SKIP LOCKED as a concurrency fallback for synchronous paths
 - Graceful shutdown handling
 
 ---
@@ -236,13 +237,17 @@ SLACK_SIGNING_SECRET=your-signing-secret
 DASHBOARD_PASSWORD=secure-admin-password
 ```
 
-### Optional Variables
+### Optional & Cloud Tasks Variables
 ```bash
-APP_URL=https://your-app.run.app
-GITHUB_TOKEN=ghp_your_github_token
-EMAIL_WEBHOOK_URL=https://your-webhook.com
-DATABASE_URL=postgresql://user:pass@host:port/db
-CLOUD_SQL_CONNECTION_NAME=project:region:instance
+APP_URL=https://your-app.run.app                      # Required for Cloud Tasks webhook routing
+GCP_PROJECT_ID=your-gcp-project-id                    # Required for Google Cloud Tasks integration
+GCP_LOCATION=us-west1                                 # Optional, default: us-west1
+CLOUD_TASKS_QUEUE_NAME=slack-agent-queue              # Optional, default: slack-agent-queue
+INTERNAL_API_SECRET=your-internal-secret              # Required for authenticating internal webhooks
+GITHUB_TOKEN=ghp_your_github_token                    # Optional, enables GitHub Issue adapter
+EMAIL_WEBHOOK_URL=https://your-webhook.com            # Optional, enables Email adapter
+DATABASE_URL=postgresql://user:pass@host:port/db      # Optional database params
+CLOUD_SQL_CONNECTION_NAME=project:region:instance     # Optional Cloud SQL param
 ```
 
 ### Database Schema
@@ -378,7 +383,8 @@ GET /api/health
 ✅ **v2.0.0:** Trust & correctness, agent loop foundation  
 ✅ **v2.1.0:** CI/CD pipeline, Node 22, repo cleanup  
 ✅ **v3.0.0:** Real-world actions, autonomy & hardening  
-✅ **v3.1.0:** Final gaps: deferral, plan mutation, loop tests
+✅ **v3.1.0:** Final gaps: deferral, plan mutation, loop tests  
+✅ **v5.0.0:** Google Cloud Tasks migration, error boundary hardening, and reporting resilience
 
 ### Current Capabilities
 ✅ Production-ready deployment  
@@ -410,6 +416,8 @@ GET /api/health
 | GET | `/api/agent/runs/:id` | Run details |
 | GET | `/api/agent/memory` | Search memory |
 | GET | `/api/agent/audit` | Audit events |
+| POST | `/api/internal/worker/execute` | Internal Cloud Tasks webhook for executing runs (auth required) |
+| POST | `/api/internal/scheduler/poll` | Internal Cloud Tasks/Scheduler webhook for scheduled triggers (auth required) |
 
 ### Key Components
 - **Server:** `server.ts`

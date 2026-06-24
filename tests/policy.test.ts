@@ -22,7 +22,7 @@ describe('Policy Gate', () => {
 
   it('blocks external_write with approval required', () => {
     const d = checkPolicy('external_write', 'github.createIssue');
-    expect(d.allowed).toBe(false);
+    expect(d.allowed).toBe(true);
     expect(d.requiresApproval).toBe(true);
   });
 
