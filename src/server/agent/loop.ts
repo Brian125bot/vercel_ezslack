@@ -226,6 +226,8 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
         claimed_by: null, claimed_at: null, lease_expires_at: null,
         failure_reason: ruleVerify.reasons.join(', ')
       });
+      const { enqueueRunTask } = await import('./taskClient.js');
+      await enqueueRunTask(run.id);
       return;
     } else {
       // Genuine miss -> replan from scratch (new plan next iteration).
@@ -244,6 +246,8 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
         plan_id: null, // Clear plan to force fresh plan creation
         failure_reason: reason
       });
+      const { enqueueRunTask } = await import('./taskClient.js');
+      await enqueueRunTask(run.id);
       return; // Let the worker pick it up on next cycle
     }
 

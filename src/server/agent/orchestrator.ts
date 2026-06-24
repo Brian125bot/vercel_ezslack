@@ -27,6 +27,9 @@ export async function resumeAgentPipeline(runId: string): Promise<void> {
     summary: 'Run re-queued to resume processing',
     payload: {}
   });
+
+  const { enqueueRunTask } = await import('./taskClient.js');
+  await enqueueRunTask(run.id);
 }
 
 export async function runAgentPipeline(input: AgentPipelineInput): Promise<AgentPipelineResult> {
