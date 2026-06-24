@@ -210,6 +210,15 @@ export const agentStore = {
     return rows[0];
   },
 
+  async updateApprovalStatus(id: string, status: string): Promise<ApprovalRequest> {
+    const rows = await query<ApprovalRequest>(
+      `UPDATE approval_requests SET status = $2 WHERE id = $1 RETURNING *`,
+      [id, status]
+    );
+    if (!rows.length) throw new Error(`Approval ${id} not found`);
+    return rows[0];
+  },
+
   async writeMemory(input: CreateMemoryInput): Promise<MemoryRecord> {
     const id = crypto.randomUUID();
     const sanitizedContent = sanitizePayload(input.content);

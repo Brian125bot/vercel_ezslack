@@ -3,40 +3,12 @@ import { runLoop } from './loop.js';
 import { slog } from './log.js';
 import { finalizeRun } from './finalize.js';
 
-let workerInterval: any;
-let isShuttingDown = false;
 const inFlightRuns = new Set<string>();
 export const MAX_CONCURRENT = parseInt(process.env.WORKER_MAX_CONCURRENT || '2');
-export const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
-
-const STUCK_GRACE_SECONDS = LEASE_SECONDS + 300; // 5 min lease + 5 min grace = 10 min total
-
-async function detectAndRecoverStuckRuns(): Promise<void> {
-  try {
-    const stuckRuns = await agentStore.detectStuckRuns(STUCK_GRACE_SECONDS);
-    for (const run of stuckRuns) {
-      // Skip runs that are currently being processed by this worker instance
-      if (inFlightRuns.has(run.id)) continue;
-
-      slog('worker', 'stuck_run_detected', { run_id: run.id, claimed_by: run.claimed_by });
-      try {
-        await finalizeRun(run, 'failed', 'Run exceeded lease and was not renewed — likely crashed.');
-      } catch (err: any) {
-        slog('worker', 'stuck_run_finalize_failed', { run_id: run.id, error: err.message });
-      }
-    }
-  } catch (err: any) {
-    slog('worker', 'stuck_run_detection_failed', { error: err.message });
-  }
-}
 
 export async function processQueue() {
-  if (isShuttingDown) return;
-  
   try {
-    await agentStore.recoverStaleClaims();
     const expiredApprovals = await agentStore.reapExpiredApprovals();
-    await detectAndRecoverStuckRuns();
 
     // Notify users about expired approvals
     for (const approval of expiredApprovals) {
@@ -58,11 +30,13 @@ export async function processQueue() {
       }
     }
     
+    // Process up to MAX_CONCURRENT runs (usually 1 if triggered by a single task)
     while (inFlightRuns.size < MAX_CONCURRENT) {
-      if (isShuttingDown) break;
-
       const workerId = `worker-${process.pid}-${crypto.randomUUID()}`;
-      const run = await agentStore.claimNextQueuedRun(workerId, LEASE_SECONDS);
+      
+      // We don't use LEASE_SECONDS anymore for lock expiry, but we pass an arbitrary time 
+      // since Cloud Tasks handles the timeout and retries now.
+      const run = await agentStore.claimNextQueuedRun(workerId, 3600);
       
       if (!run) {
         break; // No more queued runs
@@ -70,35 +44,31 @@ export async function processQueue() {
 
       inFlightRuns.add(run.id);
       
-      // Fire and forget, but handle errors
-      runLoop(run, workerId).catch(async (err) => {
+      // Execute synchronously or in background, but we need to await it for Cloud Tasks
+      try {
+        await runLoop(run, workerId);
+      } catch (err: any) {
         slog('worker', 'runLoop.error', { run_id: run.id, error: err.message });
         try {
           await finalizeRun(run, 'failed', err.message);
         } catch (finalizeErr: any) {
           slog('worker', 'finalizeRun.error', { run_id: run.id, error: finalizeErr.message });
         }
-      }).finally(() => {
+      } finally {
         inFlightRuns.delete(run.id);
-      });
+      }
     }
   } catch (err: any) {
     slog('worker', 'processQueue.error', { error: err.message });
   }
 }
 
+// Stubs to avoid breaking imports in server.ts
 export function startWorker() {
-  if (workerInterval) return;
-  slog('worker', 'started', { maxConcurrent: MAX_CONCURRENT });
-  processQueue(); // initial run
-  workerInterval = setInterval(processQueue, 2000); // Check every 2 seconds
+  slog('worker', 'started', { mode: 'cloud-tasks' });
 }
 
 export function stopWorker() {
-  isShuttingDown = true;
-  if (workerInterval) {
-    clearInterval(workerInterval);
-    workerInterval = undefined;
-  }
-  slog('worker', 'stopped', {});
+  slog('worker', 'stopped', { mode: 'cloud-tasks' });
 }
+

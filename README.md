@@ -66,9 +66,9 @@ Designed specifically to run under the strict timeout requirements of Slack API 
 │            │          └──┬───────┬───┘                       │         │
 │            │         now │       │ later                     │         │
 │            │             ▼       ▼                           │         │
-│            │     Worker Queue  Scheduler                     │         │
-│            │             │      (15s poll)                   │         │
-│            │             ▼                                   │         │
+│            │        Google Cloud Tasks                       │         │
+│            │             │                                   │         │
+│            │             ▼ Webhooks                          │         │
 │            │     ┌──────────────────────────────────┐        │         │
 │            │     │ CLOSED LOOP (max 3 iterations)   │        │         │
 │            │     │                                  │        │         │
@@ -292,13 +292,13 @@ Supported patterns:
 
 ### Scheduled Triggers Poller
 
-- Polls every 15 seconds via `setInterval`
-- Atomic `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *` prevents double-firing
-- Recurring triggers (cron/interval): re-inserted with next run time after claim
-- One-shot triggers: not re-inserted after firing
-- `cron-parser` (v5) for full cron expression support (graceful fallback if parsing fails)
-- Scheduled runs inherit the model from the goal's most recent run
-- Starts alongside the worker in `server.ts`; gracefully stops on SIGTERM/SIGINT
+- Triggered on-demand via Google Cloud Tasks polling mechanism.
+- Atomic `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *` prevents double-firing.
+- Recurring triggers (cron/interval): re-inserted with next run time after claim.
+- One-shot triggers: not re-inserted after firing.
+- `cron-parser` (v5) for full cron expression support.
+- Scheduled runs inherit the model from the goal's most recent run.
+- Starts alongside the worker in `server.ts`; gracefully stops on SIGTERM/SIGINT.
 
 ---
 
@@ -337,14 +337,17 @@ Migrations are defined in `src/server/storage/schema.ts` and executed by `src/se
 
 ## ⚙️ Worker & Queue
 
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Poll interval | 2,000ms | How often the worker checks for queued runs |
-| Lease TTL | 300s (5 min) | Lock duration per claimed run |
-| Max concurrent | 2 | Runs per Cloud Run instance |
-| Claim pattern | `FOR UPDATE SKIP LOCKED` | Atomic, multi-instance safe |
-| Stale recovery | Per poll cycle | `recoverStaleClaims()` at start of each cycle |
-| Max iterations | 3 | Replan/retry limit per run |
+The background processing system has been migrated to **Google Cloud Tasks**, replacing the legacy `setInterval` polling loops. This transition enables true serverless execution without continuous CPU usage, saving resources on Cloud Run.
+
+| Mechanism | Description |
+|-----------|-------------|
+| **Execution** | Cloud Tasks triggers HTTP webhooks (`/api/internal/worker/execute`) |
+| **Scheduling** | Cloud Tasks triggers the polling webhook (`/api/internal/scheduler/poll`) |
+| **Max concurrent** | Tunable via Cloud Tasks queue configuration |
+| **Retry & Backoff** | Handled natively by Cloud Tasks |
+| **Security** | Webhooks secured via `INTERNAL_API_SECRET` Bearer token |
+
+*Note: The old `FOR UPDATE SKIP LOCKED` logic remains as a concurrency fallback for synchronous paths, but polling is entirely handled by Cloud Tasks.*
 
 ---
 
@@ -526,9 +529,25 @@ steps:
 | `GITHUB_TOKEN` | Enables the GitHub Issue adapter |
 | `EMAIL_WEBHOOK_URL` | Enables the Email adapter |
 
+### Cloud Tasks Configuration
+
+| Variable | Description |
+|----------|-------------|
+| `GCP_PROJECT_ID` | Your Google Cloud Project ID |
+| `GCP_LOCATION` | Region of your queue (e.g. `us-west1`) |
+| `CLOUD_TASKS_QUEUE_NAME` | The exact name of your provisioned queue |
+| `INTERNAL_API_SECRET` | Secure cryptographic string for webhook authentication |
+
 ---
 
 ## 🐳 Deployment
+
+### Step 0: Provision Cloud Tasks
+Enable the API and create your worker queue:
+```bash
+gcloud services enable cloudtasks.googleapis.com
+gcloud tasks queues create slack-agent-queue --location="us-west1"
+```
 
 ### Option 1: Cloud Buildpacks (Source Deploy)
 ```bash

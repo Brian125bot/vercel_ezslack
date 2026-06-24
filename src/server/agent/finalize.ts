@@ -36,7 +36,7 @@ export async function finalizeRun(run: AgentRun, finalState: 'succeeded' | 'fail
     
     if (goal.source_channel_id) {
       const trace = await agentStore.getRunTrace(run.id);
-      await reportRunResult(trace, {
+      const executionContext = {
         runId: run.id,
         stepId: 'final',
         workspaceId: goal.workspace_id,
@@ -44,9 +44,30 @@ export async function finalizeRun(run: AgentRun, finalState: 'succeeded' | 'fail
         userId: goal.created_by_user_id,
         messageTs: goal.source_message_ts || '',
         threadTs: goal.source_thread_ts || ''
-      });
+      };
+
+      try {
+        await reportRunResult(trace, executionContext);
+      } catch (reportErr: any) {
+        slog('finalize', 'reportRunResult.error', { err: reportErr.message, run_id: run.id });
+        
+        // Fallback to simpler status report if rich report fails
+        try {
+          const { reportStatus } = await import('./reporter.js');
+          await reportStatus(
+            finalState === 'succeeded' ? 'completed' : finalState as any, 
+            `Run finished with status: ${finalState}. (Detailed report failed to send)`, 
+            executionContext
+          );
+        } catch (fallbackErr: any) {
+          slog('finalize', 'reportStatus.fallback.error', { err: fallbackErr.message, run_id: run.id });
+          await agentStore.updateRunStatus(run.id, finalState, { 
+            failure_reason: `Completed but failed to report to Slack: ${fallbackErr.message}` 
+          });
+        }
+      }
     }
   } catch (err: any) {
-    slog('finalize', 'report.error', { err: err.message, run_id: run.id });
+    slog('finalize', 'fatal.error', { err: err.message, run_id: run.id });
   }
 }
