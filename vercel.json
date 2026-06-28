@@ -2,7 +2,7 @@
   "version": 2,
   "rewrites": [
     {
-      "source": "/api/:path((?!workflows|cron).*)",
+      "source": "/api/:route(status|model|logs|agent|slack|health)/:path*",
       "destination": "/api/index.ts"
     },
     {
