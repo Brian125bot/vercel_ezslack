@@ -53,6 +53,23 @@ app.use(express.json({
 // Slack interactivity sends URL-encoded payloads
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
+// Lazy migration runner for Vercel serverless environment
+let vercelMigrationsPromise: Promise<void> | null = null;
+app.use((req, res, next) => {
+  if (process.env.VERCEL === '1' && !vercelMigrationsPromise && process.env.DATABASE_URL) {
+    vercelMigrationsPromise = runMigrations().catch(err => {
+      console.error('[Vercel Boot] Lazy database migrations failed:', err);
+      vercelMigrationsPromise = null; // Reset promise to retry on next request
+    });
+  }
+
+  if (vercelMigrationsPromise) {
+    vercelMigrationsPromise.then(() => next()).catch(() => next());
+  } else {
+    next();
+  }
+});
+
 // Mount API routes
 app.use('/api', apiRoutes);
 
