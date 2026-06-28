@@ -257,7 +257,9 @@ router.post('/slack/test', requireDashboardAuth, async (req: any, res: any) => {
       'x-slack-request-timestamp': timestampVal.toString()
     };
 
-    const localUrl = `http://127.0.0.1:3000/api/slack/events`;
+    const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+    const host = process.env.VERCEL_URL || process.env.APP_URL?.replace(/^https?:\/\//, '') || req.get('host') || '127.0.0.1:3000';
+    const localUrl = `${protocol}://${host}/api/slack/events`;
     
     console.log(`[Simulator] Sending test webhook event to ${localUrl}...`);
     const simResponse = await fetch(localUrl, {
