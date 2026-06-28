@@ -637,4 +637,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v3.0.1 | ✅ Done | Pre-merge QA Bug Fixes (3 security/correctness) |
 | v3.1.0 | ✅ Done | Final DoD Gaps: Deferral, Plan Mutation, Loop Tests |
 | v5.0.0 | ✅ Done | Google Cloud Tasks migration, error boundary hardening, and reporting resilience |
-| v6.0.5 | ✅ Done | Vercel Migration (Vercel Serverless, Vercel Workflows, Neon Postgres, Vercel Cron) |
+| v6.0.6 | ✅ Done | Vercel Migration (Vercel Serverless, Vercel Workflows, Neon Postgres, Vercel Cron) |
