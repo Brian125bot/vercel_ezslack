@@ -33,10 +33,10 @@
   "settings": {
     "interactivity": {
       "is_enabled": true,
-      "request_url": "https://vercel-ezslack.vercel.app/api/slack/interactivity"
+      "request_url": "https://your-app.vercel.app/api/slack/interactivity"
     },
     "event_subscriptions": {
-      "request_url": "https://vercel-ezslack.vercel.app/api/slack/events",
+      "request_url": "https://your-app.vercel.app/api/slack/events",
       "bot_events": [
         "app_mention",
         "message.channels",
