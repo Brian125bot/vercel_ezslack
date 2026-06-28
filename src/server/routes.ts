@@ -312,48 +312,52 @@ router.post('/slack/interactivity', async (req: any, res: any) => {
     // ACK immediately
     res.status(200).send('');
 
-    const action = payload.actions[0];
-    const actionId: string = action.action_id || '';
-    const approvalId: string = action.value || '';
-    const userId: string = payload.user?.id || '';
-    const channelId: string = payload.channel?.id || '';
+    // W3-C: Wrap post-response async work in waitUntil so Vercel
+    // serverless doesn't terminate the function before it completes.
+    waitUntil((async () => {
+      const action = payload.actions[0];
+      const actionId: string = action.action_id || '';
+      const approvalId: string = action.value || '';
+      const userId: string = payload.user?.id || '';
+      const channelId: string = payload.channel?.id || '';
 
-    if (!approvalId || (!actionId.startsWith('approval_approve') && !actionId.startsWith('approval_reject'))) {
-      return;
-    }
-
-    const newStatus: 'approved' | 'rejected' = actionId.includes('approve') ? 'approved' : 'rejected';
-
-    const approval = await agentStore.resolveApproval(approvalId, newStatus);
-
-    // Update the original Block Kit message to remove buttons
-    const { updateApprovalMessage } = await import('./tools/slack.js');
-    await updateApprovalMessage(approval, newStatus, channelId);
-
-    // Create audit event
-    if (approval.run_id) {
-      const trace = await agentStore.getRunTrace(approval.run_id);
-      await agentStore.appendAuditEvent({
-        workspace_id: trace.goal.workspace_id,
-        goal_id: approval.goal_id!,
-        run_id: approval.run_id,
-        type: `approval.${newStatus}`,
-        actor: userId,
-        summary: `User ${newStatus} execution via Block Kit button`,
-        payload: { approvalId: approval.id }
-      });
-    }
-
-    // Resume or cancel based on outcome
-    if (newStatus === 'approved' && approval.run_id) {
-      const { resumeAgentPipeline } = await import('./agent/orchestrator.js');
-      resumeAgentPipeline(approval.run_id).catch(e => console.error('Failed to resume pipeline', e));
-    } else if (newStatus === 'rejected' && approval.run_id) {
-      await agentStore.updateRunStatus(approval.run_id, 'cancelled', { failure_reason: 'User rejected via Slack button.' });
-      if (approval.goal_id) {
-        await agentStore.updateGoalStatus(approval.goal_id, 'cancelled');
+      if (!approvalId || (!actionId.startsWith('approval_approve') && !actionId.startsWith('approval_reject'))) {
+        return;
       }
-    }
+
+      const newStatus: 'approved' | 'rejected' = actionId.includes('approve') ? 'approved' : 'rejected';
+
+      const approval = await agentStore.resolveApproval(approvalId, newStatus);
+
+      // Update the original Block Kit message to remove buttons
+      const { updateApprovalMessage } = await import('./tools/slack.js');
+      await updateApprovalMessage(approval, newStatus, channelId);
+
+      // Create audit event
+      if (approval.run_id) {
+        const trace = await agentStore.getRunTrace(approval.run_id);
+        await agentStore.appendAuditEvent({
+          workspace_id: trace.goal.workspace_id,
+          goal_id: approval.goal_id!,
+          run_id: approval.run_id,
+          type: `approval.${newStatus}`,
+          actor: userId,
+          summary: `User ${newStatus} execution via Block Kit button`,
+          payload: { approvalId: approval.id }
+        });
+      }
+
+      // Resume or cancel based on outcome
+      if (newStatus === 'approved' && approval.run_id) {
+        const { resumeAgentPipeline } = await import('./agent/orchestrator.js');
+        resumeAgentPipeline(approval.run_id).catch(e => console.error('Failed to resume pipeline', e));
+      } else if (newStatus === 'rejected' && approval.run_id) {
+        await agentStore.updateRunStatus(approval.run_id, 'cancelled', { failure_reason: 'User rejected via Slack button.' });
+        if (approval.goal_id) {
+          await agentStore.updateGoalStatus(approval.goal_id, 'cancelled');
+        }
+      }
+    })());
   } catch (err: any) {
     console.error('[Interactivity Error]', err.message);
     if (!res.headersSent) {

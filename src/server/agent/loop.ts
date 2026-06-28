@@ -12,6 +12,7 @@ const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
 const MAX_ITERATIONS = 3;
 const MAX_TRANSIENT_RETRIES = 1;
 const LEASE_HEARTBEAT_MS = 60_000; // Renew lease every 60 seconds
+const MAX_RUN_WALL_TIME_MS = parseInt(process.env.RUN_TIMEOUT_MS || '45000'); // Soft limit: re-queue before Vercel timeout
 
 async function buildScopedTrace(runId: string, planId?: string | null): Promise<AgentRunTrace> {
   // Single call fetches run, goal, plan, steps, toolCalls, approvals, and auditEvents
@@ -38,6 +39,9 @@ async function buildScopedTrace(runId: string, planId?: string | null): Promise<
 
 export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void> {
   let run = runIn;
+  const runStartTime = Date.now();
+  const wouldExceedTimeout = (): boolean => (Date.now() - runStartTime) >= MAX_RUN_WALL_TIME_MS;
+
   const goal = await agentStore.getGoal(run.goal_id);
 
   // Start lease heartbeat to prevent stale claim recovery during long operations
@@ -70,6 +74,19 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
     } else {
       // Create new plan path
       run = await agentStore.incrementRunIteration(run.id);
+
+      // W5-C: Timeout guard before expensive plan creation
+      if (wouldExceedTimeout()) {
+        slog('loop', 'timeout_guard', { run_id: run.id, elapsed: Date.now() - runStartTime, phase: 'plan_creation' });
+        clearInterval(leaseHeartbeat);
+        await agentStore.updateRunStatus(run.id, 'queued', {
+          claimed_by: null, claimed_at: null, lease_expires_at: null,
+          failure_reason: `Run paused near wall-clock timeout (${MAX_RUN_WALL_TIME_MS}ms) before plan creation`
+        });
+        const { enqueueRunTask } = await import('./taskClient.js');
+        await enqueueRunTask(run.id);
+        return;
+      }
 
       const ctx = await assembleContext(goal, run);
       const contextBlock = renderContextForPrompt(ctx);
@@ -168,6 +185,19 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
     for (const step of currentSteps) {
       if (step.status !== 'pending') continue;
 
+      // W5-C: Timeout guard before each step execution
+      if (wouldExceedTimeout()) {
+        slog('loop', 'timeout_guard', { run_id: run.id, elapsed: Date.now() - runStartTime, phase: 'step_execution', step: step.title });
+        clearInterval(leaseHeartbeat);
+        await agentStore.updateRunStatus(run.id, 'queued', {
+          claimed_by: null, claimed_at: null, lease_expires_at: null,
+          failure_reason: `Run paused near wall-clock timeout (${MAX_RUN_WALL_TIME_MS}ms) before step "${step.title}"`
+        });
+        const { enqueueRunTask } = await import('./taskClient.js');
+        await enqueueRunTask(run.id);
+        return;
+      }
+
       // Pre-approved only if plan was approved wholesale OR this specific step was approved
       const stepApproval = !isPlanPreApproved
         ? await agentStore.getApprovedStepApproval(run.id, step.id)
@@ -198,6 +228,19 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
         run = await agentStore.updateRunStatus(run.id, 'running', { failure_reason: updatedStep.error });
         break;
       }
+    }
+
+    // W5-C: Timeout guard before verification
+    if (wouldExceedTimeout()) {
+      slog('loop', 'timeout_guard', { run_id: run.id, elapsed: Date.now() - runStartTime, phase: 'verification' });
+      clearInterval(leaseHeartbeat);
+      await agentStore.updateRunStatus(run.id, 'queued', {
+        claimed_by: null, claimed_at: null, lease_expires_at: null,
+        failure_reason: `Run paused near wall-clock timeout (${MAX_RUN_WALL_TIME_MS}ms) before verification`
+      });
+      const { enqueueRunTask } = await import('./taskClient.js');
+      await enqueueRunTask(run.id);
+      return;
     }
 
     // Verify

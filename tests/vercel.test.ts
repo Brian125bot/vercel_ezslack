@@ -26,7 +26,9 @@ vi.mock('../src/server/state.js', () => ({
   getSelectedModel: vi.fn().mockReturnValue('gemini-3.5-flash'),
   isEventDuplicate: vi.fn().mockResolvedValue(false),
   isMessageDuplicate: vi.fn().mockResolvedValue(false),
-  setSelectedModel: vi.fn()
+  setSelectedModel: vi.fn(),
+  getThreadHistory: vi.fn().mockResolvedValue([]),
+  saveThreadHistory: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../src/server/agent/intent.js', () => ({
@@ -41,7 +43,25 @@ vi.mock('../src/server/storage/agentStore.js', () => ({
   agentStore: {
     getRun: vi.fn().mockResolvedValue({ id: 'run-123', status: 'queued' }),
     updateRunStatus: vi.fn().mockResolvedValue({}),
-    hasPendingApproval: vi.fn().mockResolvedValue(false)
+    hasPendingApproval: vi.fn().mockResolvedValue(false),
+    updateGoalStatus: vi.fn().mockResolvedValue({}),
+    recoverStaleClaims: vi.fn().mockResolvedValue(0),
+    reapExpiredApprovals: vi.fn().mockResolvedValue([]),
+    getGoal: vi.fn().mockResolvedValue({ id: 'goal-123', workspace_id: 'ws-1', title: 'test', original_instruction: 'test', created_by_user_id: 'user-1', source_channel_id: 'C123' }),
+    getApprovedPlanApproval: vi.fn().mockResolvedValue(null),
+    getApprovedStepApproval: vi.fn().mockResolvedValue(null),
+    incrementRunIteration: vi.fn().mockResolvedValue({ id: 'run-123', iteration_count: 1 }),
+    createPlan: vi.fn().mockResolvedValue({ id: 'plan-123' }),
+    createApprovalRequest: vi.fn().mockResolvedValue({ id: 'apr-123' }),
+    updateApprovalStatus: vi.fn().mockResolvedValue({}),
+    appendAuditEvent: vi.fn().mockResolvedValue({}),
+    getStepsForPlan: vi.fn().mockResolvedValue([]),
+    getRunTrace: vi.fn().mockResolvedValue({ run: { id: 'run-123' }, goal: {}, plan: {}, steps: [], toolCalls: [], approvals: [], auditEvents: [] }),
+    getStep: vi.fn().mockResolvedValue({ id: 'step-123', status: 'succeeded' }),
+    updateStepStatus: vi.fn().mockResolvedValue({}),
+    createStep: vi.fn().mockResolvedValue({}),
+    incrementRunRetry: vi.fn().mockResolvedValue({}),
+    renewLease: vi.fn().mockResolvedValue({}),
   }
 }));
 
@@ -116,11 +136,19 @@ describe('Vercel Migration Integration Tests', () => {
   });
 
   describe('2. Vercel Cron Endpoint (api/cron/poll.ts)', () => {
+    beforeEach(() => {
+      process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
+    });
+
     it('restricts access if CRON_SECRET is set but authorization header is invalid', async () => {
       process.env.CRON_SECRET = 'super-secret-cron-key';
       
       const { default: cronHandler } = await import('../api/cron/poll.js');
-      
+
+      // Need fresh mock to verify pollScheduledTriggers didn't get called through the chain
+      const { agentStore } = await import('../src/server/storage/agentStore.js');
+      vi.clearAllMocks();
+
       const mockReq = {
         headers: {
           authorization: 'Bearer wrong-secret'
@@ -139,11 +167,11 @@ describe('Vercel Migration Integration Tests', () => {
       expect(pollScheduledTriggers).not.toHaveBeenCalled();
     });
 
-    it('allows access and runs poll if CRON_SECRET matches', async () => {
+    it('allows access, recovers stale claims, and runs poll when CRON_SECRET matches', async () => {
       process.env.CRON_SECRET = 'super-secret-cron-key';
       
       const { default: cronHandler } = await import('../api/cron/poll.js');
-      
+
       const mockReq = {
         headers: {
           authorization: 'Bearer super-secret-cron-key'
@@ -157,12 +185,20 @@ describe('Vercel Migration Integration Tests', () => {
 
       await cronHandler(mockReq as any, mockRes as any);
 
-      expect(mockRes.status).toHaveBeenCalledWith(200);
+      // Fix 4: Verify stale claim recovery and approval expiration run before polling
+      const { agentStore } = await import('../src/server/storage/agentStore.js');
+      expect(agentStore.recoverStaleClaims).toHaveBeenCalled();
+      expect(agentStore.reapExpiredApprovals).toHaveBeenCalled();
       expect(pollScheduledTriggers).toHaveBeenCalled();
+      expect(mockRes.status).toHaveBeenCalledWith(200);
     });
   });
 
   describe('3. Vercel Workflows Triggering (taskClient.ts)', () => {
+    beforeEach(() => {
+      process.env.APP_URL = 'https://my-app.vercel.app';
+    });
+
     it('skips trigger if APP_URL is missing', async () => {
       delete process.env.APP_URL;
       const fetchSpy = vi.spyOn(global, 'fetch');
@@ -175,8 +211,6 @@ describe('Vercel Migration Integration Tests', () => {
     });
 
     it('posts to the Vercel workflows agentRun endpoint when triggered', async () => {
-      process.env.APP_URL = 'https://my-app.vercel.app';
-      
       const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => 
         Promise.resolve(new Response(JSON.stringify({ success: true })))
       );
@@ -193,6 +227,113 @@ describe('Vercel Migration Integration Tests', () => {
         })
       );
       fetchSpy.mockRestore();
+    });
+
+    it('retries on server error with exponential backoff and eventually succeeds (Fix 3)', async () => {
+      let callCount = 0;
+      const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => {
+        callCount++;
+        if (callCount <= 2) {
+          return Promise.resolve(new Response('Server Error', { status: 503 }));
+        }
+        return Promise.resolve(new Response(JSON.stringify({ success: true })));
+      });
+
+      const { enqueueRunTask } = await import('../src/server/agent/taskClient.js');
+      await enqueueRunTask('run-retry-test');
+
+      // Called 3 times: 2 failed 503s + 1 success
+      expect(callCount).toBe(3);
+      fetchSpy.mockRestore();
+    });
+
+    it('gives up after max retries on persistent server error', async () => {
+      const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() =>
+        Promise.resolve(new Response('Server Error', { status: 503 }))
+      );
+
+      const { enqueueRunTask } = await import('../src/server/agent/taskClient.js');
+      await enqueueRunTask('run-fail-test');
+
+      // Called 4 times: initial + 3 retries = 4 total
+      expect(fetchSpy).toHaveBeenCalledTimes(4);
+      fetchSpy.mockRestore();
+    });
+
+    it('does not retry on client error (4xx)', async () => {
+      const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() =>
+        Promise.resolve(new Response('Bad Request', { status: 400 }))
+      );
+
+      const { enqueueRunTask } = await import('../src/server/agent/taskClient.js');
+      await enqueueRunTask('run-4xx-test');
+
+      // Only called once — no retry on 4xx
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      fetchSpy.mockRestore();
+    });
+  });
+
+  describe('4. Vercel Workflow Handler - Model Selection (Fix 1)', () => {
+    it('calls getSelectedModel during handler bootstrap to resolve user model', async () => {
+      // Import agentRun handler — its module-level imports trigger getSelectedModel mock
+      const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
+      const { getSelectedModel } = await import('../src/server/state.js');
+
+      vi.clearAllMocks();
+
+      const mockReq = {
+        method: 'POST',
+        body: {
+          event: { text: 'hello', channel: 'C123', user: 'U123', ts: '123.456', thread_ts: null, type: 'message' },
+          eventId: 'evt-001',
+          signatureVerified: true,
+          workspaceId: 'T001',
+        },
+        get: vi.fn().mockReturnValue(''),
+        headers: {}
+      };
+      const mockRes = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn(),
+        send: vi.fn(),
+      };
+
+      await workflowHandler(mockReq as any, mockRes as any);
+
+      // getSelectedModel is called during handler bootstrap to resolve user's model
+      expect(getSelectedModel).toHaveBeenCalled();
+    });
+  });
+
+  describe('5. Closed-Loop Worker - Timeout Guard (Fix 5)', () => {
+    it('re-queues and does not finalize when wall-clock timeout is exceeded', async () => {
+      // Set a zero ms timeout so the guard fires on the first check
+      process.env.RUN_TIMEOUT_MS = '0';
+
+      const { runLoop } = await import('../src/server/agent/loop.js');
+      const { agentStore } = await import('../src/server/storage/agentStore.js');
+
+      vi.clearAllMocks();
+
+      const mockRun = {
+        id: 'run-timeout-test',
+        goal_id: 'goal-123',
+        status: 'queued',
+        plan_id: null,
+        model: 'gemini-2.5-flash',
+        iteration_count: 0,
+        retry_count: 0,
+      };
+
+      await runLoop(mockRun as any, 'test-worker');
+
+      // Should have been re-queued with a timeout reason, never finalized
+      const updateCalls = (agentStore.updateRunStatus as any).mock.calls;
+      const requeueCall = updateCalls.find((c: any) => c[1] === 'queued');
+      expect(requeueCall).toBeDefined();
+      expect(requeueCall[2]?.failure_reason).toContain('timeout');
+      expect(agentStore.updateGoalStatus).not.toHaveBeenCalled();
     });
   });
 });

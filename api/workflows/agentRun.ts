@@ -4,7 +4,7 @@ import { runAgentPipeline } from '../../src/server/agent/orchestrator.js';
 import { isDbAvailable } from '../../src/server/storage/db.js';
 import { agentStore } from '../../src/server/storage/agentStore.js';
 import { Semaphore } from '../../src/server/agent/semaphore.js';
-import { selectedModel, updateLog } from '../../src/server/state.js';
+import { selectedModel, getSelectedModel, updateLog } from '../../src/server/state.js';
 
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
@@ -15,6 +15,15 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
   const startTime = Date.now();
+  // Resolve the user's selected model from DB so cold starts use the correct model
+  await getSelectedModel();
+  // On-demand stale claim recovery (catches runs abandoned by terminated invocations)
+  try {
+    const recovered = await agentStore.recoverStaleClaims();
+    if (recovered > 0) {
+      console.log(`[Vercel Workflow] Recovered ${recovered} stale run(s) on startup`);
+    }
+  } catch { /* non-blocking */ }
   try {
     const body = req.body || {};
     const { event, eventId, signatureVerified, workspaceId, runId, logItemId } = body;
