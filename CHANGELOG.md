@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.2.0] - Production Reliability & Feedback Fixes - 2026-06-27
+
+Resolves the remaining critical and high-priority issues identified during Vercel production deployment analysis, plus a batch of low-priority edge-case fixes.
+
+### 🔴 Critical Fix
+
+* **Slack interactivity signature verification (Fix 6).** `express.urlencoded()` in `server.ts` now includes a `verify` callback that captures `req.rawBody` for URL-encoded payloads, matching the existing `express.json()` parser. All Block Kit button clicks (Approve/Reject) were returning 401 in production because the HMAC was computed over an empty body. Now works in production.
+
+### 🐛 High-Priority Bug Fixes
+
+* **`slack.ts` respects dashboard model selection (Fix 7).** `src/server/tools/slack.ts` now imports `selectedModel` from the state module instead of reading `process.env.SELECTED_MODEL` (always `undefined`). The auto-reply synthesis path now uses the user's chosen model.
+* **Fire-and-forget async calls now awaited (Fix 8).** Four previously-unawaited async calls — two `addLog()` calls in `routes.ts`, one `updateLog()` in `agentRun.ts`, and a dynamic `import()` in the dashboard approval handler — are now properly awaited with error handling.
+* **`enqueueRunTask` no longer silently swallows errors (Fix 9).** `taskClient.ts` changed from `Promise<void>` to `Promise<boolean>`. `durableTask.ts` checks the return value and throws on failure, which marks the run as `failed` instead of leaving it stranded in `queued` forever with a misleading "I have accepted your goal" reply.
+* **Dashboard approval handler wrapped in `waitUntil` (Fix 10).** The `POST /agent/approvals/:id/resolve` route wraps the dynamic import and pipeline resume in `waitUntil()`, matching the interactivity handler pattern. Prevents Vercel from freezing the function before pipeline resume completes.
+* **`setInterval` guarded for Vercel serverless (Fix 11).** Two `setInterval` calls in `state.ts` (dedup cache eviction, DB cleanup) are now guarded with `if (process.env.VERCEL !== '1')`. The DB `processed_events` cleanup was moved to the Vercel Cron handler as a replacement.
+* **Step-level approval resume fixed (Fix 18).** `resumeAgentPipeline()` in `orchestrator.ts` now resets any blocked steps to `pending` before re-queuing the run. Previously, approving a tool call silently skipped the blocked step because `runLoop()` only processes steps with status `pending`.
+
+### 🟡 Medium-Priority Fixes
+
+* **DB pool serverless optimization (Fix 7).** Increased `connectionTimeoutMillis` from 5000 to 10000 (configurable via `DB_CONNECTION_TIMEOUT`). Added retry logic to `query()` with 2 attempts and exponential backoff for transient connection errors.
+* **Vercel-optimized build script (Fix 8).** Added `"vercel-build": "vite build"` to `package.json`, skipping the esbuild CJS backend bundle (unused on Vercel) during deployment.
+* **Node engine requirement declared (Fix 9).** Added `"engines": { "node": ">=18.0.0" }` to prevent silent breakage on older runtimes.
+* **Complete `.env.example` (Fix 10).** Added all missing documented variables: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DASHBOARD_PASSWORD`, `DATABASE_SSL`, `DB_POOL_MAX`, `DB_CONNECTION_TIMEOUT`, `DIRECT_REPLY_CONCURRENCY`, `RUN_TIMEOUT_MS`, `WORKER_LEASE_SECONDS`, `GEMINI_TIMEOUT_MS`, `VERCEL_AUTOMATION_BYPASS_SECRET`.
+* **`require()` replaced with `await import()` in ESM module (Fix 11).** `scheduler.ts` replaced `require('cron-parser')` with `await import()`, making `computeNextRunAt` async. Fixes a correctness issue in the ESM module context.
+
+### 🟢 Low-Priority Fixes
+
+* **`waitUntil` lambda error handling (Fix 12).** The interactivity handler's `waitUntil` lambda now wraps its body in `try/catch` and awaits `resumeAgentPipeline()` instead of fire-and-forget with `.catch()`.
+* **Timer leak in executor (Fix 13).** The `Promise.race` timeout in `executor.ts` is now wrapped in `try/finally` to always clear the timeout, preventing timer leaks when a tool rejects before the timeout fires.
+* **"Tomorrow" before 9 AM off by ~1h (Fix 14).** Removed the `Math.min(delta, MS_DAY)` cap in `msUntilTomorrow9am()` so "tomorrow" always means the next calendar day at 9 AM, even when more than 24h away.
+* **Single-letter time units supported (Fix 15).** Added pre-processing `.replace()` calls that normalize `10m`→`10 minutes`, `2h`→`2 hours`, etc. before deferral pattern matching.
+* **"Let me know in X" deferral pattern (Fix 16).** Added `know` and `let` to `hasActionContext()` regex to catch "let me know in 2 hours".
+* **Connector socket leak (Fix 17).** Both `connector = new Connector()` calls in `db.ts` are now guarded with `if (!connector)` to prevent overwrite and socket leak when both admin and regular pools use Cloud SQL Connector.
+
+### 📊 Observability
+
+* **Confidence type mismatch resolved.** `IntentResult.confidence` (`'high' | 'medium' | 'low'`) was being passed directly to the DB column `slack_event_logs.confidence` (type `numeric`), causing `invalid input syntax for type numeric: "high"` on every workflow invocation. Added `confidenceToNumber()` mapping (`high→1.0`, `medium→0.5`, `low→0.0`) and updated the `SlackEventLog` type to `number`.
+* **Semaphore acquire timeout.** `Semaphore.acquire()` now accepts an optional `timeoutMs` parameter (10s for direct reply concurrency). If no permit is available within the window, the caller logs a warning and proceeds without blocking.
+* **`runLoop` entry/exit instrumentation.** Added `slog('loop', 'runLoop.start', ...)` and `slog('loop', 'runLoop.complete', ...)` (in a `finally` block) so every `runLoop()` invocation leaves a visible trace in Vercel logs with elapsed time and final run status.
+
+### ✅ Verification
+
+* `npm run lint` — 0 type errors.
+* `npm test` — 11 files, 94 tests pass.
+* All fixes deployed to production and verified in Vercel logs.
+
 ## [6.1.0] - Vercel Stability Hardening - 2026-06-27
 
 Resolves five reliability gaps discovered during Vercel serverless deployment testing.

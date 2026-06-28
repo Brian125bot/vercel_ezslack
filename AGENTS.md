@@ -9,11 +9,13 @@ This is a full-stack TypeScript Slack AI agent. `server.ts` starts Express, moun
 - `npm install`: install dependencies.
 - `npm run dev`: run the Express/Vite development server on port `3000`.
 - `npm run build`: build the Vite frontend and bundle `server.ts` to `dist/server.cjs`.
+- `npm run vercel-build`: build the Vite frontend only (used by Vercel deployments, skips the esbuild CJS bundle).
 - `npm run start`: run the production bundle from `dist/server.cjs`.
 - `npm run lint`: run TypeScript checking with `tsc --noEmit`.
+- `npm run test`: run all tests with Vitest.
+- `npm run test:watch`: run tests in watch mode.
+- `npm run test:coverage`: run tests with coverage report.
 - `npm run clean`: remove generated `dist` output and `server.js`.
-
-There is currently no test script in `package.json`.
 
 ## Coding Style & Naming Conventions
 
@@ -21,7 +23,7 @@ Use TypeScript with ES modules and React JSX. Vite aliases `@/` to the repositor
 
 ## Testing Guidelines
 
-No automated test framework or coverage threshold is defined. For changes today, run `npm run lint` and manually exercise the dashboard simulator at `http://localhost:3000` via `npm run dev`. When adding tests, add the runner and scripts to `package.json`, then document the command here.
+Tests use Vitest with 94 test cases across 11 test files. Run `npm run test` before committing. `npm run test:watch` for development. Coverage reports available via `npm run test:coverage`. No specific coverage threshold is defined, but ensure existing tests pass and the `tsc --noEmit` lint gate is clean.
 
 ## Commit & Pull Request Guidelines
 
