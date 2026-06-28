@@ -2,13 +2,13 @@
 
 [![Engine](https://img.shields.io/badge/Gemini-2.5%20Flash%20%7C%203.5%20Flash-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
-[![Deploy](https://img.shields.io/badge/Deploy-Cloud%20Run-blue?style=flat-square&logo=google-cloud)](https://cloud.google.com/run)
+[![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
 [![Tests](https://img.shields.io/badge/Tests-8%20suites%20%7C%2072%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
-An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
+An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
 
-Designed specifically to run under the strict timeout requirements of Slack API infrastructures, the backend features an **asynchronous non-blocking double-queue architecture** to decouple initial event ingestion from complex multi-step generative cognition.
+Designed specifically to run under the strict timeout requirements of Slack API infrastructures, the backend features an **asynchronous non-blocking architecture** via **Vercel Workflows** to decouple initial event ingestion from complex multi-step generative cognition.
 
 ---
 
@@ -45,13 +45,13 @@ Designed specifically to run under the strict timeout requirements of Slack API 
                              │ HTTPS POST
                              ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│  Express Server (Cloud Run)                                            │
+│  Vercel Serverless Functions / Express                                 │
 │                                                                        │
 │  POST /api/slack/events ───► Verify Signature (HMAC-SHA256)            │
 │       │                      Dedup (event_id + client_msg_id)          │
 │       │                      ACK 200 OK (<15ms)                        │
 │       │                                                                │
-│       └─── setImmediate() ──► Intent Classifier                        │
+│       └─── triggerWorkflow() ──► Intent Classifier                     │
 │                               │                                        │
 │            ┌──────────────────┼──────────────────────────────┐         │
 │            │                  │                              │         │
@@ -66,7 +66,7 @@ Designed specifically to run under the strict timeout requirements of Slack API 
 │            │          └──┬───────┬───┘                       │         │
 │            │         now │       │ later                     │         │
 │            │             ▼       ▼                           │         │
-│            │        Google Cloud Tasks                       │         │
+│            │        Vercel Workflows / agentRun                      │
 │            │             │                                   │         │
 │            │             ▼ Webhooks                          │         │
 │            │     ┌──────────────────────────────────┐        │         │
@@ -88,7 +88,7 @@ Designed specifically to run under the strict timeout requirements of Slack API 
 │  GET  /api/health              ◄── Uptime probe                        │
 │                                                                        │
 │  ┌────────────────────────────────────────────┐                        │
-│  │ PostgreSQL (Cloud SQL)                     │                        │
+│  │ Vercel Postgres (Neon)                     │                        │
 │  │ goals → plans → runs → steps → tool_calls  │                        │
 │  │ approval_requests, memory_records           │                        │
 │  │ audit_events, scheduled_triggers            │                        │
@@ -100,11 +100,11 @@ Designed specifically to run under the strict timeout requirements of Slack API 
 
 | Decision | Rationale |
 |----------|-----------|
-| ACK Slack within 15ms, process via `setImmediate` | Slack cancels and retries if no `200 OK` within 3 seconds |
-| `FOR UPDATE SKIP LOCKED` queue claims | Safe multi-instance concurrency on Cloud Run without Redis |
+| ACK Slack within 15ms, delegate to Vercel Workflow | Slack cancels and retries if no `200 OK` within 3 seconds |
+| `FOR UPDATE SKIP LOCKED` queue claims | Concurrency fallback for synchronous execution paths |
 | Semantic + rule-based dual verification | Rules catch structural failures; LLM catches semantic mismatches |
 | `generate` step kind | Solves the "chat wrapper" problem — content generation deferred to exec time |
-| Atomic `DELETE ... RETURNING` for scheduler | Prevents double-firing across Cloud Run instances |
+| Atomic `DELETE ... RETURNING` for scheduler | Prevents double-firing across concurrent function invocations |
 | Dynamic adapter registration | External tools only activate when env vars are set |
 
 ---
@@ -337,17 +337,17 @@ Migrations are defined in `src/server/storage/schema.ts` and executed by `src/se
 
 ## ⚙️ Worker & Queue
 
-The background processing system has been migrated to **Google Cloud Tasks**, replacing the legacy `setInterval` polling loops. This transition enables true serverless execution without continuous CPU usage, saving resources on Cloud Run.
+The background processing system has been migrated to **Vercel Workflows**, replacing Google Cloud Tasks. This enables serverless execution of durable, long-running agent workflows without continuous CPU usage or hitting standard serverless timeouts.
 
 | Mechanism | Description |
 |-----------|-------------|
-| **Execution** | Cloud Tasks triggers HTTP webhooks (`/api/internal/worker/execute`) |
-| **Scheduling** | Cloud Tasks triggers the polling webhook (`/api/internal/scheduler/poll`) |
-| **Max concurrent** | Tunable via Cloud Tasks queue configuration |
-| **Retry & Backoff** | Handled natively by Cloud Tasks |
-| **Security** | Webhooks secured via `INTERNAL_API_SECRET` Bearer token |
+| **Execution** | Vercel Workflows triggers HTTP webhooks (`/api/workflows/agentRun`) |
+| **Scheduling** | Vercel Cron triggers the polling webhook (`/api/cron/poll`) |
+| **Concurrency** | Managed by the Vercel execution runtime |
+| **Retry & Backoff** | Handled natively by Vercel Workflows |
+| **Security** | Webhooks secured via Vercel authorization mechanisms |
 
-*Note: The old `FOR UPDATE SKIP LOCKED` logic remains as a concurrency fallback for synchronous paths, but polling is entirely handled by Cloud Tasks.*
+*Note: The old `FOR UPDATE SKIP LOCKED` logic remains as a concurrency fallback for synchronous paths, but background execution and polling are entirely driven by Vercel.*
 
 ---
 
@@ -459,7 +459,7 @@ steps:
 │       │   ├── sanitize.ts           # Secret detection and redaction
 │       │   ├── worker.ts             # Webhook execution handler (formerly queue poller)
 │       │   ├── scheduler.ts          # Scheduled trigger processor (formerly trigger poller)
-│       │   ├── taskClient.ts         # Google Cloud Tasks client wrapper
+│       │   ├── taskClient.ts         # Vercel Workflows/Cron client wrapper
 │       │   ├── deferral.ts           # Time-deferred language detection
 │       │   ├── planMutation.ts       # NL plan modification via Gemini
 │       │   ├── log.ts                # Structured logging utility
@@ -526,80 +526,37 @@ steps:
 | Variable | Description |
 |----------|-------------|
 | `DASHBOARD_PASSWORD` | Password for the admin dashboard |
-| `APP_URL` | Public URL of the app (required for Google Cloud Tasks webhook callbacks) |
-| `GITHUB_TOKEN` | Enables the GitHub Issue adapter |
-| `EMAIL_WEBHOOK_URL` | Enables the Email adapter |
-
-### Cloud Tasks Configuration
+### Vercel / Workflows Configuration
 
 | Variable | Description |
 |----------|-------------|
-| `GCP_PROJECT_ID` | Your Google Cloud Project ID |
-| `GCP_LOCATION` | Region of your queue (e.g. `us-west1`) |
-| `CLOUD_TASKS_QUEUE_NAME` | The exact name of your provisioned queue |
-| `INTERNAL_API_SECRET` | Secure cryptographic string for webhook authentication |
+| `CRON_SECRET` | Secure Bearer token used to authenticate Vercel Cron webhook calls |
+| `DATABASE_URL` | Full PostgreSQL connection string (e.g. Vercel Postgres / Neon) |
+| `APP_URL` | Base URL of your deployed Vercel application (used for trigger callbacks) |
 
 ---
 
-## 🐳 Deployment
+## 🐳 Deployment (Vercel)
 
-### Step 0: Provision Cloud Tasks
-Enable the API and create your worker queue:
-```bash
-gcloud services enable cloudtasks.googleapis.com
-gcloud tasks queues create slack-agent-queue --location="us-west1"
-```
+### Step 1: Push to Vercel
+Connect your GitHub repository to Vercel. Vercel automatically detects the configuration and deploys:
+1. Static Vite UI bundle at `/`
+2. Serverless Express API at `/api/*`
+3. Workflow API at `/api/workflows/agentRun`
+4. Cron trigger at `/api/cron/poll`
 
-### Step 0.5: Provision Cloud Scheduler (for scheduled tasks)
-Since the local `setInterval` loops are decommissioned, you must configure a scheduler to invoke the polling endpoint `/api/internal/scheduler/poll` periodically (e.g. every minute):
-```bash
-gcloud scheduler jobs create http slack-agent-scheduler-poll \
-  --schedule="* * * * *" \
-  --uri="https://YOUR_APP_URL/api/internal/scheduler/poll" \
-  --http-method=POST \
-  --headers="Authorization=Bearer YOUR_INTERNAL_API_SECRET,Content-Type=application/json" \
-  --location="us-west1"
-```
-Ensure `YOUR_INTERNAL_API_SECRET` matches the value deployed in the Cloud Run service environment variables.
-
-### Option 1: Cloud Buildpacks (Source Deploy)
-```bash
-gcloud run deploy slack-ai-agent \
-  --source . \
-  --platform managed \
-  --allow-unauthenticated \
-  --set-env-vars="GEMINI_API_KEY=...,SLACK_BOT_TOKEN=...,SLACK_SIGNING_SECRET=..."
-```
-
-### Option 2: Docker + Cloud Run
-```bash
-docker build -t gcr.io/YOUR_PROJECT/slack-ai-agent .
-docker push gcr.io/YOUR_PROJECT/slack-ai-agent
-gcloud run deploy slack-ai-agent \
-  --image gcr.io/YOUR_PROJECT/slack-ai-agent \
-  --platform managed \
-  --allow-unauthenticated \
-  --set-env-vars="..."
-```
-
-### Option 3: Cloud Build CI/CD (Automated)
-
-Push to `main` triggers the `cloudbuild.yaml` pipeline:
-
-1. `npm ci` → `npm run lint` → `npm test` (gates)
-2. Docker build (Node 22 Alpine, multi-stage)
-3. Push `:$COMMIT_SHA` and `:latest` tags
-4. Deploy to Cloud Run (`us-west1`)
-
-```bash
-gcloud builds triggers run <TRIGGER_ID> --branch=main --project=<PROJECT_ID>
-```
+### Step 2: Environment Variables
+Set the following variables in your Vercel Project Settings:
+- `GEMINI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DASHBOARD_PASSWORD`
+- `DATABASE_URL` (points to Vercel Postgres / Neon)
+- `CRON_SECRET` (matching Vercel's Cron security configuration)
+- `APP_URL` (your deployed Vercel project domain URL, e.g. `https://your-project.vercel.app`)
 
 ### Lifecycle
 
 ```
-Start: migrations → worker/scheduler stubs initialized → listen(:3000)
-Stop:  SIGTERM → worker/scheduler stubs shutdown → drain HTTP → closeDb() → exit
+Start: database migrations checked lazily on request entrypoint
+Stop: serverless execution terminates automatically upon response return
 ```
 
 ---
@@ -619,9 +576,9 @@ The companion React dashboard provides:
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From an App Manifest**
 2. Paste the contents of `slack-manifest.json`
-3. Update `request_url` values to your Cloud Run URL:
-   - Events: `https://YOUR_URL/api/slack/events`
-   - Interactivity: `https://YOUR_URL/api/slack/interactivity`
+3. Update `request_url` values to your Vercel deployment URL:
+   - Events: `https://YOUR_APP.vercel.app/api/slack/events`
+   - Interactivity: `https://YOUR_APP.vercel.app/api/slack/interactivity`
 4. **Install to Workspace** and authorize
 5. Copy **Signing Secret** and **Bot User OAuth Token** into your environment
 
@@ -680,3 +637,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v3.0.1 | ✅ Done | Pre-merge QA Bug Fixes (3 security/correctness) |
 | v3.1.0 | ✅ Done | Final DoD Gaps: Deferral, Plan Mutation, Loop Tests |
 | v5.0.0 | ✅ Done | Google Cloud Tasks migration, error boundary hardening, and reporting resilience |
+| v6.0.0 | ✅ Done | Vercel Migration (Vercel Serverless, Vercel Workflows, Neon Postgres, Vercel Cron) |

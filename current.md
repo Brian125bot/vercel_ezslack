@@ -32,7 +32,7 @@ To provide a secure, reliable, and intelligent AI agent platform that enhances S
                               │ HTTPS POST
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    EXPRESS.JS SERVER (Cloud Run)                    │
+│                    VERCEL SERVERLESS FUNCTIONS                      │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │ POST /api/slack/events ──► Verify Signature (HMAC-SHA256)   │   │
 │  │       │                     Dedup (event_id + client_msg_id)│   │
@@ -46,7 +46,7 @@ To provide a secure, reliable, and intelligent AI agent platform that enhances S
 │  │ direct_reply  durable_task                status_query      │   │
 │  │ approval_response  cancel_or_update                        │   │
 │  │                                                           │   │
-│  │    └──► Google Cloud Tasks ──► Webhook ──► Agent Loop     │   │
+│  │    └──► Vercel Workflows ──► Webhook ──► Agent Loop       │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 │                                                                     │
 │  ┌─────────────────────────────────────────────────────────────┐   │
@@ -57,7 +57,7 @@ To provide a secure, reliable, and intelligent AI agent platform that enhances S
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    DATA LAYER (PostgreSQL Cloud SQL)                 │
+│                    DATA LAYER (Vercel Postgres / Neon)              │
 │  goals → plans → runs → steps → tool_calls | memory_records       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -68,8 +68,7 @@ To provide a secure, reliable, and intelligent AI agent platform that enhances S
 - **Port:** 3000 (configurable)
 - **Security:** Helmet, CORS, Rate limiting
 - **Middleware:** JSON parsing with raw body preservation
-- **Graceful Shutdown:** Handles SIGTERM/SIGINT signals
-- **Lifecycle:** Database migrations → worker/scheduler stubs initialized → HTTP listener
+- **Lifecycle:** Checked dynamically on request entrypoint, gracefully terminating on response return.
 
 #### 2. **Intent Classification System** (`src/server/agent/intent.ts`)
 Six distinct intent categories:
@@ -112,7 +111,7 @@ Modular tool registry with conditional adapters:
 - **Framework:** Express.js 4.21.2
 - **Language:** TypeScript 5.8 (strict mode)
 - **AI:** Google Gemini 2.5/3.5 Flash
-- **Database:** PostgreSQL (Cloud SQL)
+- **Database:** Vercel Postgres (Neon)
 - **Testing:** Vitest 3.2.4
 
 ### Frontend
@@ -123,9 +122,8 @@ Modular tool registry with conditional adapters:
 - **Icons:** Lucide React
 
 ### Infrastructure
-- **Deployment:** Google Cloud Run
-- **CI/CD:** Cloud Build
-- **Container:** Docker (multi-stage Node 22 Alpine)
+- **Deployment:** Vercel (Serverless Functions)
+- **CI/CD:** GitHub-Vercel Integration
 - **Security:** Helmet, express-rate-limit
 
 ### Development Tools
@@ -161,7 +159,7 @@ slackcloud/
 │       │   ├── loop.ts               # Closed loop system
 │       │   ├── worker.ts             # Webhook execution handler (formerly queue poller)
 │       │   ├── scheduler.ts          # Scheduled trigger processor (formerly trigger poller)
-│       │   ├── taskClient.ts         # Google Cloud Tasks client wrapper
+│       │   ├── taskClient.ts         # Vercel Workflows/Cron client wrapper
 │       │   └── policy.ts             # Risk-level policy gate
 │       ├── storage/
 │       │   ├── schema.ts             # Migration SQL definitions
@@ -220,10 +218,9 @@ slackcloud/
 - **CI/CD Integration:** Automated testing before deployment
 
 ### 6. **Scalability Features**
-- Google Cloud Tasks integration for serverless, resource-efficient background execution
-- Native retry, backoff, and concurrency management by Google Cloud Tasks
+- Vercel Workflows integration for serverless, resource-efficient background execution
+- Native retry, backoff, and concurrency management by Vercel Workflows
 - FOR UPDATE SKIP LOCKED as a concurrency fallback for synchronous paths
-- Graceful shutdown handling
 
 ---
 
@@ -239,15 +236,11 @@ DASHBOARD_PASSWORD=secure-admin-password
 
 ### Optional & Cloud Tasks Variables
 ```bash
-APP_URL=https://your-app.run.app                      # Required for Cloud Tasks webhook routing
-GCP_PROJECT_ID=your-gcp-project-id                    # Required for Google Cloud Tasks integration
-GCP_LOCATION=us-west1                                 # Optional, default: us-west1
-CLOUD_TASKS_QUEUE_NAME=slack-agent-queue              # Optional, default: slack-agent-queue
-INTERNAL_API_SECRET=your-internal-secret              # Required for authenticating internal webhooks
+APP_URL=https://your-project.vercel.app               # Required for Vercel Workflows webhook routing
+CRON_SECRET=your-vercel-cron-secret                   # Required for authenticating Cron webhooks
+DATABASE_URL=postgresql://user:pass@host:port/db      # Neon/Vercel Postgres database connection string
 GITHUB_TOKEN=ghp_your_github_token                    # Optional, enables GitHub Issue adapter
 EMAIL_WEBHOOK_URL=https://your-webhook.com            # Optional, enables Email adapter
-DATABASE_URL=postgresql://user:pass@host:port/db      # Optional database params
-CLOUD_SQL_CONNECTION_NAME=project:region:instance     # Optional Cloud SQL param
 ```
 
 ### Database Schema
@@ -323,34 +316,19 @@ npm run test:coverage # With coverage
 
 ---
 
-## Deployment & Operations
+## Deployment & Operations (Vercel)
 
-### Cloud Build Pipeline (`cloudbuild.yaml`)
-1. **Install:** `npm ci`
-2. **Lint:** `npm run lint`
-3. **Test:** `npm test`
-4. **Build:** Docker multi-stage build
-5. **Push:** `gcr.io/[PROJECT]/slack-ai-agent`
-6. **Deploy:** Cloud Run (us-west1)
+### Deployment Configuration
+The project uses `vercel.json` to handle routing for both the statically compiled frontend bundle and the Express-based API routes.
 
-### Docker Configuration
-- **Base Image:** Node.js 22 Alpine
-- **Multi-stage:** Build + Production
-- **Security:** Non-root user, minimal attack surface
-- **Port:** 3000 (configurable via PORT env)
-
-### Cloud Run Configuration
-- **Platform:** Fully managed
-- **Scaling:** 0-10 instances
-- **Memory:** 2GB limit
-- **CPU:** 1000m limit
-- **Authentication:** Unauthenticated (Slack webhooks)
+- **Vite Frontend:** Serves `index.html` statically for SPA client-side routing.
+- **Express API:** Routes `/api/*` requests directly to `api/index.ts`.
+- **Workflows:** Long-running async execution tasks run through `api/workflows/agentRun.ts`.
+- **Cron Jobs:** Scheduled polling tasks are triggered at `/api/cron/poll.ts` according to the cron schedule.
 
 ### Production Hardening
-- Refuses to start without required secrets
-- Graceful shutdown on SIGTERM/SIGINT
-- Database connection pooling
-- 2-second drain timeout for in-flight requests
+- Vercel Serverless Function timeouts (strict 10-second limit on Hobby plan, bypassed via Vercel Workflows for long running actions).
+- Relies on Vercel Postgres / Neon connection pooling.
 
 ---
 
@@ -385,6 +363,7 @@ GET /api/health
 ✅ **v3.0.0:** Real-world actions, autonomy & hardening  
 ✅ **v3.1.0:** Final gaps: deferral, plan mutation, loop tests  
 ✅ **v5.0.0:** Google Cloud Tasks migration, error boundary hardening, and reporting resilience
+✅ **v6.0.0:** Vercel Migration (Vercel Serverless, Vercel Workflows, Neon Postgres, Vercel Cron)
 
 ### Current Capabilities
 ✅ Production-ready deployment  
@@ -416,8 +395,8 @@ GET /api/health
 | GET | `/api/agent/runs/:id` | Run details |
 | GET | `/api/agent/memory` | Search memory |
 | GET | `/api/agent/audit` | Audit events |
-| POST | `/api/internal/worker/execute` | Internal Cloud Tasks webhook for executing runs (auth required) |
-| POST | `/api/internal/scheduler/poll` | Internal Cloud Tasks/Scheduler webhook for scheduled triggers (auth required) |
+| POST | `/api/workflows/agentRun` | Vercel Workflow endpoint for executing runs |
+| POST | `/api/cron/poll` | Vercel Cron webhook for scheduled triggers (CRON_SECRET auth required) |
 
 ### Key Components
 - **Server:** `server.ts`

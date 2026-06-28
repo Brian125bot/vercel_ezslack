@@ -435,83 +435,31 @@ router.post('/slack/events', async (req: any, res: any) => {
 
     res.status(200).send('OK');
 
-    setImmediate(async () => {
-      const startTime = Date.now();
-      try {
-        console.log(`[Background Queue] Initiated background pipeline for ID: ${eventId}`);
-        
-        const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
-        if (!geminiApiKey || geminiApiKey === 'MY_GEMINI_API_KEY') {
-          throw new Error('GEMINI_API_KEY is not configured or set to default example value.');
-        }
+    // Instead of setImmediate (which freezes on Vercel Serverless), we trigger the Workflow.
+    // In a real Vercel Workflow setup, this might use a specific SDK client.
+    // For now, we'll asynchronously invoke our own workflow endpoint.
+    const runPayload = {
+      event,
+      eventId,
+      signatureVerified,
+      workspaceId: req.body?.team_id || 'T_UNKNOWN',
+      logItemId: logItem.id,
+    };
 
-        const promptText = (event.text || "").substring(0, 50000); // Cap to prevent cost amplification
-        const threadTsTarget = event.thread_ts || event.ts;
-        const threadKeyStr = threadTsTarget ? `chan-${event.channel}-thread-${threadTsTarget}` : `chan-${event.channel}-single`;
-        const workspaceId = req.body?.team_id || 'T_UNKNOWN';
-        const dbAvailable = (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) ? await isDbAvailable() : false;
+    const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+    const host = process.env.VERCEL_URL || process.env.APP_URL?.replace(/^https?:\/\//, '') || req.get('host');
+    const workflowUrl = `${protocol}://${host}/api/workflows/agentRun`;
 
-        const hasPendingApproval = dbAvailable ? await agentStore.hasPendingApproval(workspaceId, event.channel) : false;
-
-        const intentResult = await classifyIntent(promptText, selectedModel, {
-          context: {
-            workspaceId,
-            channelId: event.channel,
-            userId: event.user,
-            threadTs: threadTsTarget,
-            hasPendingApproval
-          }
-        });
-        const { intent, confidence, source } = intentResult;
-
-        // Apply backpressure for direct_reply to limit concurrent Gemini calls
-        if (intent === 'direct_reply') {
-          await directReplySemaphore.acquire();
-        }
-        
-        let result;
-        try {
-          result = await runAgentPipeline({
-            workspaceId,
-            channelId: event.channel,
-            userId: event.user,
-            messageText: promptText,
-            eventId: eventId,
-            messageTs: event.ts,
-            threadTs: threadTsTarget,
-            selectedModel,
-            signatureValid: signatureVerified,
-            sourceType: 'slack',
-            dbAvailable,
-            intentResult
-          });
-        } finally {
-          if (intent === 'direct_reply') {
-            directReplySemaphore.release();
-          }
-        }
-
-        const durationMs = Date.now() - startTime;
-        updateLog(logItem.id, {
-          status: result.status === 'success' ? 'success' : 'error',
-          intent: result.intent || intent,
-          confidence,
-          source,
-          processingTimeMs: durationMs,
-          runId: result.runId,
-          error: (!dbAvailable && result.intent === 'durable_task') ? 'Database unavailable, skipped durable run' : result.message
-        });
-
-      } catch (bkErr: any) {
-        console.error(`[Background Task Misfire] `, bkErr);
-        const durationMs = Date.now() - startTime;
-        updateLog(logItem.id, {
-          status: 'error',
-          error: bkErr.message || String(bkErr),
-          processingTimeMs: durationMs
-        });
-      }
-    });
+    console.log(`[Slack Event] Triggering Vercel Workflow at ${workflowUrl}`);
+    
+    // We use a fire-and-forget fetch to the workflow endpoint.
+    // Note: On Vercel, this may require integration with Upstash QStash or Vercel Workflows SDK
+    // to guarantee execution beyond the request lifecycle.
+    fetch(workflowUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(runPayload)
+    }).catch(err => console.error('Failed to trigger workflow:', err));
 
   } catch (syncErr: any) {
     console.error(`[Synchronous Processing Crash] `, syncErr);

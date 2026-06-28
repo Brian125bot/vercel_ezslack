@@ -1,72 +1,68 @@
-import { CloudTasksClient } from '@google-cloud/tasks';
 import { slog } from './log.js';
+import crypto from 'crypto';
 
-const client = new CloudTasksClient();
-
-export async function enqueueRunTask(runId: string): Promise<void> {
-  const projectId = process.env.GCP_PROJECT_ID;
-  const location = process.env.GCP_LOCATION || 'us-west1';
-  const queue = process.env.CLOUD_TASKS_QUEUE_NAME || 'slack-agent-queue';
+/**
+ * Triggers a run via the Vercel Workflow endpoint.
+ */
+export async function enqueueRunTask(runId: string, logItemId?: string): Promise<void> {
   const url = process.env.APP_URL;
-  const secret = process.env.INTERNAL_API_SECRET;
-
-  if (!projectId || !url || !secret) {
-    slog('taskClient', 'skip_enqueue', { runId, reason: 'Missing GCP_PROJECT_ID, APP_URL, or INTERNAL_API_SECRET configuration' });
+  if (!url) {
+    slog('taskClient', 'skip_enqueue', { runId, reason: 'Missing APP_URL configuration' });
     return;
   }
 
-  const parent = client.queuePath(projectId, location, queue);
-  const endpoint = `${url.replace(/\/$/, '')}/api/internal/worker/execute`;
-
-  const task = {
-    httpRequest: {
-      httpMethod: 'POST' as const,
-      url: endpoint,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${secret}`
-      },
-      body: Buffer.from(JSON.stringify({ runId })).toString('base64')
-    }
-  };
+  const endpoint = `${url.replace(/\/$/, '')}/api/workflows/agentRun`;
 
   try {
-    const [response] = await client.createTask({ parent, task });
-    slog('taskClient', 'enqueued_run', { runId, taskName: response.name });
+    // Vercel workflow trigger expects the payload logic.
+    // However, in routes.ts, the initial slack event sends the full event payload.
+    // enqueueRunTask is used for subsequent steps or deferred runs.
+    // We can just trigger the same endpoint with a runId, 
+    // and we must update our Vercel workflow endpoint to handle just `runId` as well!
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ runId, logItemId })
+    });
+    
+    if (!res.ok) {
+       throw new Error(`Workflow HTTP error! status: ${res.status}`);
+    }
+    slog('taskClient', 'enqueued_run', { runId, endpoint });
   } catch (err: any) {
     slog('taskClient', 'enqueue_error', { runId, error: err.message });
   }
 }
 
+/**
+ * Triggers the Vercel Cron endpoint manually if needed.
+ */
 export async function enqueueSchedulerPollTask(): Promise<void> {
-  const projectId = process.env.GCP_PROJECT_ID;
-  const location = process.env.GCP_LOCATION || 'us-west1';
-  const queue = process.env.CLOUD_TASKS_QUEUE_NAME || 'slack-agent-queue';
   const url = process.env.APP_URL;
-  const secret = process.env.INTERNAL_API_SECRET;
-
-  if (!projectId || !url || !secret) {
-    slog('taskClient', 'skip_enqueue_poll', { reason: 'Missing GCP_PROJECT_ID, APP_URL, or INTERNAL_API_SECRET configuration' });
+  const secret = process.env.CRON_SECRET;
+  
+  if (!url) {
+    slog('taskClient', 'skip_enqueue_poll', { reason: 'Missing APP_URL configuration' });
     return;
   }
 
-  const parent = client.queuePath(projectId, location, queue);
-  const endpoint = `${url.replace(/\/$/, '')}/api/internal/scheduler/poll`;
-
-  const task = {
-    httpRequest: {
-      httpMethod: 'POST' as const,
-      url: endpoint,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${secret}`
-      }
-    }
+  const endpoint = `${url.replace(/\/$/, '')}/api/cron/poll`;
+  
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
   };
+  if (secret) {
+     headers['Authorization'] = `Bearer ${secret}`;
+  }
 
   try {
-    const [response] = await client.createTask({ parent, task });
-    slog('taskClient', 'enqueued_poll', { taskName: response.name });
+    await fetch(endpoint, {
+      method: 'POST',
+      headers
+    });
+    slog('taskClient', 'enqueued_poll', { endpoint });
   } catch (err: any) {
     slog('taskClient', 'enqueue_poll_error', { error: err.message });
   }

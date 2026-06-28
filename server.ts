@@ -134,12 +134,20 @@ async function initServer() {
     });
   }
 
-  server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Fullstack Server Ready] Slack backend API serving on http://0.0.0.0:${PORT}`);
-  });
+  if (process.env.VERCEL !== '1') {
+    server = app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[Fullstack Server Ready] Slack backend API serving on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
-initServer().catch((err) => {
-  console.error('[FATAL] Server startup failed:', err);
-  process.exit(1);
-});
+if (process.env.VERCEL !== '1') {
+  initServer().catch((err) => {
+    console.error('[FATAL] Server startup failed:', err);
+    process.exit(1);
+  });
+} else {
+  console.log('[Vercel] Exporting Express app for serverless functions');
+}
+
+export default app;
