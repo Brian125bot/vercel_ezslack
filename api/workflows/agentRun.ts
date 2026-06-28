@@ -105,7 +105,7 @@ export default async function handler(req: any, res: any) {
 
     if (logItemId) {
       const durationMs = Date.now() - startTime;
-      updateLog(logItemId, {
+      await updateLog(logItemId, {
         status: result?.status === 'success' ? 'success' : 'error',
         intent: result?.intent || intent,
         confidence,

@@ -194,9 +194,14 @@ router.post('/agent/approvals/:id/resolve', requireDashboardAuth, async (req, re
     
     // Background execution based on approval outcome
     if (status === 'approved') {
-      import('./agent/orchestrator.js').then(({ resumeAgentPipeline }) => {
-        resumeAgentPipeline(approval.run_id!).catch((e) => console.error("Failed to resume pipeline", e));
-      });
+      waitUntil((async () => {
+        try {
+          const { resumeAgentPipeline } = await import('./agent/orchestrator.js');
+          await resumeAgentPipeline(approval.run_id!);
+        } catch (e: any) {
+          console.error("Failed to resume pipeline after approval resolution", e);
+        }
+      })());
     } else {
       await agentStore.updateRunStatus(approval.run_id!, 'cancelled', { failure_reason: 'User rejected the plan.' });
       await agentStore.updateGoalStatus(approval.goal_id!, 'cancelled');
@@ -315,47 +320,51 @@ router.post('/slack/interactivity', async (req: any, res: any) => {
     // W3-C: Wrap post-response async work in waitUntil so Vercel
     // serverless doesn't terminate the function before it completes.
     waitUntil((async () => {
-      const action = payload.actions[0];
-      const actionId: string = action.action_id || '';
-      const approvalId: string = action.value || '';
-      const userId: string = payload.user?.id || '';
-      const channelId: string = payload.channel?.id || '';
+      try {
+        const action = payload.actions[0];
+        const actionId: string = action.action_id || '';
+        const approvalId: string = action.value || '';
+        const userId: string = payload.user?.id || '';
+        const channelId: string = payload.channel?.id || '';
 
-      if (!approvalId || (!actionId.startsWith('approval_approve') && !actionId.startsWith('approval_reject'))) {
-        return;
-      }
-
-      const newStatus: 'approved' | 'rejected' = actionId.includes('approve') ? 'approved' : 'rejected';
-
-      const approval = await agentStore.resolveApproval(approvalId, newStatus);
-
-      // Update the original Block Kit message to remove buttons
-      const { updateApprovalMessage } = await import('./tools/slack.js');
-      await updateApprovalMessage(approval, newStatus, channelId);
-
-      // Create audit event
-      if (approval.run_id) {
-        const trace = await agentStore.getRunTrace(approval.run_id);
-        await agentStore.appendAuditEvent({
-          workspace_id: trace.goal.workspace_id,
-          goal_id: approval.goal_id!,
-          run_id: approval.run_id,
-          type: `approval.${newStatus}`,
-          actor: userId,
-          summary: `User ${newStatus} execution via Block Kit button`,
-          payload: { approvalId: approval.id }
-        });
-      }
-
-      // Resume or cancel based on outcome
-      if (newStatus === 'approved' && approval.run_id) {
-        const { resumeAgentPipeline } = await import('./agent/orchestrator.js');
-        resumeAgentPipeline(approval.run_id).catch(e => console.error('Failed to resume pipeline', e));
-      } else if (newStatus === 'rejected' && approval.run_id) {
-        await agentStore.updateRunStatus(approval.run_id, 'cancelled', { failure_reason: 'User rejected via Slack button.' });
-        if (approval.goal_id) {
-          await agentStore.updateGoalStatus(approval.goal_id, 'cancelled');
+        if (!approvalId || (!actionId.startsWith('approval_approve') && !actionId.startsWith('approval_reject'))) {
+          return;
         }
+
+        const newStatus: 'approved' | 'rejected' = actionId.includes('approve') ? 'approved' : 'rejected';
+
+        const approval = await agentStore.resolveApproval(approvalId, newStatus);
+
+        // Update the original Block Kit message to remove buttons
+        const { updateApprovalMessage } = await import('./tools/slack.js');
+        await updateApprovalMessage(approval, newStatus, channelId);
+
+        // Create audit event
+        if (approval.run_id) {
+          const trace = await agentStore.getRunTrace(approval.run_id);
+          await agentStore.appendAuditEvent({
+            workspace_id: trace.goal.workspace_id,
+            goal_id: approval.goal_id!,
+            run_id: approval.run_id,
+            type: `approval.${newStatus}`,
+            actor: userId,
+            summary: `User ${newStatus} execution via Block Kit button`,
+            payload: { approvalId: approval.id }
+          });
+        }
+
+        // Resume or cancel based on outcome
+        if (newStatus === 'approved' && approval.run_id) {
+          const { resumeAgentPipeline } = await import('./agent/orchestrator.js');
+          await resumeAgentPipeline(approval.run_id);
+        } else if (newStatus === 'rejected' && approval.run_id) {
+          await agentStore.updateRunStatus(approval.run_id, 'cancelled', { failure_reason: 'User rejected via Slack button.' });
+          if (approval.goal_id) {
+            await agentStore.updateGoalStatus(approval.goal_id, 'cancelled');
+          }
+        }
+      } catch (e: any) {
+        console.error('[Interactivity waitUntil Error]', e.message);
       }
     })());
   } catch (err: any) {
@@ -393,7 +402,7 @@ router.post('/slack/events', async (req: any, res: any) => {
         signatureVerified: false,
         error: `Unauthorized: ${signatureError}`
       };
-      addLog(logItem);
+      await addLog(logItem);
       return res.status(401).send(`Unauthorized: ${signatureError}`);
     }
 
@@ -438,7 +447,7 @@ router.post('/slack/events', async (req: any, res: any) => {
       status: 'processing',
       signatureVerified: signatureVerified,
     };
-    addLog(logItem);
+    await addLog(logItem);
 
     res.status(200).send('OK');
 

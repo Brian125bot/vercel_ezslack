@@ -1,5 +1,6 @@
 import { pollScheduledTriggers } from '../../src/server/agent/scheduler.js';
 import { agentStore } from '../../src/server/storage/agentStore.js';
+import { query } from '../../src/server/storage/db.js';
 
 export default async function handler(req: any, res: any) {
   // Optional: check Authorization header if we only want Vercel Cron to hit this.
@@ -33,6 +34,11 @@ export default async function handler(req: any, res: any) {
   } catch (err: any) {
     console.error(`[Vercel Cron] reapExpiredApprovals error: ${err.message}`);
   }
+
+  // Clean up old processed_events (replaces setInterval in state.ts for Vercel)
+  try {
+    await query(`DELETE FROM processed_events WHERE created_at < now() - interval '10 minutes'`);
+  } catch { /* ignore */ }
 
   console.log(`[Vercel Cron] Polling for due triggers...`);
   try {

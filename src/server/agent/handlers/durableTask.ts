@@ -91,8 +91,11 @@ export async function handleDurableTask(
       payload: {}
     });
 
-    // Fire the run to Cloud Tasks (doesn't block)
-    await enqueueRunTask(run.id);
+    // Fire the run to the workflow endpoint
+    const enqueued = await enqueueRunTask(run.id);
+    if (!enqueued) {
+      throw new Error('Failed to enqueue run for processing');
+    }
 
     await slackReplyInThreadTool.execute({
       text: `I have accepted your goal: "${goal.title}". Analyzing constraints and drafting a plan...`

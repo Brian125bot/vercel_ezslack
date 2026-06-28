@@ -27,7 +27,11 @@ const MS_DAY = 24 * MS_HOUR;
  *  - "schedule (this|it) for tomorrow / next week / in N units"
  */
 export function detectDeferral(text: string): DeferralResult {
-  const t = text.toLowerCase().trim();
+  const t = text.toLowerCase().trim()
+    .replace(/(\d+)\s*m\b(?!\w)/g, '$1 minutes')
+    .replace(/(\d+)\s*h\b(?!\w)/g, '$1 hours')
+    .replace(/(\d+)\s*d\b(?!\w)/g, '$1 days')
+    .replace(/(\d+)\s*w\b(?!\w)/g, '$1 weeks');
 
   // "remind me in X (minutes|hours|days|weeks)"
   const remindIn = t.match(
@@ -100,7 +104,7 @@ export function detectDeferral(text: string): DeferralResult {
  * "check this in 2 hours").
  */
 function hasActionContext(text: string): boolean {
-  return /\b(remind|check|follow|ping|notify|alert|revisit|review|send|post|do|run|execute)\b/.test(text);
+  return /\b(remind|check|follow|ping|notify|alert|revisit|review|send|post|do|run|execute|know|let)\b/.test(text);
 }
 
 function normalizeUnit(raw: string): string {
@@ -124,15 +128,13 @@ function unitToMs(unit: string): number {
 
 /**
  * Milliseconds from now until 9:00 AM tomorrow (local server time).
- * If it's before 9 AM, "tomorrow" still means the *next* calendar day.
+ * "Tomorrow" always means the next calendar day at 9 AM, even when that is
+ * more than 24 hours away (e.g. saying "tomorrow" at 8 AM = 25 hours).
  */
 function msUntilTomorrow9am(): number {
   const now = new Date();
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
   tomorrow.setHours(9, 0, 0, 0);
-  const delta = tomorrow.getTime() - now.getTime();
-  // "Tomorrow" must never resolve to more than a full day out (e.g. when the
-  // current time is before 9am, 9am-tomorrow would be >24h away). Cap at 24h.
-  return Math.min(delta, MS_DAY);
+  return tomorrow.getTime() - now.getTime();
 }

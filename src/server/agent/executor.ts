@@ -302,13 +302,17 @@ export async function executeStep(
   try {
     // Wrap tool execution with timeout to prevent hung external API calls from blocking
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const output = await Promise.race([
-      tool.execute(toolInput, context),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Tool ${toolName} timed out after ${TOOL_TIMEOUT_MS}ms`)), TOOL_TIMEOUT_MS);
-      })
-    ]);
-    if (timer) clearTimeout(timer);
+    let output: any;
+    try {
+      output = await Promise.race([
+        tool.execute(toolInput, context),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Tool ${toolName} timed out after ${TOOL_TIMEOUT_MS}ms`)), TOOL_TIMEOUT_MS);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     await agentStore.updateToolCallStatus(toolCall.id, 'succeeded', { output });
     await agentStore.updateStepStatus(step.id, 'succeeded', { output });
 

@@ -49,7 +49,15 @@ app.use(express.json({
 }));
 
 // Slack interactivity sends URL-encoded payloads
-app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+app.use(express.urlencoded({
+  extended: true,
+  limit: '2mb',
+  verify: (req: any, res, buf) => {
+    if (!req.rawBody) {
+      req.rawBody = Buffer.from(buf);
+    }
+  }
+}));
 
 // Lazy migration runner for Vercel serverless environment
 let vercelMigrationsPromise: Promise<void> | null = null;

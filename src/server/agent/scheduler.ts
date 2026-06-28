@@ -10,19 +10,17 @@ const POLL_INTERVAL_MS = 15_000; // 15 seconds
  * or from a fixed interval in seconds. Falls back gracefully if the cron
  * library is unavailable or the expression is invalid.
  */
-function computeNextRunAt(
+async function computeNextRunAt(
   cron: string | null | undefined,
   intervalSeconds: number | null | undefined,
   timezone: string
-): Date | null {
+): Promise<Date | null> {
   if (intervalSeconds && intervalSeconds > 0) {
     return new Date(Date.now() + intervalSeconds * 1000);
   }
   if (cron) {
     try {
-      // Dynamic import guard — cron-parser may not be installed in all environments
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { CronExpressionParser } = require('cron-parser');
+      const { CronExpressionParser } = await import('cron-parser');
       const interval = CronExpressionParser.parse(cron, {
         tz: timezone || 'UTC',
         currentDate: new Date(),
@@ -89,7 +87,7 @@ export async function pollScheduledTriggers(): Promise<void> {
         });
 
         // Compute the next run time and re-insert for recurring triggers
-        const nextRunAt = computeNextRunAt(trigger.cron, trigger.interval_seconds, trigger.timezone);
+        const nextRunAt = await computeNextRunAt(trigger.cron, trigger.interval_seconds, trigger.timezone);
         await agentStore.reinsertScheduledTrigger(trigger, nextRunAt);
         // One-shot triggers (nextRunAt === null) are not re-inserted → effectively disabled
 

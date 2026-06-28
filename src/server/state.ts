@@ -267,24 +267,29 @@ export const processedMessageKeys = memoryProcessedMessages;
 export const eventTimestamps = memoryEventTimestamps;
 export const threadMemory = memoryThreads;
 
-// Clean up in-memory events older than 10 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, timestamp] of memoryEventTimestamps.entries()) {
-    if (now - timestamp > 600 * 1000) {
-      memoryProcessedEvents.delete(key);
-      memoryProcessedMessages.delete(key);
-      memoryEventTimestamps.delete(key);
+// On traditional servers, periodically clean up stale in-memory and DB state.
+// On Vercel serverless, setInterval is unreliable after the response is sent,
+// so these are skipped — the cron handler handles DB cleanup instead.
+if (process.env.VERCEL !== '1') {
+  // Clean up in-memory events older than 10 minutes
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, timestamp] of memoryEventTimestamps.entries()) {
+      if (now - timestamp > 600 * 1000) {
+        memoryProcessedEvents.delete(key);
+        memoryProcessedMessages.delete(key);
+        memoryEventTimestamps.delete(key);
+      }
     }
-  }
-}, 60 * 1000);
+  }, 60 * 1000);
 
-// Clean up old processed_events from DB periodically (every 10 minutes)
-setInterval(async () => {
-  const q = await getQuery();
-  if (q) {
-    try {
-      await q(`DELETE FROM processed_events WHERE created_at < now() - interval '10 minutes'`);
-    } catch { /* ignore */ }
-  }
-}, 600 * 1000);
+  // Clean up old processed_events from DB periodically (every 10 minutes)
+  setInterval(async () => {
+    const q = await getQuery();
+    if (q) {
+      try {
+        await q(`DELETE FROM processed_events WHERE created_at < now() - interval '10 minutes'`);
+      } catch { /* ignore */ }
+    }
+  }, 600 * 1000);
+}

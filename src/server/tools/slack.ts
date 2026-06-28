@@ -3,6 +3,7 @@ import type { ApprovalRequest } from '../storage/types.js';
 import { agentStore } from '../storage/agentStore.js';
 import { geminiCall } from '../agent/geminiClient.js';
 import { resolveModel } from '../agent/models.js';
+import { selectedModel } from '../state.js';
 
 const SLACK_MAX_TEXT = 39000;
 const SLACK_MAX_SECTION_TEXT = 2800;
@@ -40,7 +41,7 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
               const apiKey = process.env.GEMINI_API_KEY;
               if (apiKey && previousOutputs) {
                 const responseText = await geminiCall({
-                  model: resolveModel(process.env.SELECTED_MODEL),
+                  model: resolveModel(selectedModel),
                   contents: `Based on the following execution trace for the goal "${trace.goal.title}", generate a concise and helpful Slack reply to the user summarize what was done. Keep it brief.\n\n${previousOutputs}`,
                   label: 'autoReply'
                 });

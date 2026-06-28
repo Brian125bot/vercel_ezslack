@@ -11,7 +11,7 @@ export async function getAdminDbPool(): Promise<Pool> {
   const config: PoolConfig = {
     max: parseInt(process.env.DB_ADMIN_POOL_MAX || '2'),
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000'),
   };
 
   if (process.env.SQL_HOST) {
@@ -25,7 +25,9 @@ export async function getAdminDbPool(): Promise<Pool> {
     });
   } else if (process.env.CLOUD_SQL_CONNECTION_NAME) {
     console.log('Initializing Admin DB connection using Cloud SQL Connector...');
-    connector = new Connector();
+    if (!connector) {
+      connector = new Connector();
+    }
     const clientOpts = await connector.getOptions({
       instanceConnectionName: process.env.CLOUD_SQL_CONNECTION_NAME,
     });
@@ -65,7 +67,7 @@ export async function getDbPool(): Promise<Pool> {
   const config: PoolConfig = {
     max: parseInt(process.env.DB_POOL_MAX || '5'),
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '10000'),
   };
 
   if (process.env.SQL_HOST) {
@@ -79,7 +81,9 @@ export async function getDbPool(): Promise<Pool> {
     });
   } else if (process.env.CLOUD_SQL_CONNECTION_NAME) {
     console.log('Initializing DB connection using Cloud SQL Connector...');
-    connector = new Connector();
+    if (!connector) {
+      connector = new Connector();
+    }
     const clientOpts = await connector.getOptions({
       instanceConnectionName: process.env.CLOUD_SQL_CONNECTION_NAME,
     });
@@ -139,10 +143,30 @@ export async function isDbAvailable(): Promise<boolean> {
   }
 }
 
+const QUERY_MAX_RETRIES = 2;
+const QUERY_RETRY_BASE_MS = 200;
+
 export async function query<T = any>(text: string, params: any[] = []): Promise<T[]> {
-  const p = await getDbPool();
-  const res = await p.query(text, params);
-  return res.rows;
+  for (let attempt = 0; attempt <= QUERY_MAX_RETRIES; attempt++) {
+    try {
+      const p = await getDbPool();
+      const res = await p.query(text, params);
+      return res.rows;
+    } catch (err: any) {
+      const isTransient = err?.code === '08003' || err?.code === '08006' || err?.code === '08001'
+        || err?.message?.includes('Connection terminated')
+        || err?.message?.includes('timeout')
+        || err?.message?.includes('Connection refused')
+        || err?.message?.includes('no more connections');
+      if (isTransient && attempt < QUERY_MAX_RETRIES) {
+        const delay = QUERY_RETRY_BASE_MS * Math.pow(2, attempt);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Unexpected: query retry loop exhausted without returning or throwing');
 }
 
 export async function withTransaction<T>(callback: (client: any) => Promise<T>): Promise<T> {

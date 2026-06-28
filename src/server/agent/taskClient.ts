@@ -6,11 +6,11 @@ const ENQUEUE_RETRY_BASE_MS = 1000;
 /**
  * Triggers a run via the Vercel Workflow endpoint with exponential-backoff retry.
  */
-export async function enqueueRunTask(runId: string, logItemId?: string): Promise<void> {
+export async function enqueueRunTask(runId: string, logItemId?: string): Promise<boolean> {
   const url = process.env.APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
   if (!url) {
     slog('taskClient', 'skip_enqueue', { runId, reason: 'Missing APP_URL configuration' });
-    return;
+    return false;
   }
 
   const endpoint = `${url.replace(/\/$/, '')}/api/workflows/agentRun`;
@@ -25,13 +25,13 @@ export async function enqueueRunTask(runId: string, logItemId?: string): Promise
 
       if (res.ok) {
         slog('taskClient', 'enqueued_run', { runId, endpoint, attempt });
-        return;
+        return true;
       }
 
       // Client errors (4xx) won't resolve by retrying — give up immediately
       if (res.status >= 400 && res.status < 500) {
         slog('taskClient', 'enqueue_error', { runId, error: `HTTP ${res.status}`, endpoint });
-        return;
+        return false;
       }
 
       // Server errors (5xx) — retry with backoff
@@ -54,6 +54,7 @@ export async function enqueueRunTask(runId: string, logItemId?: string): Promise
       slog('taskClient', 'enqueue_error', { runId, error: err.message, attempt });
     }
   }
+  return false;
 }
 
 /**
