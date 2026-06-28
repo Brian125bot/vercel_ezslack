@@ -2,7 +2,7 @@
   "version": 2,
   "rewrites": [
     {
-      "source": "/api/(?!workflows|cron)(.*)",
+      "source": "/api/:path((?!workflows|cron).*)",
       "destination": "/api/index.ts"
     },
     {
