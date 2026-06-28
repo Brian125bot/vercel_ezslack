@@ -200,6 +200,7 @@ Incoming Message
 
 | Adapter | Tool Name | Risk Level | Env Var Required |
 |---------|-----------|-----------|------------------|
+| `WebSearchAdapter` | `search.query` | `read` | `TAVILY_API_KEY` |
 | `GitHubIssueAdapter` | `github.createIssue` | `external_write` | `GITHUB_TOKEN` |
 | `EmailAdapter` | `email.send` | `external_write` | `EMAIL_WEBHOOK_URL` |
 
