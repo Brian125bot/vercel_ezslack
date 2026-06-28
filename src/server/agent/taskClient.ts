@@ -5,7 +5,7 @@ import crypto from 'crypto';
  * Triggers a run via the Vercel Workflow endpoint.
  */
 export async function enqueueRunTask(runId: string, logItemId?: string): Promise<void> {
-  const url = process.env.APP_URL;
+  const url = process.env.APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
   if (!url) {
     slog('taskClient', 'skip_enqueue', { runId, reason: 'Missing APP_URL configuration' });
     return;
@@ -40,7 +40,7 @@ export async function enqueueRunTask(runId: string, logItemId?: string): Promise
  * Triggers the Vercel Cron endpoint manually if needed.
  */
 export async function enqueueSchedulerPollTask(): Promise<void> {
-  const url = process.env.APP_URL;
+  const url = process.env.APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined);
   const secret = process.env.CRON_SECRET;
   
   if (!url) {

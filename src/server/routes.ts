@@ -449,17 +449,49 @@ router.post('/slack/events', async (req: any, res: any) => {
       logItemId: logItem.id,
     };
 
-    const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
-    const host = process.env.VERCEL_URL || process.env.APP_URL?.replace(/^https?:\/\//, '') || req.get('host');
-    const workflowUrl = `${protocol}://${host}/api/workflows/agentRun`;
-
-    console.log(`[Slack Event] Triggering Vercel Workflow at ${workflowUrl}`);
-    
-    const triggerPromise = fetch(workflowUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(runPayload)
-    }).catch(err => console.error('Failed to trigger workflow:', err));
+    const triggerPromise = (async () => {
+      try {
+        if (process.env.VERCEL === '1') {
+          // If on Vercel, invoke the agentRun handler directly in-process to bypass
+          // deployment protection (401/302 redirects) and internet/TLS latency.
+          // @ts-ignore
+          const { default: agentRunHandler } = await import('../../../api/workflows/agentRun.js');
+          
+          const mockReq = {
+            method: 'POST',
+            body: runPayload
+          };
+          
+          const mockRes = {
+            status: (code: number) => ({
+              json: (data: any) => {
+                console.log(`[Local Trigger] agentRun response status ${code}:`, data);
+              }
+            })
+          };
+          
+          await agentRunHandler(mockReq as any, mockRes as any);
+        } else {
+          // Fallback for non-Vercel environments (e.g. dev/docker)
+          const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+          const host = req.get('host') || process.env.APP_URL?.replace(/^https?:\/\//, '') || process.env.VERCEL_URL;
+          const workflowUrl = `${protocol}://${host}/api/workflows/agentRun`;
+          
+          console.log(`[Slack Event] Fetching workflow at ${workflowUrl}`);
+          const res = await fetch(workflowUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(runPayload)
+          });
+          
+          if (!res.ok) {
+            console.error(`[Slack Event] Local workflow trigger failed with status ${res.status}`);
+          }
+        }
+      } catch (err: any) {
+        console.error('[Slack Event] Error in background trigger execution:', err);
+      }
+    })();
 
     waitUntil(triggerPromise);
 
