@@ -10,10 +10,13 @@ const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY |
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
 
 // Vercel Workflows endpoint for agent execution
-export const POST = async (request: Request) => {
+export default async function handler(req: any, res: any) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
   const startTime = Date.now();
   try {
-    const body = await request.json();
+    const body = req.body || {};
     const { event, eventId, signatureVerified, workspaceId, runId, logItemId } = body;
 
     // Handle deferred/subsequent runId triggers
@@ -21,7 +24,7 @@ export const POST = async (request: Request) => {
       console.log(`[Vercel Workflow] Executing run ${runId}`);
       const run = await agentStore.getRun(runId);
       if (!run || run.status !== 'queued') {
-        return new Response(JSON.stringify({ message: 'Run not found or already processing/finished' }), { status: 200 });
+        return res.status(200).json({ message: 'Run not found or already processing/finished' });
       }
       
       const { runLoop } = await import('../../src/server/agent/loop.js');
@@ -36,7 +39,7 @@ export const POST = async (request: Request) => {
         console.error(`[Vercel Workflow] runLoop error: ${err.message}`);
         await finalizeRun(run, 'failed', err.message);
       }
-      return new Response(JSON.stringify({ success: true }), { status: 200 });
+      return res.status(200).json({ success: true });
     }
 
     // Otherwise, handle initial Slack event orchestration
@@ -104,17 +107,10 @@ export const POST = async (request: Request) => {
       });
     }
 
-    return new Response(JSON.stringify({ success: true, result }), { status: 200 });
+    return res.status(200).json({ success: true, result });
   } catch (error: any) {
     console.error(`[Vercel Workflow] execution error: ${error.message}`);
-    // If we failed early, we might still have body.logItemId if JSON parse succeeded
-    // Since we are in the catch block, `logItemId` might not be defined if request.json() threw,
-    // but if it threw later, we have it.
-    let errLogId;
-    try {
-      const b = await request.clone().json().catch(()=>({}));
-      errLogId = b.logItemId;
-    } catch { }
+    const errLogId = req.body?.logItemId;
     
     if (errLogId) {
       updateLog(errLogId, {
@@ -123,6 +119,6 @@ export const POST = async (request: Request) => {
         processingTimeMs: Date.now() - startTime
       });
     }
-    return new Response(JSON.stringify({ error: error.message }), { status: 500 });
+    return res.status(500).json({ error: error.message });
   }
-};
+}
