@@ -1,6 +1,6 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
+
 import dotenv from "dotenv";
 import helmet from "helmet";
 import cors from "cors";
@@ -120,6 +120,7 @@ async function initServer() {
 
   if (process.env.NODE_ENV !== "production") {
     console.log(`[Vite Dev] Hosting express full-stack server with Vite middleware mode...`);
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
