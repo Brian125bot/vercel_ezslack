@@ -7,8 +7,6 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { router as apiRoutes } from "./src/server/routes.js";
 import { runMigrations } from "./src/server/storage/migrations.js";
-import { startWorker, stopWorker } from "./src/server/agent/worker.js";
-import { startScheduler, stopScheduler } from "./src/server/agent/scheduler.js";
 import { closeDb } from "./src/server/storage/db.js";
 
 dotenv.config();
@@ -73,41 +71,7 @@ app.use((req, res, next) => {
 // Mount API routes
 app.use('/api', apiRoutes);
 
-// ── W4-D: Graceful shutdown ──
 let server: ReturnType<typeof app.listen> | null = null;
-
-async function gracefulShutdown(signal: string) {
-  console.log(`\n[${signal}] Graceful shutdown initiated...`);
-  stopWorker();
-  stopScheduler();
-
-  if (server) {
-    server.close(() => {
-      console.log('[Shutdown] HTTP server closed.');
-    });
-  }
-
-  // Give in-flight requests a moment to drain
-  await new Promise(resolve => setTimeout(resolve, 2000));
-
-  await closeDb();
-  console.log('[Shutdown] Database connections closed. Exiting.');
-  process.exit(0);
-}
-
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-// ── P0: Global crash handlers ──
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[FATAL] Unhandled Promise Rejection:', reason);
-  // Log but do not exit — Cloud Run will restart the container if needed
-});
-
-process.on('uncaughtException', (err) => {
-  console.error('[FATAL] Uncaught Exception:', err);
-  process.exit(1); // Exit immediately — process is in an undefined state
-});
 
 // Configure Vite middleware or static paths based on environment
 async function initServer() {
@@ -126,8 +90,6 @@ async function initServer() {
   try {
     if (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) {
       await runMigrations();
-      startWorker();
-      startScheduler(); // W4-A: Start the scheduled triggers poller
     } else {
       console.log('No SQL configuration found (DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST). Skipping database migrations.');
     }

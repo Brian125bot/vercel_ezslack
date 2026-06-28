@@ -1,8 +1,7 @@
 import { agentStore } from '../storage/agentStore.js';
 import { slog } from './log.js';
 
-let schedulerInterval: ReturnType<typeof setInterval> | undefined;
-let isShuttingDown = false;
+
 
 const POLL_INTERVAL_MS = 15_000; // 15 seconds
 
@@ -114,11 +113,4 @@ export async function pollScheduledTriggers(): Promise<void> {
   }
 }
 
-// Stubs to avoid breaking server.ts
-export function startScheduler(): void {
-  slog('scheduler', 'started', { mode: 'cloud-tasks' });
-}
 
-export function stopScheduler(): void {
-  slog('scheduler', 'stopped', { mode: 'cloud-tasks' });
-}
