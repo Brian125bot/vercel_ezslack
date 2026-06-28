@@ -9,6 +9,13 @@ import { selectedModel, getSelectedModel, updateLog } from '../../src/server/sta
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
 
+function confidenceToNumber(c: string): number {
+  if (c === 'high') return 1.0;
+  if (c === 'medium') return 0.5;
+  if (c === 'low') return 0.0;
+  return 0.5;
+}
+
 // Vercel Workflows endpoint for agent execution
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
@@ -78,7 +85,10 @@ export default async function handler(req: any, res: any) {
     const { intent, confidence, source } = intentResult;
 
     if (intent === 'direct_reply') {
-      await directReplySemaphore.acquire();
+      const acquired = await directReplySemaphore.acquire(10_000);
+      if (!acquired) {
+        console.warn(`[Vercel Workflow] Direct reply concurrency limit reached, proceeding without semaphore`);
+      }
     }
     
     let result;
@@ -108,7 +118,7 @@ export default async function handler(req: any, res: any) {
       await updateLog(logItemId, {
         status: result?.status === 'success' ? 'success' : 'error',
         intent: result?.intent || intent,
-        confidence,
+        confidence: confidenceToNumber(confidence),
         source,
         processingTimeMs: durationMs,
         runId: result?.runId,

@@ -10,13 +10,30 @@ export class Semaphore {
     this.permits = permits;
   }
 
-  async acquire(): Promise<void> {
+  async acquire(timeoutMs?: number): Promise<boolean> {
     if (this.permits > 0) {
       this.permits--;
-      return;
+      return true;
     }
-    return new Promise<void>(resolve => {
-      this.waitQueue.push(resolve);
+    if (timeoutMs && timeoutMs <= 0) {
+      return false;
+    }
+    return new Promise<boolean>(resolve => {
+      if (timeoutMs) {
+        const timer = setTimeout(() => {
+          const idx = this.waitQueue.indexOf(resolve as any);
+          if (idx !== -1) {
+            this.waitQueue.splice(idx, 1);
+          }
+          resolve(false);
+        }, timeoutMs);
+        this.waitQueue.push(() => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      } else {
+        this.waitQueue.push(() => resolve(true));
+      }
     });
   }
 

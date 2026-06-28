@@ -42,6 +42,8 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
   const runStartTime = Date.now();
   const wouldExceedTimeout = (): boolean => (Date.now() - runStartTime) >= MAX_RUN_WALL_TIME_MS;
 
+  slog('loop', 'runLoop.start', { run_id: run.id, goal_id: run.goal_id, worker_id: workerId });
+
   const goal = await agentStore.getGoal(run.goal_id);
 
   // Start lease heartbeat to prevent stale claim recovery during long operations
@@ -311,5 +313,11 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
     clearInterval(leaseHeartbeat);
     slog('loop', 'runLoop.error', { run_id: run.id, error: err.message });
     await finalizeRun(run, 'failed', err.message);
+  } finally {
+    slog('loop', 'runLoop.complete', {
+      run_id: run.id,
+      elapsed: Date.now() - runStartTime,
+      final_status: run.status
+    });
   }
 }

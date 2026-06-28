@@ -23,7 +23,7 @@ export interface SlackEventLog {
   aiResponse?: string;
   error?: string;
   intent?: string;           // Dynamically classified intent
-  confidence?: string;       // Confidence score
+  confidence?: number;       // Confidence score (0.0–1.0)
   source?: string;           // Classification source (heuristic, llm, fallback)
   processingTimeMs?: number; // Background task latency recording
   threadKey?: string;        // Resolved thread identification key
