@@ -1,5 +1,6 @@
 import express from 'express';
 import crypto from 'crypto';
+import { waitUntil } from '@vercel/functions';
 import { requireDashboardAuth } from './auth.js';
 import { selectedModel, setSelectedModel, addLog, updateLog, getLogs, clearLogs, getSelectedModel, isEventDuplicate, isMessageDuplicate } from './state.js';
 import { classifyIntent } from './agent/intent.js';
@@ -454,14 +455,13 @@ router.post('/slack/events', async (req: any, res: any) => {
 
     console.log(`[Slack Event] Triggering Vercel Workflow at ${workflowUrl}`);
     
-    // We use a fire-and-forget fetch to the workflow endpoint.
-    // Note: On Vercel, this may require integration with Upstash QStash or Vercel Workflows SDK
-    // to guarantee execution beyond the request lifecycle.
-    fetch(workflowUrl, {
+    const triggerPromise = fetch(workflowUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(runPayload)
     }).catch(err => console.error('Failed to trigger workflow:', err));
+
+    waitUntil(triggerPromise);
 
   } catch (syncErr: any) {
     console.error(`[Synchronous Processing Crash] `, syncErr);
