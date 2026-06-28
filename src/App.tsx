@@ -382,9 +382,15 @@ export default function App() {
     }
   }, [selectedRunId, dashboardPassword]);
 
-  // Poll status and logs
+  // Fetch initial status to check authentication
   useEffect(() => {
     fetchStatus();
+  }, [dashboardPassword]);
+
+  // Poll status and logs only if authenticated
+  useEffect(() => {
+    if (authRequired) return;
+
     fetchLogs();
 
     const interval = setInterval(() => {
@@ -392,7 +398,7 @@ export default function App() {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [dashboardPassword]);
+  }, [dashboardPassword, authRequired]);
 
   if (authRequired) {
     return (
