@@ -639,4 +639,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v5.0.0 | ✅ Done | Google Cloud Tasks migration, error boundary hardening, and reporting resilience |
 | v6.0.8 | ✅ Done | Vercel Migration (Vercel Serverless, Vercel Workflows, Neon Postgres, Vercel Cron) |
 | v6.1.4 | ✅ Done | Vercel Stability Hardening (cold-start model selection, retry, stale lease recovery, timeout guard) |
-| v6.2.0 | ✅ Done | Production Reliability & Feedback Fixes (interactivity sig verify, model selection in slack.ts, step-level approval resume, confidence normalization, semaphore timeout, observability) |
+| v6.2.1 | ✅ Done | Production Reliability & Feedback Fixes (interactivity sig verify, model selection in slack.ts, step-level approval resume, confidence normalization, semaphore timeout, observability) |
