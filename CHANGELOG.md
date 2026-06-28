@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.1.0] - Vercel Stability Hardening - 2026-06-27
+
+Resolves five reliability gaps discovered during Vercel serverless deployment testing.
+
+### 🐛 Bug Fixes
+
+* **Model selection now resolves on cold start (Fix 1).** `agentRun.ts` calls `getSelectedModel()` at handler bootstrap so the user's dashboard-selected Gemini model is used instead of the module default on every Vercel cold start. The old behavior silently pinned all workflow runs to `gemini-3.1-flash-lite` regardless of dashboard selection.
+* **Interactivity handler no longer drops async work (Fix 2).** The `POST /api/slack/interactivity` route wraps approval resolution and pipeline resumption in `waitUntil()` from `@vercel/functions`, preventing Vercel from terminating the function before async work completes.
+* **Workflow triggers retry on transient failures (Fix 3).** `enqueueRunTask()` now retries 3 times with exponential backoff (1s → 2s → 4s) on network errors and 5xx responses. Client errors (4xx) are not retried. Previously, any `fetch` failure silently dropped the task.
+* **Stale lease reclamation wired into cron (Fix 4).** `recoverStaleClaims()` and `reapExpiredApprovals()` — both defined in `agentStore.ts` but never called — now run at the start of every Vercel Cron cycle and on workflow handler startup. Runs abandoned by terminated serverless invocations are reclaimed and re-queued.
+* **Cooperative timeout guard prevents hard termination (Fix 5).** `runLoop()` checks elapsed wall-clock time before plan creation, each step execution, and verification. When the configurable `RUN_TIMEOUT_MS` (default 45s) is approached, the run is gracefully re-queued for the next invocation instead of being hard-killed by the Vercel serverless timeout (60s Pro / 15s Hobby).
+
+### 🧪 Tests
+
+* Added 5 new test cases in `tests/vercel.test.ts` covering:
+  - Stale claim recovery and approval expiration in the cron handler (Fix 4)
+  - Retry-success, retry-exhaustion, and 4xx-no-retry for `enqueueRunTask` (Fix 3)
+  - `getSelectedModel()` call during workflow handler bootstrap (Fix 1)
+  - Timeout guard re-queuing in `runLoop()` (Fix 5)
+* Updated mocks for `agentStore` (added `recoverStaleClaims`, `reapExpiredApprovals`, `updateGoalStatus`, lease, and step operations) and `state` (added `getThreadHistory`, `saveThreadHistory`).
+* Full suite: 94 tests passing across 11 test files; `tsc --noEmit` clean.
+
 ## [5.0.0] - Google Cloud Tasks Migration & Resilience Hardening - 2026-06-24
 
 Migrates the background processing system to Google Cloud Tasks for serverless task execution and hardens error boundaries for Slack API calls (approvals and reports).

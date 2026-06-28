@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-2.5%20Flash%20%7C%203.5%20Flash-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-8%20suites%20%7C%2072%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-11%20files%20%7C%2094%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -337,23 +337,24 @@ Migrations are defined in `src/server/storage/schema.ts` and executed by `src/se
 
 ## ⚙️ Worker & Queue
 
-The background processing system has been migrated to **Vercel Workflows**, replacing Google Cloud Tasks. This enables serverless execution of durable, long-running agent workflows without continuous CPU usage or hitting standard serverless timeouts.
+The background processing system runs on **Vercel Serverless Functions** with HTTP-based task triggering. Durable, long-running agent workflows execute via the `/api/workflows/agentRun` endpoint.
 
 | Mechanism | Description |
 |-----------|-------------|
-| **Execution** | Vercel Workflows triggers HTTP webhooks (`/api/workflows/agentRun`) |
-| **Scheduling** | Vercel Cron triggers the polling webhook (`/api/cron/poll`) |
-| **Concurrency** | Managed by the Vercel execution runtime |
-| **Retry & Backoff** | Handled natively by Vercel Workflows |
-| **Security** | Webhooks secured via Vercel authorization mechanisms |
+| **Execution** | Self-triggered HTTP fetch to `/api/workflows/agentRun` with `waitUntil()` from `@vercel/functions` |
+| **Trigger Retry** | Exponential backoff retry (3 attempts: 1s → 2s → 4s) on transient fetch failures (5xx, network errors) |
+| **Scheduling** | Vercel Cron triggers the polling webhook (`/api/cron/poll`) daily at 9 AM UTC |
+| **Stale Recovery** | `recoverStaleClaims()` + `reapExpiredApprovals()` run at cron start and workflow bootstrap |
+| **Timeout Guard** | Cooperative wall-clock check (configurable `RUN_TIMEOUT_MS`, default 45s) before plan creation, each step, and verification — gracefully re-queues instead of hard-terminating on Vercel's serverless timeout |
+| **Security** | Workflow endpoint secured via Vercel Automation Bypass secret for preview deployments; cron endpoint secured via `CRON_SECRET` |
 
-*Note: The old `FOR UPDATE SKIP LOCKED` logic remains as a concurrency fallback for synchronous paths, but background execution and polling are entirely driven by Vercel.*
+*Note: The old `FOR UPDATE SKIP LOCKED` logic remains as a concurrency fallback for synchronous paths, but background execution and polling are entirely driven by Vercel serverless functions.*
 
 ---
 
 ## 🧪 Test Suite
 
-8 test suites, 72 test cases. Run with:
+11 test files, 94 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -371,26 +372,13 @@ npm run test:coverage # With coverage report
 | Deferral Detection | `tests/deferral.test.ts` | 17 | Time-deferred pattern matching, false positive prevention |
 | Agent Loop | `tests/loop.test.ts` | 4 | Full closed-loop integration (plan→execute→verify→finalize) |
 | Migration Idempotency | `tests/migration.test.ts` | 9 | Static SQL analysis for IF NOT EXISTS guards |
+| Plan Normalization | `tests/planNormalize.test.ts` | 5 | Plan draft cleaning (tool hallucination, kind coercion) |
+| Model Resolution | `tests/models.test.ts` | 3 | Model name safe resolution with fallback |
+| Vercel Integration | `tests/vercel.test.ts` | 11 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard |
 
-### CI Gate (Cloud Build)
+### CI Gate
 
-`cloudbuild.yaml` runs lint and test gates before building:
-
-```yaml
-steps:
-  - name: node:22-alpine
-    entrypoint: npm
-    args: ['ci']
-  - name: node:22-alpine
-    entrypoint: npm
-    args: ['run', 'lint']   # tsc --noEmit
-  - name: node:22-alpine
-    entrypoint: npm
-    args: ['test']          # vitest run
-  - name: gcr.io/cloud-builders/docker
-    args: ['build', '-t', '...', '.']
-  # ... push + deploy
-```
+`npm run lint` (`tsc --noEmit`) and `npm test` are the pre-merge CI gates.
 
 ---
 
@@ -425,7 +413,12 @@ steps:
 ## 📂 Project Structure
 
 ```
-├── server.ts                          # Express entry point, graceful shutdown
+├── server.ts                          # Express entry point, exported for Vercel
+├── vercel.json                        # Vercel routing and cron configuration
+├── api/
+│   ├── index.ts                       # Vercel serverless entry (re-exports Express app)
+│   ├── cron/poll.ts                   # Vercel Cron handler for scheduled triggers
+│   └── workflows/agentRun.ts          # Vercel Workflow handler for agent execution
 ├── src/
 │   ├── App.tsx                        # React Dashboard UI
 │   ├── main.tsx                       # React entry
@@ -483,12 +476,15 @@ steps:
 ├── tests/
 │   ├── intent.test.ts                # 11 intent classification tests
 │   ├── policy.test.ts                # 6 policy gate tests
-│   ├── sanitize.test.ts              # 8 secret redaction tests
+│   ├── sanitize.test.ts              # 11 secret redaction tests
 │   ├── verifier.test.ts              # 6 rule verification tests
 │   ├── reporter.test.ts              # 8 report generation tests
-│   ├── deferral.test.ts              # 15 deferral detection tests
+│   ├── deferral.test.ts              # 17 deferral detection tests
 │   ├── loop.test.ts                  # 4 closed-loop integration tests
-│   └── migration.test.ts             # 9 migration idempotency tests
+│   ├── migration.test.ts             # 9 migration idempotency tests
+│   ├── planNormalize.test.ts         # 5 plan normalization tests
+│   ├── models.test.ts                # 3 model resolution tests
+│   └── vercel.test.ts                # 11 Vercel integration tests
 ├── docs/
 │   └── intent-routing.md             # Intent routing architecture spec
 ├── slack-manifest.json               # Slack App Manifest (copy-paste ready)
@@ -533,6 +529,10 @@ steps:
 | `CRON_SECRET` | Secure Bearer token used to authenticate Vercel Cron webhook calls |
 | `DATABASE_URL` | Full PostgreSQL connection string (e.g. Vercel Postgres / Neon) |
 | `APP_URL` | Base URL of your deployed Vercel application (used for trigger callbacks) |
+| `RUN_TIMEOUT_MS` | Soft wall-clock limit for `runLoop()` (default `45000`). When exceeded, the run is gracefully re-queued instead of hard-killed by Vercel's serverless timeout |
+| `DIRECT_REPLY_CONCURRENCY` | Max concurrent direct-reply Gemini calls per invocation (default `5`) |
+| `GEMINI_TIMEOUT_MS` | Per-call Gemini API timeout in ms (default `30000`) |
+| `WORKER_LEASE_SECONDS` | DB lease TTL for run claims (default `300`) |
 
 ---
 
@@ -638,3 +638,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v3.1.0 | ✅ Done | Final DoD Gaps: Deferral, Plan Mutation, Loop Tests |
 | v5.0.0 | ✅ Done | Google Cloud Tasks migration, error boundary hardening, and reporting resilience |
 | v6.0.8 | ✅ Done | Vercel Migration (Vercel Serverless, Vercel Workflows, Neon Postgres, Vercel Cron) |
+| v6.1.0 | ✅ Done | Vercel Stability Hardening (cold-start model selection, retry, stale lease recovery, timeout guard) |
