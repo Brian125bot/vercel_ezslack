@@ -4,8 +4,8 @@
     "minor_version": 1
   },
   "display_information": {
-    "name": "Gemini AI Agent Backend",
-    "description": "Production-ready serverless AI Agent powered by Express and Gemini 2.5 Flash.",
+    "name": "Vercel EZSlack",
+    "description": "Production-ready serverless Slack AI Agent powered by Express, Gemini, and Vercel.",
     "background_color": "#0d1117"
   },
   "features": {
@@ -15,7 +15,7 @@
       "messages_tab_read_only_enabled": false
     },
     "bot_user": {
-      "display_name": "Gemini Agent",
+      "display_name": "Vercel EZSlack",
       "always_online": true
     }
   },
@@ -33,10 +33,10 @@
   "settings": {
     "interactivity": {
       "is_enabled": true,
-      "request_url": "https://cloud-ez.vercel.app/api/slack/interactivity"
+      "request_url": "https://vercel-ezslack.vercel.app/api/slack/interactivity"
     },
     "event_subscriptions": {
-      "request_url": "https://cloud-ez.vercel.app/api/slack/events",
+      "request_url": "https://vercel-ezslack.vercel.app/api/slack/events",
       "bot_events": [
         "app_mention",
         "message.channels",

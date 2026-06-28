@@ -1,7 +1,15 @@
 {
-  "name": "slack-ez-cloud",
-  "private": true,
-  "version": "0.0.0",
+  "name": "vercel-ezslack",
+  "version": "6.2.0",
+  "description": "Production-ready serverless Slack AI Agent powered by Express, Gemini, and Vercel.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Brian125bot/vercel_ezslack.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Brian125bot/vercel_ezslack/issues"
+  },
+  "homepage": "https://github.com/Brian125bot/vercel_ezslack#readme",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
