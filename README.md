@@ -638,4 +638,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v3.1.0 | ✅ Done | Final DoD Gaps: Deferral, Plan Mutation, Loop Tests |
 | v5.0.0 | ✅ Done | Google Cloud Tasks migration, error boundary hardening, and reporting resilience |
 | v6.0.8 | ✅ Done | Vercel Migration (Vercel Serverless, Vercel Workflows, Neon Postgres, Vercel Cron) |
-| v6.1.2 | ✅ Done | Vercel Stability Hardening (cold-start model selection, retry, stale lease recovery, timeout guard) |
+| v6.1.3 | ✅ Done | Vercel Stability Hardening (cold-start model selection, retry, stale lease recovery, timeout guard) |
