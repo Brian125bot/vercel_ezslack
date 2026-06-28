@@ -17,7 +17,19 @@ export async function resumeAgentPipeline(runId: string): Promise<void> {
     claimed_at: null,
     lease_expires_at: null
   });
-  
+
+  // Reset any blocked steps to pending so they are re-executed on approval.
+  // The approved approval request (status='approved') will be found by
+  // getApprovedStepApproval() in runLoop(), setting preApproved=true.
+  if (run.plan_id) {
+    const steps = await agentStore.getStepsForPlan(run.plan_id);
+    for (const step of steps) {
+      if (step.status === 'blocked') {
+        await agentStore.updateStepStatus(step.id, 'pending');
+      }
+    }
+  }
+
   await agentStore.appendAuditEvent({
     workspace_id: null,
     goal_id: run.goal_id,
