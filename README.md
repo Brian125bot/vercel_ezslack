@@ -608,8 +608,8 @@ The companion React dashboard provides:
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/Brian125bot/slack_ez_cloud.git
-cd slack_ez_cloud
+git clone https://github.com/Brian125bot/vercel_ezslack.git
+cd vercel_ezslack
 npm install
 
 # 2. Configure environment
