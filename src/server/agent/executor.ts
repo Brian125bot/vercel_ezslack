@@ -148,13 +148,15 @@ export async function executeStep(
   let toolInput = (step.input as any).input || {};
 
   // W3-A: If the tool input references upstream generated content, inject it
-  if (toolName === 'slack.replyInThread' && (!toolInput.text || String(toolInput.text).trim() === '')) {
+  if (toolName === 'slack.replyInThread') {
     const priorSteps = await getSiblingSteps(run, step);
     const generatedStep = priorSteps
       .filter(s => s.order_index < step.order_index && s.status === 'succeeded')
       .reverse()
       .find(s => (s.output as any)?.generated);
+
     if (generatedStep) {
+      // Always prefer real generated content over whatever the planner templated in
       toolInput = { ...toolInput, text: (generatedStep.output as any).generated };
       await agentStore.updateStepInput(step.id, { ...(step.input as any), input: toolInput });
     }

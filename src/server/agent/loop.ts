@@ -86,8 +86,15 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
           failure_reason: `Run paused near wall-clock timeout (${MAX_RUN_WALL_TIME_MS}ms) before plan creation`
         });
         const { enqueueRunTask } = await import('./taskClient.js');
-        await enqueueRunTask(run.id);
+      const requeued = await enqueueRunTask(run.id);
+      if (!requeued) {
+        slog('loop', 'reenqueue_failed_finalizing', { run_id: run.id });
+        clearInterval(leaseHeartbeat);
+        const { finalizeRun } = await import('./finalize.js');
+        await finalizeRun(run, 'failed', `Re-enqueue failed after replan trigger or timeout`);
         return;
+      }
+      return;
       }
 
       const ctx = await assembleContext(goal, run);
@@ -196,8 +203,15 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
           failure_reason: `Run paused near wall-clock timeout (${MAX_RUN_WALL_TIME_MS}ms) before step "${step.title}"`
         });
         const { enqueueRunTask } = await import('./taskClient.js');
-        await enqueueRunTask(run.id);
+      const requeued = await enqueueRunTask(run.id);
+      if (!requeued) {
+        slog('loop', 'reenqueue_failed_finalizing', { run_id: run.id });
+        clearInterval(leaseHeartbeat);
+        const { finalizeRun } = await import('./finalize.js');
+        await finalizeRun(run, 'failed', `Re-enqueue failed after replan trigger or timeout`);
         return;
+      }
+      return;
       }
 
       // Pre-approved only if plan was approved wholesale OR this specific step was approved
@@ -241,7 +255,14 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
         failure_reason: `Run paused near wall-clock timeout (${MAX_RUN_WALL_TIME_MS}ms) before verification`
       });
       const { enqueueRunTask } = await import('./taskClient.js');
-      await enqueueRunTask(run.id);
+      const requeued = await enqueueRunTask(run.id);
+      if (!requeued) {
+        slog('loop', 'reenqueue_failed_finalizing', { run_id: run.id });
+        clearInterval(leaseHeartbeat);
+        const { finalizeRun } = await import('./finalize.js');
+        await finalizeRun(run, 'failed', `Re-enqueue failed after replan trigger or timeout`);
+        return;
+      }
       return;
     }
 
@@ -272,7 +293,14 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
         failure_reason: ruleVerify.reasons.join(', ')
       });
       const { enqueueRunTask } = await import('./taskClient.js');
-      await enqueueRunTask(run.id);
+      const requeued = await enqueueRunTask(run.id);
+      if (!requeued) {
+        slog('loop', 'reenqueue_failed_finalizing', { run_id: run.id });
+        clearInterval(leaseHeartbeat);
+        const { finalizeRun } = await import('./finalize.js');
+        await finalizeRun(run, 'failed', `Re-enqueue failed after replan trigger or timeout`);
+        return;
+      }
       return;
     } else {
       // Genuine miss -> replan from scratch (new plan next iteration).
@@ -292,7 +320,14 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
         failure_reason: reason
       });
       const { enqueueRunTask } = await import('./taskClient.js');
-      await enqueueRunTask(run.id);
+      const requeued = await enqueueRunTask(run.id);
+      if (!requeued) {
+        slog('loop', 'reenqueue_failed_finalizing', { run_id: run.id });
+        clearInterval(leaseHeartbeat);
+        const { finalizeRun } = await import('./finalize.js');
+        await finalizeRun(run, 'failed', `Re-enqueue failed after replan trigger or timeout`);
+        return;
+      }
       return; // Let the worker pick it up on next cycle
     }
 
