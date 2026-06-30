@@ -1,5 +1,15 @@
 export type AgentRiskLevel = 'read' | 'draft' | 'internal_write' | 'external_write' | 'destructive' | 'privileged';
 
+// Keep in sync with AgentAttachment in attachments.ts
+export interface AgentAttachment {
+  filename: string;
+  mimeType: string;
+  base64Data: string;
+  sizeBytes: number;
+  sourceUrl?: string;
+}
+
+
 export interface AgentPipelineInput {
   workspaceId: string;
   channelId: string;
@@ -13,6 +23,7 @@ export interface AgentPipelineInput {
   sourceType: string;
   dbAvailable?: boolean;
   intentResult?: IntentResult;
+  attachments?: AgentAttachment[];
 }
 
 export interface AgentPipelineResult {
@@ -69,6 +80,7 @@ export interface PlanningContext {
   priorSteps: any[];
   feedback?: string;
   goal: string;
+  attachments?: AgentAttachment[];
 }
 
 export interface SemanticVerificationResult {
