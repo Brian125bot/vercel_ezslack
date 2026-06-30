@@ -147,18 +147,38 @@ export async function executeStep(
   const toolName = (step.input as any).toolName;
   let toolInput = (step.input as any).input || {};
 
-  // W3-A: If the tool input references upstream generated content, inject it
-  if (toolName === 'slack.replyInThread') {
+  // Generic generate-step output injection: a "generate" step can declare
+  // `injectInto` (a field name) to route its output into the NEXT tool step's
+  // input under that field. If no `injectInto` was set anywhere upstream,
+  // fall back to the original slack.replyInThread "text" behavior for
+  // backward compatibility with existing plans.
+  {
     const priorSteps = await getSiblingSteps(run, step);
-    const generatedStep = priorSteps
-      .filter(s => s.order_index < step.order_index && s.status === 'succeeded')
-      .reverse()
-      .find(s => (s.output as any)?.generated);
+    const candidateGeneratedSteps = priorSteps
+      .filter(s => s.order_index < step.order_index && s.status === 'succeeded' && (s.output as any)?.generated)
+      .reverse(); // most recent generate step first
 
-    if (generatedStep) {
-      // Always prefer real generated content over whatever the planner templated in
-      toolInput = { ...toolInput, text: (generatedStep.output as any).generated };
+    // Look for a generate step that explicitly targets this step via injectInto
+    const explicitMatch = candidateGeneratedSteps.find(s => {
+      const declaredInjectInto = (s.input as any)?.injectInto;
+      return typeof declaredInjectInto === 'string' && declaredInjectInto.length > 0;
+    });
+
+    if (explicitMatch) {
+      const fieldName = (explicitMatch.input as any).injectInto as string;
+      const generatedText = (explicitMatch.output as any).generated;
+      toolInput = { ...toolInput, [fieldName]: generatedText };
       await agentStore.updateStepInput(step.id, { ...(step.input as any), input: toolInput });
+    } else if (toolName === 'slack.replyInThread') {
+      // Backward-compatible default: no explicit injectInto was set anywhere,
+      // but this is a Slack reply step immediately following a generate step —
+      // preserve the original behavior exactly.
+      const generatedStep = candidateGeneratedSteps[0];
+      if (generatedStep) {
+        const generatedText = (generatedStep.output as any).generated;
+        toolInput = { ...toolInput, text: generatedText };
+        await agentStore.updateStepInput(step.id, { ...(step.input as any), input: toolInput });
+      }
     }
   }
 
