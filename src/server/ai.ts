@@ -1,14 +1,34 @@
 import { geminiCall } from './agent/geminiClient.js';
 import { resolveModel } from './agent/models.js';
+import { attachmentsToGeminiParts } from './agent/attachments.js';
+import type { AgentAttachment } from './agent/types.js';
 
-export async function generateSimpleResponse(text: string, modelName: string, threadHistory: any[] = []): Promise<string> {
-  const contents = [...threadHistory.map(m => ({ role: m.role, parts: [{ text: m.text }] })), { role: 'user', parts: [{ text }] }];
+export async function generateSimpleResponse(
+  text: string,
+  modelName: string,
+  threadHistory: any[] = [],
+  attachments: AgentAttachment[] = []
+): Promise<string> {
+  const userParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+    ...attachmentsToGeminiParts(attachments),
+    { text }
+  ];
+
+  const contents = [
+    ...threadHistory.map(m => ({
+      role: m.role,
+      parts: m.attachments?.length
+        ? [...attachmentsToGeminiParts(m.attachments), { text: m.text }]
+        : [{ text: m.text }]
+    })),
+    { role: 'user', parts: userParts }
+  ];
 
   const responseText = await geminiCall({
     model: resolveModel(modelName),
     contents,
     config: {
-      systemInstruction: "You are a helpful Slack AI Agent backend. Keep responses concise and use standard Slack markdown."
+      systemInstruction: "You are a helpful Slack AI Agent backend. Keep responses concise and use standard Slack markdown. When an image or PDF is attached, describe or analyze it directly as part of your answer rather than saying you cannot view attachments."
     },
     label: 'directReply'
   });

@@ -1,12 +1,19 @@
 import { Type, Schema } from '@google/genai';
-import type { AgentPlanDraft } from './types.js';
+import type { AgentPlanDraft, AgentAttachment } from './types.js';
 import { toolsRegistry } from '../tools/registry.js';
 import { geminiCall } from './geminiClient.js';
 import { normalizePlanDraft } from './planNormalize.js';
 import { resolveModel } from './models.js';
 import { slog } from './log.js';
+import { attachmentsToGeminiParts } from './attachments.js';
 
-export async function createPlan(goalTitle: string, originalInstruction: string, selectedModel: string, contextBlock?: string): Promise<AgentPlanDraft> {
+export async function createPlan(
+  goalTitle: string,
+  originalInstruction: string,
+  selectedModel: string,
+  contextBlock?: string,
+  attachments?: AgentAttachment[]
+): Promise<AgentPlanDraft> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is missing');
@@ -71,15 +78,19 @@ Planning rules:
 `;
 
   try {
-    const responseText = await geminiCall({
-      model: resolveModel(selectedModel),
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: responseSchema
-      },
-      label: 'planner'
-    });
+    const contents = attachments && attachments.length > 0
+    ? [{ role: 'user', parts: [...attachmentsToGeminiParts(attachments), { text: prompt }] }]
+    : prompt;
+
+  const responseText = await geminiCall({
+    model: resolveModel(selectedModel),
+    contents,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: responseSchema
+    },
+    label: 'planner'
+  });
 
     if (responseText) {
       const raw = JSON.parse(responseText) as AgentPlanDraft;

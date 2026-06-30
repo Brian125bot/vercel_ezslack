@@ -3,6 +3,7 @@ import { slackReplyInThreadTool } from '../../tools/slack.js';
 import type { AgentPipelineInput, AgentPipelineResult, ToolExecutionContext } from '../types.js';
 import { detectDeferral } from '../deferral.js';
 import { enqueueRunTask } from '../taskClient.js';
+import { attachmentCache } from '../attachments.js';
 
 export async function handleDurableTask(
   input: AgentPipelineInput,
@@ -81,6 +82,11 @@ export async function handleDurableTask(
       status: 'queued'
     });
     
+    // Store attachments in memory cache (keyed by run.id)
+    if (input.attachments && input.attachments.length > 0) {
+      attachmentCache.set(run.id, input.attachments);
+    }
+
     await agentStore.appendAuditEvent({
       workspace_id: input.workspaceId,
       goal_id: goal.id,
