@@ -1,3 +1,5 @@
+import type { AgentAttachment } from './server/agent/types.js';
+
 export interface ServerStatus {
   geminiApiKeyConfigured: boolean;
   slackBotTokenConfigured: boolean;
@@ -34,4 +36,5 @@ export interface SlackEventLog {
 export interface ThreadMessage {
   role: 'user' | 'model';
   text: string;
+  attachments?: AgentAttachment[];
 }

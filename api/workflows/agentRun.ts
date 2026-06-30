@@ -5,6 +5,7 @@ import { isDbAvailable } from '../../src/server/storage/db.js';
 import { agentStore } from '../../src/server/storage/agentStore.js';
 import { Semaphore } from '../../src/server/agent/semaphore.js';
 import { selectedModel, getSelectedModel, updateLog } from '../../src/server/state.js';
+import { processSlackFiles } from '../../src/server/agent/attachments.js';
 
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
@@ -67,11 +68,21 @@ export default async function handler(req: any, res: any) {
     }
 
     const promptText = (event.text || "").substring(0, 50000); 
+
+    const botToken = process.env.SLACK_BOT_TOKEN;
+    const { attachments, skipped } = await processSlackFiles(event.files, botToken);
+    if (skipped.length > 0) {
+      console.log(`[Vercel Workflow] Skipped ${skipped.length} attachment(s): ${skipped.map(s => `${s.filename} (${s.reason})`).join(', ')}`);
+    }
+
     const threadTsTarget = event.thread_ts || event.ts;
     const dbAvailable = (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) ? await isDbAvailable() : false;
 
     const hasPendingApproval = dbAvailable ? await agentStore.hasPendingApproval(workspaceId, event.channel) : false;
 
+    // NOTE: classifyIntent does not currently consider attachments. A message
+    // with only an image and no text may be misclassified. Tracked as a known
+    // follow-up, not addressed in this change.
     const intentResult = await classifyIntent(promptText, selectedModel, {
       context: {
         workspaceId,
@@ -105,7 +116,8 @@ export default async function handler(req: any, res: any) {
         signatureValid: signatureVerified,
         sourceType: 'slack',
         dbAvailable,
-        intentResult
+        intentResult,
+        attachments
       });
     } finally {
       if (intent === 'direct_reply') {

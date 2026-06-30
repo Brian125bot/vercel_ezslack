@@ -2,6 +2,7 @@ import { agentStore } from '../storage/agentStore.js';
 import type { AgentRunTrace, AgentRun, AgentGoal } from '../storage/types.js';
 import type { PlanningContext } from './types.js';
 import { getThreadHistory } from '../state.js';
+import { attachmentCache } from './attachments.js';
 
 export async function assembleContext(goal: AgentGoal, run: AgentRun): Promise<PlanningContext> {
   const workspaceId = goal.workspace_id;
@@ -28,20 +29,28 @@ export async function assembleContext(goal: AgentGoal, run: AgentRun): Promise<P
   }
 
   // Retrieve prior steps
+  // Retrieve prior steps
   const priorSteps = await agentStore.getStepsForRun(run.id);
+
+  // Retrieve attachments from the in-memory cache keyed by run.id (since goal lacks flexible column)
+  const attachments = attachmentCache.get(run.id);
 
   return {
     goal: goal.title + "\\n" + goal.original_instruction,
     threadHistory,
     memoryRecords,
     priorSteps,
-    feedback: run.failure_reason || undefined
+    feedback: run.failure_reason || undefined,
+    attachments
   };
 }
 
 export function renderContextForPrompt(ctx: PlanningContext): string {
   let dump = `<context>\n`;
   dump += `Goal: ${ctx.goal}\n`;
+  if (ctx.attachments && ctx.attachments.length > 0) {
+    dump += `Attached files: ${ctx.attachments.map(a => `${a.filename} (${a.mimeType})`).join(', ')}\n`;
+  }
   if (ctx.feedback) dump += `Feedback from previous run: ${ctx.feedback}\n`;
   
   if (ctx.memoryRecords.length > 0) {

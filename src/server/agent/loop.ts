@@ -100,7 +100,7 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       const ctx = await assembleContext(goal, run);
       const contextBlock = renderContextForPrompt(ctx);
       
-      const planDraft = await createPlan(goal.title, goal.original_instruction, run.model, contextBlock);
+      const planDraft = await createPlan(goal.title, goal.original_instruction, run.model, contextBlock, ctx?.attachments);
       
       const plan = await agentStore.createPlan({
         goal_id: goal.id,

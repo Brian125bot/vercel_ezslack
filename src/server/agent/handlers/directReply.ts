@@ -12,10 +12,10 @@ export async function handleDirectReply(
   const history = await getThreadHistory(threadKeyStr);
   
   try {
-    const replyText = await generateSimpleResponse(input.messageText, input.selectedModel, history);
+    const replyText = await generateSimpleResponse(input.messageText, input.selectedModel, history, input.attachments || []);
     
     // Update thread memory
-    const updatedHistory = [...history, { role: 'user' as const, text: input.messageText }, { role: 'model' as const, text: replyText }];
+    const updatedHistory = [...history, { role: 'user' as const, text: input.messageText, attachments: input.attachments }, { role: 'model' as const, text: replyText }];
     await saveThreadHistory(threadKeyStr, updatedHistory);
 
     await slackReplyInThreadTool.execute({ text: replyText }, context);
