@@ -17,9 +17,15 @@ export async function enqueueRunTask(runId: string, logItemId?: string): Promise
 
   for (let attempt = 0; attempt <= ENQUEUE_MAX_RETRIES; attempt++) {
     try {
+const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      if (bypassSecret) {
+        headers['x-vercel-protection-bypass'] = bypassSecret;
+      }
+
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ runId, logItemId })
       });
 

@@ -92,14 +92,20 @@ export async function handleDurableTask(
     });
 
     // Fire the run to the workflow endpoint
-    const enqueued = await enqueueRunTask(run.id);
-    if (!enqueued) {
-      throw new Error('Failed to enqueue run for processing');
-    }
-
     await slackReplyInThreadTool.execute({
       text: `I have accepted your goal: "${goal.title}". Analyzing constraints and drafting a plan...`
     }, context);
+
+    const enqueued = await enqueueRunTask(run.id);
+    if (!enqueued) {
+      // Initial message already posted; now report failure
+      await slackReplyInThreadTool.execute({
+        text: `I encountered an issue starting work on "${goal.title}" and could not queue the task. Please try again.`
+      }, context);
+      if (run) await agentStore.updateRunStatus(run.id, 'failed', { failure_reason: 'Failed to enqueue run' });
+      if (goal) await agentStore.updateGoalStatus(goal.id, 'failed');
+      return { status: 'error', intent, message: 'Failed to enqueue run' };
+    }
 
     return { status: 'success', runId: run.id, intent };
   } catch (err: any) {

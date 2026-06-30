@@ -47,10 +47,10 @@ export default async function handler(req: any, res: any) {
       const { finalizeRun } = await import('../../src/server/agent/finalize.js');
       const crypto = await import('crypto');
       const workerId = `vercel-workflow-${crypto.randomUUID()}`;
-      await agentStore.updateRunStatus(runId, 'running', { claimed_by: workerId, claimed_at: new Date() });
+      const updatedRun = await agentStore.updateRunStatus(runId, 'running', { claimed_by: workerId, claimed_at: new Date() });
 
       try {
-        await runLoop(run, workerId);
+        await runLoop(updatedRun, workerId);
       } catch (err: any) {
         console.error(`[Vercel Workflow] runLoop error: ${err.message}`);
         await finalizeRun(run, 'failed', err.message);
