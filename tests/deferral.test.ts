@@ -7,8 +7,8 @@ describe('Time-Deferred Detection (W4-F1)', () => {
       const r = detectDeferral('remind me tomorrow to check the deploy');
       expect(r.deferred).toBe(true);
       expect(r.delayMs).toBeGreaterThan(0);
-      // Should be less than 24h + a small buffer
-      expect(r.delayMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 60_000);
+      // "Tomorrow" at 9 AM could be up to ~33-48 hours away depending on current time and UTC offset.
+      expect(r.delayMs).toBeLessThanOrEqual(48 * 60 * 60 * 1000 + 60_000);
       expect(r.label).toContain('tomorrow');
     });
 
