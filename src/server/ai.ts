@@ -15,12 +15,17 @@ export async function generateSimpleResponse(
   ];
 
   const contents = [
-    ...threadHistory.map(m => ({
-      role: m.role,
-      parts: m.attachments?.length
-        ? [...attachmentsToGeminiParts(m.attachments), { text: m.text }]
-        : [{ text: m.text }]
-    })),
+    ...threadHistory.map(m => {
+      let combinedText = m.text || '';
+      if (m.attachments && m.attachments.length > 0) {
+        const attachNames = m.attachments.map((a: any) => a.filename || 'unknown').join(', ');
+        combinedText += `\n[Attached: ${attachNames}]`;
+      }
+      return {
+        role: m.role,
+        parts: [{ text: combinedText }]
+      };
+    }),
     { role: 'user', parts: userParts }
   ];
 
