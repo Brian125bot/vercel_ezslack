@@ -46,6 +46,7 @@ export interface PlannedAgentStep {
   kind?: StepKind;
   toolName?: string;
   input?: any;
+  injectInto?: string; // for "generate" steps: the field name on the NEXT tool step's input that should receive this step's generated output. Omit to use default behavior (slack.replyInThread's "text" field).
 }
 
 export interface AgentPlanDraft {

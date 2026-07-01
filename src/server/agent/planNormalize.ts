@@ -57,6 +57,11 @@ export function normalizePlanDraft(draft: AgentPlanDraft, tools: ToolLookup): No
 
   const steps: PlannedAgentStep[] = (draft.steps || []).map((rawStep) => {
     const step: PlannedAgentStep = { ...rawStep };
+    if (typeof step.injectInto === 'string' && step.injectInto.length <= 100) {
+      // keep
+    } else {
+      step.injectInto = undefined;
+    }
     const kind = normalizeStepKind(step);
 
     if (kind === 'generate') {
@@ -65,6 +70,9 @@ export function normalizePlanDraft(draft: AgentPlanDraft, tools: ToolLookup): No
       // Guarantee the generate step has something to work with.
       const prompt = step.input?.prompt || step.input?.input?.prompt;
       step.input = { ...(step.input || {}), prompt: prompt || step.title };
+      if (step.injectInto) {
+        step.input.injectInto = step.injectInto;
+      }
       return step;
     }
 

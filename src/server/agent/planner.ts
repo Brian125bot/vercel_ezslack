@@ -70,11 +70,12 @@ Step kinds:
 - "note"    — conceptual/no-op step (no tool needed)
 
 Planning rules:
-1. Generate a 1-5 step plan. Prefer "generate" kind when the final reply needs content that depends on tool outputs from earlier steps (e.g. search results, memory lookups). Follow a "generate" step with a "slack.replyInThread" step — the reply text will be auto-injected from the generated output.
+1. Generate a 1-5 step plan. Prefer "generate" kind when a step needs content that depends on tool outputs from earlier steps or on attached files (e.g. search results, memory lookups, screenshot/PDF analysis). A "generate" step's output can feed directly into the NEXT tool step's input field via \`injectInto\` (see rule 6) — this works for any tool, not just slack.replyInThread.
 2. You MUST fully populate each step's \`input\` object using the information from the context. For "generate" steps, ALWAYS set \`input.prompt\`.
 3. For "tool" steps, include \`kind: "tool"\`, set \`toolName\` to one of EXACTLY these names: ${toolNames}. Do NOT invent tool names.
 4. If the task needs an action for which no tool exists above, do NOT fabricate a tool. Instead use a "generate" step to draft the content and a "slack.replyInThread" step to tell the user what was prepared and that the action could not be executed automatically.
 5. Set riskLevel to one of: read, draft, internal_write, external_write. Set requiresApproval=true ONLY if a step uses an external_write tool.
+6. If the goal requires acting on an attached file's contents (e.g. filing an issue based on a screenshot, summarizing a PDF into a tool's input field), use a "generate" step to produce that content, and set that generate step's \`injectInto\` to the exact field name on the FOLLOWING tool step's input that should receive it (e.g. \`injectInto: "body"\` for github.createIssue, or \`injectInto: "text"\` for slack.replyInThread). The generate step's output will automatically replace that field's value on the next tool step. If files are attached (see "Attached files" in context), you may also reference them by name in the generate step's input.prompt (e.g. "Describe the error visible in screenshot.png").
 `;
 
   try {
