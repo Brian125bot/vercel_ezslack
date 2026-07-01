@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.3.0] - Multimodal Input & Generic Output Injection - 2026-07-01
+
+### 🚀 Features
+
+* **Multimodal input support (images, PDFs, screenshots).** The agent can now see and reason
+  about files attached to Slack messages — PNG, JPEG, WebP, HEIC/HEIF, and PDF — up to 15MB per
+  file and 4 files per message (configurable via `MAX_ATTACHMENT_BYTES` and
+  `MAX_ATTACHMENTS_PER_MESSAGE`). Attachments are passed to Gemini as native multimodal
+  `inlineData` parts, not OCR'd or pre-processed, and work for both direct replies and multi-step
+  durable tasks. New `src/server/agent/attachments.ts` module handles Slack file download and
+  part conversion; `geminiClient.ts`, `context.ts`, and the type system were extended to carry
+  attachments through the pipeline.
+
+* **Generic `injectInto` field for generate-step output routing.** `PlannedAgentStep` gained an
+  optional `injectInto: string` field so a "generate" step's output can be routed into any field
+  on the following tool step's input, not just `slack.replyInThread`'s `text` field (e.g.
+  `injectInto: "body"` for `github.createIssue`). This unlocks acting on attachment analysis —
+  e.g. summarizing a screenshot directly into a bug-tracker ticket body. Falls back to the
+  original `slack.replyInThread`/`text` behavior when no `injectInto` is set upstream, so existing
+  plans are unaffected. Added planner rule 6 instructing the LLM when and how to set `injectInto`,
+  including guidance for referencing attached files by name in generate-step prompts.
+
+### 🧪 Tests
+
+* 13 new test cases in `tests/attachments.test.ts` covering Slack file download, size/count
+  limits, supported/unsupported MIME types, and `inlineData` part conversion.
+* 6 new test cases in `tests/executorInjection.test.ts` covering backward compatibility, explicit
+  non-Slack injection targets, explicit-over-legacy precedence, absent-upstream-step no-op,
+  most-recent-of-multiple-candidates resolution, and non-interference with unrelated steps.
+
+### 🧹 Housekeeping
+
+* Removed one-off patch scripts (`fix_agentRun.cjs`, `fix_context.cjs`, `fix_loop.cjs`) left over
+  from the multimodal PR's development process — the changes they applied are already part of the
+  tracked source files.
+
+### ✅ Verification
+
+* `npm run lint` — 0 errors
+* `npm test` — 14 files, 121 tests pass.
+
 ## [6.2.0] - Production Reliability & Feedback Fixes - 2026-06-27
 
 Resolves the remaining critical and high-priority issues identified during Vercel production deployment analysis, plus a batch of low-priority edge-case fixes.
