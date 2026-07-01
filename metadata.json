@@ -1,6 +1,6 @@
 {
-  "name": "Slack AI Agent Backend",
-  "description": "Production-ready serverless Slack AI Agent backend utilizing Express and Gemini 2.5 Flash.",
+  "name": "Vercel EZSlack",
+  "description": "Production-ready serverless Slack AI Agent backend powered by Express, Gemini, and Vercel.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

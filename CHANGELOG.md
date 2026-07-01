@@ -448,4 +448,4 @@ Both Week 1 (Trust & Correctness) and Week 2 (Agent Loop) have been successfully
 * **Goal Completed Timestamps**: Enhanced goal tracking to ensure `completed_at` timestamps are applied to all goals ending as `completed`, `failed`, `cancelled`, or `blocked`.
 * **Technical Documentation**: Created `docs/intent-routing.md` to lay out the full intent taxonomy and heuristics matching structures. Updated `README.md` to document the 7 Worker & Queue system invariants.
 * **Log Sanitation**: Added complete descriptive JSDoc comments detailing structured logging and its strict automatic sanitization logic to hide runtime secret keys.
-* **File Cleanup**: Removed stale temporary specification documents (`phase2dod.md` and `weeks-1-2-spec.md`) to establish `slack_ez_cloud` as the clear source of truth.
+* **File Cleanup**: Removed stale temporary specification documents (`phase2dod.md` and `weeks-1-2-spec.md`) to establish `vercel_ezslack` as the clear source of truth.
