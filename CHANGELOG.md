@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.4.0] - Thread History Bounding & DB Bloat Fix - 2026-07-01
+
+### 🚀 Features & Fixes
+
+* **Thread History Configuration & Bounds.** Prevents unbounded row growth in the `thread_memories` DB table and stops the agent from unnecessarily re-embedding stale attachment payloads (which consumed excessive Gemini token window limits and latency). Historical messages with attachments now persist their metadata only (filename, mimeType, sizeBytes) without `base64Data`, and are summarized via a text note in the model context instead of being re-uploaded to Gemini on every turn.
+* **Char/Message Caps.** Added a cumulative character limit and a per-message truncation limit. Three new configurable environment variables shape these limits (with backward-compatible defaults for text-only threads): `MAX_THREAD_HISTORY_MESSAGES` (default 20), `MAX_THREAD_HISTORY_CHARS` (default 40000), and `MAX_THREAD_MESSAGE_CHARS` (default 4000).
+
 ## [6.3.0] - Multimodal Input & Generic Output Injection - 2026-07-01
 
 ### 🚀 Features

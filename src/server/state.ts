@@ -2,6 +2,11 @@ import { SlackEventLog, ThreadMessage } from '../types.js';
 import { sanitizeString } from './agent/sanitize.js';
 import { resolveModel, DEFAULT_MODEL } from './agent/models.js';
 
+// ── Limits ──
+const MAX_THREAD_HISTORY_MESSAGES = parseInt(process.env.MAX_THREAD_HISTORY_MESSAGES || '20');
+const MAX_THREAD_HISTORY_CHARS = parseInt(process.env.MAX_THREAD_HISTORY_CHARS || '40000');
+const MAX_THREAD_MESSAGE_CHARS = parseInt(process.env.MAX_THREAD_MESSAGE_CHARS || '4000');
+
 // ── In-memory fallbacks (used when DB is unavailable) ──
 const memoryLogs: SlackEventLog[] = [];
 const memoryThreads = new Map<string, ThreadMessage[]>();
@@ -185,7 +190,38 @@ export async function getThreadHistory(threadKey: string): Promise<ThreadMessage
 }
 
 export async function saveThreadHistory(threadKey: string, messages: ThreadMessage[]) {
-  const trimmed = messages.length > 20 ? messages.slice(-20) : messages;
+  const sanitizedMessages = messages.map(msg => {
+    let newMsg = { ...msg };
+    if (newMsg.attachments && newMsg.attachments.length > 0) {
+      newMsg.attachments = newMsg.attachments.map(att => ({
+        filename: att.filename,
+        mimeType: att.mimeType,
+        sizeBytes: att.sizeBytes,
+        // Drop base64Data and sourceUrl to save space
+      })) as any;
+    }
+    if (newMsg.text && newMsg.text.length > MAX_THREAD_MESSAGE_CHARS) {
+      newMsg.text = newMsg.text.substring(0, MAX_THREAD_MESSAGE_CHARS) + `…[truncated, original ${newMsg.text.length}chars]`;
+    }
+    return newMsg;
+  });
+
+  const sliced = sanitizedMessages.length > MAX_THREAD_HISTORY_MESSAGES
+    ? sanitizedMessages.slice(-MAX_THREAD_HISTORY_MESSAGES)
+    : sanitizedMessages;
+
+  const trimmed: ThreadMessage[] = [];
+  let totalChars = 0;
+  for (let i = sliced.length - 1; i >= 0; i--) {
+    const msg = sliced[i];
+    const msgLength = msg.text ? msg.text.length : 0;
+    if (totalChars + msgLength > MAX_THREAD_HISTORY_CHARS) {
+      break;
+    }
+    trimmed.unshift(msg);
+    totalChars += msgLength;
+  }
+
   memoryThreads.set(threadKey, trimmed);
   const q = await getQuery();
   if (q) {

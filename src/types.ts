@@ -36,5 +36,10 @@ export interface SlackEventLog {
 export interface ThreadMessage {
   role: 'user' | 'model';
   text: string;
+  /**
+   * Note: Persisted attachments in thread history are metadata-only (no base64Data).
+   * They must not be used to reconstruct file content for a model call.
+   * Only the live per-turn `attachments` input carries real file bytes.
+   */
   attachments?: AgentAttachment[];
 }
