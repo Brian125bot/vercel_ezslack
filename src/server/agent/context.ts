@@ -47,6 +47,7 @@ export async function assembleContext(goal: AgentGoal, run: AgentRun): Promise<P
 
 export function renderContextForPrompt(ctx: PlanningContext): string {
   let dump = `<context>\n`;
+  dump += `Current Time: ${new Date().toISOString()} (UTC) / ${new Date().toString()} (Local)\n`;
   dump += `Goal: ${ctx.goal}\n`;
   if (ctx.attachments && ctx.attachments.length > 0) {
     dump += `Attached files: ${ctx.attachments.map(a => `${a.filename} (${a.mimeType})`).join(', ')}\n`;
