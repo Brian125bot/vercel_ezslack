@@ -217,5 +217,12 @@ export const migrations = [
     sql: `
       ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS retry_count integer NOT NULL DEFAULT 0;
     `
+  },
+  {
+    version: 5,
+    name: 'run_attachments',
+    sql: `
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS attachments jsonb;
+    `
   }
 ];

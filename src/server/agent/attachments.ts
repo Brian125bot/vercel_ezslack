@@ -92,8 +92,4 @@ export function attachmentsToGeminiParts(attachments: AgentAttachment[]): Array<
   }));
 }
 
-// Durable Task Fallback Cache
-// Since AgentGoal schema currently lacks a flexible JSON column, we use an in-memory cache keyed by goalId
-// to pass attachments from initial creation into the planner loop.
-// Note: These attachments will not survive a cold start / run resume.
-export const attachmentCache = new Map<string, AgentAttachment[]>();
+
