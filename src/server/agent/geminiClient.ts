@@ -45,6 +45,11 @@ function getClient(): GoogleGenAI {
  * Uses the SDK's built-in retryOptions for automatic retries.
  */
 export async function geminiCall(options: GeminiCallOptions): Promise<string> {
+  const res = await geminiCallRaw(options);
+  return res.text || '';
+}
+
+export async function geminiCallRaw(options: GeminiCallOptions): Promise<{ text?: string; functionCalls?: any[] }> {
   const {
     model,
     contents,
@@ -72,11 +77,13 @@ export async function geminiCall(options: GeminiCallOptions): Promise<string> {
         }
       });
 
-      const text = response.text || '';
       if (attempt > 0) {
         slog('geminiClient', 'retry_succeeded', { label, attempt, model });
       }
-      return text;
+      return {
+        text: response.text || undefined,
+        functionCalls: response.functionCalls || undefined
+      };
     } catch (err: any) {
       lastError = err;
       const status = err.status || err.code || 0;

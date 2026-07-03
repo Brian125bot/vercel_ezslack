@@ -1,3 +1,4 @@
+import { Type } from '@google/genai';
 import type { ExternalAdapter } from './base.js';
 import type { AgentTool, ToolExecutionContext } from '../../agent/types.js';
 
@@ -34,7 +35,24 @@ export class EmailAdapter implements ExternalAdapter {
     description: 'Send an email. Requires to, subject, body.',
     riskLevel: 'external_write',
     requiresApproval: true,
-
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        to: {
+          type: Type.STRING,
+          description: 'Recipient email address.'
+        },
+        subject: {
+          type: Type.STRING,
+          description: 'Email subject.'
+        },
+        body: {
+          type: Type.STRING,
+          description: 'Email body.'
+        }
+      },
+      required: ['to', 'subject', 'body']
+    },
     async execute(input: SendEmailInput, context: ToolExecutionContext) {
       const webhookUrl = process.env.EMAIL_WEBHOOK_URL;
       if (!webhookUrl) {

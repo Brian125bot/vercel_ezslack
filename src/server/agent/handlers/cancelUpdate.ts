@@ -2,7 +2,6 @@ import { agentStore } from '../../storage/agentStore.js';
 import { slackReplyInThreadTool } from '../../tools/slack.js';
 import type { AgentPipelineInput, AgentPipelineResult, ToolExecutionContext } from '../types.js';
 import { finalizeRun } from '../finalize.js';
-import { mutatePlan } from '../planMutation.js';
 
 /**
  * W4-C: Determine whether the user wants to cancel or update/modify
@@ -30,7 +29,6 @@ export async function handleCancelOrUpdate(
     const subIntent = classifyCancelVsUpdate(input.messageText);
 
     if (subIntent === 'cancel') {
-      // Original cancel path
       if (activeRuns.length === 0) {
         await slackReplyInThreadTool.execute({ text: "There are no active tasks to cancel." }, context);
         return { status: 'success', intent };
@@ -44,29 +42,37 @@ export async function handleCancelOrUpdate(
       return { status: 'success', intent };
     }
 
-    // W4-C: Update/mutation path
+    // W4-C: Update/mutation path - conversational turn insertion
     if (activeRuns.length === 0) {
       await slackReplyInThreadTool.execute({ text: "There are no active tasks to update." }, context);
       return { status: 'success', intent };
     }
 
-    // Pick the most recent active run
     const run = activeRuns[0];
-    const planId = run.plan_id;
+    const steps = await agentStore.getStepsForRun(run.id);
 
-    if (!planId) {
-      await slackReplyInThreadTool.execute({
-        text: "The active task doesn't have a plan yet — it's still in the planning phase. I'll incorporate your feedback when the plan is created."
-      }, context);
-      return { status: 'success', intent };
-    }
+    // Create a new step representing user feedback
+    await agentStore.createStep({
+      run_id: run.id,
+      order_index: steps.length + 1,
+      title: 'User Feedback',
+      status: 'succeeded',
+      input: {
+        text: `User feedback: ${input.messageText}`,
+        role: 'user'
+      }
+    });
 
-    const result = await mutatePlan(run.id, planId, input.messageText, run.model);
+    // Reset status to queued and clear claim to force rerun of execution loop
+    await agentStore.updateRunStatus(run.id, 'queued', {
+      claimed_by: null, claimed_at: null, lease_expires_at: null
+    });
+
+    const { enqueueRunTask } = await import('../taskClient.js');
+    await enqueueRunTask(run.id);
 
     await slackReplyInThreadTool.execute({
-      text: result.success
-        ? `✅ Plan updated: ${result.summary}`
-        : `⚠️ Could not update the plan: ${result.summary}`
+      text: `✅ Feedback received. I will adjust my actions based on your input.`
     }, context);
 
     return { status: 'success', intent };

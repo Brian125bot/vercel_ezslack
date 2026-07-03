@@ -91,11 +91,14 @@ export interface SemanticVerificationResult {
   source: 'llm' | 'skipped';
 }
 
+import { Schema } from '@google/genai';
+
 export interface AgentTool<TInput = any, TOutput = any> {
   name: string;
   description: string;
   riskLevel: AgentRiskLevel;
   requiresApproval: boolean;
+  parameters?: Schema;
   execute(input: TInput, context: ToolExecutionContext): Promise<TOutput>;
 }
 

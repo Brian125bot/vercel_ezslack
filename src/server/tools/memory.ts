@@ -1,12 +1,31 @@
+import { Type } from '@google/genai';
 import type { AgentTool } from '../agent/types.js';
 import { agentStore } from '../storage/agentStore.js';
 import { containsSecret } from '../agent/sanitize.js';
 
 export const memoryWriteTool: AgentTool<{ content: string; kind: string; visibility: string }> = {
   name: 'memory.write',
-  description: 'Write a memory record.',
+  description: 'Write a memory record to persist facts, tasks, or configuration details.',
   riskLevel: 'internal_write',
   requiresApproval: false,
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      content: {
+        type: Type.STRING,
+        description: 'The content/fact to write to memory.'
+      },
+      kind: {
+        type: Type.STRING,
+        description: 'The type of memory. e.g., "fact", "task", "config".'
+      },
+      visibility: {
+        type: Type.STRING,
+        description: 'Visibility scope. e.g., "workspace" (visible to all in workspace), "user" (visible only to this user).'
+      }
+    },
+    required: ['content', 'kind', 'visibility']
+  },
   async execute(input, context) {
     const content = input.content || '';
 
@@ -30,9 +49,23 @@ export const memoryWriteTool: AgentTool<{ content: string; kind: string; visibil
 
 export const memorySearchTool: AgentTool<{ query: string; kind?: string }> = {
   name: 'memory.search',
-  description: 'Search memory records.',
+  description: 'Search memory records for facts, tasks, or configurations.',
   riskLevel: 'read',
   requiresApproval: false,
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      query: {
+        type: Type.STRING,
+        description: 'Search query string.'
+      },
+      kind: {
+        type: Type.STRING,
+        description: 'Optional kind filter, e.g., "fact", "task", "config".'
+      }
+    },
+    required: ['query']
+  },
   async execute(input, context) {
     const records = await agentStore.searchMemory({
       workspace_id: context.workspaceId,

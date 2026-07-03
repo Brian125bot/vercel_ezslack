@@ -1,3 +1,4 @@
+import { Type } from '@google/genai';
 import type { AgentTool, ToolExecutionContext } from '../agent/types.js';
 import type { ApprovalRequest } from '../storage/types.js';
 import { agentStore } from '../storage/agentStore.js';
@@ -13,6 +14,16 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
   description: 'Reply to the user in a Slack thread.',
   riskLevel: 'internal_write',
   requiresApproval: false,
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      text: {
+        type: Type.STRING,
+        description: 'The text message/response to send back to the user.'
+      }
+    },
+    required: ['text']
+  },
   async execute(input, context) {
     let replyText = input.text;
 
