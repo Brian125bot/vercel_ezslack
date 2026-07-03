@@ -6,7 +6,7 @@ import { finalizeRun } from './finalize.js';
 import { verifySemantically } from './semanticVerifier.js';
 import { slog } from './log.js';
 import { toolsRegistry } from '../tools/registry.js';
-import { geminiCallRaw } from './geminiClient.js';
+import { geminiCallRaw, createThreadCache } from './geminiClient.js';
 import { resolveModel } from './models.js';
 import { attachmentsToGeminiParts } from './attachments.js';
 
@@ -56,12 +56,16 @@ ${renderContextForPrompt(ctx)}`;
         parts: [{ text: stepInput.text }]
       });
     } else {
-      const modelParts: any[] = [];
-      if (stepInput?.text) {
-        modelParts.push({ text: stepInput.text });
-      }
-      if (stepInput?.functionCalls && stepInput.functionCalls.length > 0) {
-        modelParts.push(...stepInput.functionCalls.map((fc: any) => ({ functionCall: fc })));
+      let modelParts: any[] = [];
+      if (stepInput?.parts && stepInput.parts.length > 0) {
+        modelParts = stepInput.parts;
+      } else {
+        if (stepInput?.text) {
+          modelParts.push({ text: stepInput.text });
+        }
+        if (stepInput?.functionCalls && stepInput.functionCalls.length > 0) {
+          modelParts.push(...stepInput.functionCalls.map((fc: any) => ({ functionCall: fc })));
+        }
       }
       
       if (modelParts.length > 0) {
@@ -248,14 +252,36 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       description: tool.description,
       parameters: tool.parameters
     }));
+    const tools = functionDeclarations.length > 0 ? [{ functionDeclarations }] : undefined;
+    const systemInstruction = "You are an agentic Slack assistant. Complete the goal by calling available tools. Always use slack.replyInThread to send your final results/answers to the user.";
+    const toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
+
+    let finalContents = contents;
+    let configPayload: any = {
+      systemInstruction,
+      tools,
+      toolConfig
+    };
+
+    // Context Caching for long threads (> 10 turns/messages)
+    if (contents.length > 10 && (run.model.includes('gemini-3') || run.model.includes('gemini-2.0') || run.model.includes('gemini-1.5-pro'))) {
+      try {
+        const cacheContents = contents.slice(0, contents.length - 1);
+        const cacheName = await createThreadCache(resolveModel(run.model), systemInstruction, cacheContents, tools, toolConfig);
+        finalContents = [contents[contents.length - 1]];
+        
+        configPayload = {
+          cachedContent: cacheName
+        };
+      } catch (err: any) {
+        slog('loop', 'cache_creation_failed', { run_id: run.id, error: err.message });
+      }
+    }
 
     const response = await geminiCallRaw({
       model: resolveModel(run.model),
-      contents,
-      config: {
-        systemInstruction: "You are an agentic Slack assistant. Complete the goal by calling available tools. Always use slack.replyInThread to send your final results/answers to the user.",
-        tools: functionDeclarations.length > 0 ? [{ functionDeclarations }] : undefined
-      },
+      contents: finalContents,
+      config: configPayload,
       label: 'nativeAgentLoop'
     });
 
@@ -268,7 +294,8 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       status: response.functionCalls && response.functionCalls.length > 0 ? 'pending' : 'succeeded',
       input: {
         text: response.text,
-        functionCalls: response.functionCalls
+        functionCalls: response.functionCalls,
+        parts: response.parts
       }
     });
 
