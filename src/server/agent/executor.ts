@@ -6,6 +6,7 @@ import { slog } from './log.js';
 import type { ToolExecutionContext, StepKind } from './types.js';
 import { geminiCall } from './geminiClient.js';
 import { resolveModel } from './models.js';
+import { attachmentCache, attachmentsToGeminiParts } from './attachments.js';
 
 const TOOL_TIMEOUT_MS = parseInt(process.env.TOOL_TIMEOUT_MS || '60000');
 
@@ -55,10 +56,15 @@ ${prompt ? `Additional instructions: ${prompt}` : ''}
 
 Generate the requested content. Be concise and use Slack-compatible markdown.`;
 
+  const attachments = attachmentCache.get(run.id) || [];
+  const contents = attachments.length > 0
+    ? [{ role: 'user', parts: [...attachmentsToGeminiParts(attachments), { text: fullPrompt }] }]
+    : fullPrompt;
+
   try {
     const responseText = await geminiCall({
       model: resolveModel(run.model),
-      contents: fullPrompt,
+      contents,
       label: 'generateStep'
     });
 

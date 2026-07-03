@@ -57,6 +57,10 @@ export class WebSearchAdapter implements ExternalAdapter {
         throw new Error('TAVILY_API_KEY is not configured');
       }
 
+      if (!input.query) {
+        throw new Error('Tavily API requires a query string. Please specify a query in the input.');
+      }
+
       const clampedMaxResults = Math.min(Math.max(1, input.maxResults ?? DEFAULT_MAX_RESULTS), 10);
 
       const requestBody = {
@@ -91,7 +95,7 @@ export class WebSearchAdapter implements ExternalAdapter {
       const tavilyResponse = data as TavilyResponse;
 
       const mappedResults: WebSearchResult[] = tavilyResponse.results.map(res => {
-        let truncatedContent = res.content;
+        let truncatedContent = res.content || '';
         if (truncatedContent.length > MAX_CONTENT_CHARS) {
           truncatedContent = truncatedContent.slice(0, MAX_CONTENT_CHARS) + '…';
         }

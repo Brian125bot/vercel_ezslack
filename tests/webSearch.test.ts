@@ -113,4 +113,30 @@ describe('WebSearchAdapter', () => {
 
     await expect(tool.execute({ query: 'x' }, mockContext)).rejects.toThrow(/TAVILY_API_KEY is not configured/);
   });
+
+  it('execute() throws when query is missing in the input', async () => {
+    process.env.TAVILY_API_KEY = 'test-key';
+    const tools = adapter.getTools();
+    const tool = tools[0];
+
+    await expect(tool.execute({} as any, mockContext)).rejects.toThrow(/Tavily API requires a query string/);
+  });
+
+  it('execute() fallback content to empty string when not provided in Tavily response', async () => {
+    process.env.TAVILY_API_KEY = 'test-key';
+    const tools = adapter.getTools();
+    const tool = tools[0];
+
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({
+        results: [{ title: 'T', url: 'U', score: 0.9 }] // content missing
+      }), { status: 200 }))
+    );
+
+    const output = await tool.execute({ query: 'test query' }, mockContext);
+    expect(output.results[0].content).toBe('');
+
+    fetchSpy.mockRestore();
+  });
 });
+
