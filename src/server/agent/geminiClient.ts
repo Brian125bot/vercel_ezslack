@@ -1,27 +1,8 @@
-import { GoogleGenAI, Type, HarmCategory, HarmBlockThreshold } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import { slog } from './log.js';
 
 const GEMINI_TIMEOUT_MS = parseInt(process.env.GEMINI_TIMEOUT_MS || '30000');
 const GEMINI_MAX_RETRIES = parseInt(process.env.GEMINI_MAX_RETRIES || '3');
-
-const defaultSafetySettings = [
-  {
-    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-    threshold: HarmBlockThreshold.BLOCK_NONE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-    threshold: HarmBlockThreshold.BLOCK_NONE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-    threshold: HarmBlockThreshold.BLOCK_NONE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-    threshold: HarmBlockThreshold.BLOCK_NONE,
-  },
-];
 
 export class GeminiCallError extends Error {
   constructor(
@@ -64,11 +45,6 @@ function getClient(): GoogleGenAI {
  * Uses the SDK's built-in retryOptions for automatic retries.
  */
 export async function geminiCall(options: GeminiCallOptions): Promise<string> {
-  const res = await geminiCallRaw(options);
-  return res.text || '';
-}
-
-export async function geminiCallRaw(options: GeminiCallOptions): Promise<{ text?: string; functionCalls?: any[]; parts?: any[] }> {
   const {
     model,
     contents,
@@ -84,33 +60,23 @@ export async function geminiCallRaw(options: GeminiCallOptions): Promise<{ text?
     try {
       const ai = getClient();
 
-      const mergedConfig: any = {
-        safetySettings: defaultSafetySettings,
-        ...config,
-        httpOptions: {
-          timeout: timeoutMs,
-          ...(config.httpOptions || {})
-        }
-      };
-
-      if (!mergedConfig.thinkingConfig && (model.includes('gemini-3') || model.includes('gemini-2.0-pro'))) {
-        mergedConfig.thinkingConfig = { thinkingBudgetTokens: 2048 };
-      }
-
       const response = await ai.models.generateContent({
         model,
         contents,
-        config: mergedConfig
+        config: {
+          ...config,
+          httpOptions: {
+            timeout: timeoutMs,
+            ...(config.httpOptions || {})
+          }
+        }
       });
 
+      const text = response.text || '';
       if (attempt > 0) {
         slog('geminiClient', 'retry_succeeded', { label, attempt, model });
       }
-      return {
-        text: response.text || undefined,
-        functionCalls: response.functionCalls || undefined,
-        parts: response.candidates?.[0]?.content?.parts || undefined
-      };
+      return text;
     } catch (err: any) {
       lastError = err;
       const status = err.status || err.code || 0;
@@ -142,26 +108,4 @@ export async function geminiCallRaw(options: GeminiCallOptions): Promise<{ text?
 
   // Should not reach here, but satisfies TypeScript
   throw lastError || new GeminiCallError('Unknown error', undefined, maxRetries, label);
-}
-
-export async function createThreadCache(
-  model: string, 
-  systemInstruction: string, 
-  contents: any[], 
-  tools?: any[],
-  toolConfig?: any,
-  ttlSeconds: number = 3600
-): Promise<string> {
-  const ai = getClient();
-  const cache = await ai.caches.create({
-    model,
-    config: {
-      systemInstruction,
-      contents,
-      tools,
-      toolConfig,
-      ttl: `${ttlSeconds}s`
-    }
-  });
-  return cache.name;
 }

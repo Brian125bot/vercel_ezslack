@@ -1,7 +1,6 @@
 
 import { classifyIntent } from '../../src/server/agent/intent.js';
 import { runAgentPipeline } from '../../src/server/agent/orchestrator.js';
-import { waitUntil } from '@vercel/functions';
 import { isDbAvailable } from '../../src/server/storage/db.js';
 import { agentStore } from '../../src/server/storage/agentStore.js';
 import { Semaphore } from '../../src/server/agent/semaphore.js';
@@ -49,26 +48,15 @@ export default async function handler(req: any, res: any) {
       const { finalizeRun } = await import('../../src/server/agent/finalize.js');
       const crypto = await import('crypto');
       const workerId = `vercel-workflow-${crypto.randomUUID()}`;
-      
-      const leaseSeconds = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
-      const updatedRun = await agentStore.claimRun(runId, workerId, leaseSeconds);
-      if (!updatedRun) {
-        return res.status(200).json({ message: 'Run already claimed or not in queued status' });
+      const updatedRun = await agentStore.updateRunStatus(runId, 'running', { claimed_by: workerId, claimed_at: new Date() });
+
+      try {
+        await runLoop(updatedRun, workerId);
+      } catch (err: any) {
+        console.error(`[Vercel Workflow] runLoop error: ${err.message}`);
+        await finalizeRun(run, 'failed', err.message);
       }
-
-      // Immediately respond 200 OK to break synchronous HTTP call chain
-      res.status(200).json({ success: true, message: 'Execution started' });
-
-      // Run execution loop in background
-      waitUntil((async () => {
-        try {
-          await runLoop(updatedRun, workerId);
-        } catch (err: any) {
-          console.error(`[Vercel Workflow] runLoop error: ${err.message}`);
-          await finalizeRun(run, 'failed', err.message);
-        }
-      })());
-      return;
+      return res.status(200).json({ success: true });
     }
 
     // Otherwise, handle initial Slack event orchestration

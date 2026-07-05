@@ -1,5 +1,3 @@
-import type { AgentAttachment } from '../agent/types.js';
-
 export type GoalStatus = 'created' | 'planning' | 'running' | 'awaiting_approval' | 'blocked' | 'completed' | 'failed' | 'cancelled';
 export type RunStatus = 'queued' | 'planning' | 'running' | 'awaiting_approval' | 'blocked' | 'succeeded' | 'failed' | 'cancelled';
 export type StepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'blocked';
@@ -55,7 +53,6 @@ export interface AgentRun {
   finished_at?: Date | null;
   created_at: Date;
   updated_at: Date;
-  attachments?: AgentAttachment[] | null;
 }
 
 export interface AgentStep {

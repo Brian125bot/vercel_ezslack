@@ -1,4 +1,3 @@
-import { Type, Schema } from '@google/genai';
 import { geminiCall } from './geminiClient.js';
 import { resolveModel } from './models.js';
 
@@ -141,27 +140,11 @@ Respond with EXACTLY a JSON block matching this structure:
 }
 Provide NO other text.`;
 
-      const responseSchema: Schema = {
-        type: Type.OBJECT,
-        properties: {
-          intent: {
-            type: Type.STRING,
-            enum: ['direct_reply', 'durable_task', 'status_query', 'approval_response', 'cancel_or_update', 'unsafe_or_unsupported']
-          },
-          confidence: {
-            type: Type.STRING,
-            enum: ['high', 'medium', 'low']
-          }
-        },
-        required: ['intent', 'confidence']
-      };
-
       const responseText = await geminiCall({
         model: resolveModel(selectedModel),
         contents: prompt,
         config: {
-          responseMimeType: 'application/json',
-          responseSchema
+          responseMimeType: 'application/json'
         },
         label: 'intent'
       });

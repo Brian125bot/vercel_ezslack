@@ -1,4 +1,3 @@
-import { Type } from '@google/genai';
 import type { ExternalAdapter } from './base.js';
 import type { AgentTool, ToolExecutionContext } from '../../agent/types.js';
 
@@ -33,33 +32,7 @@ export class GitHubIssueAdapter implements ExternalAdapter {
     description: 'Create a GitHub issue. Requires owner, repo, title. Optional: body, labels.',
     riskLevel: 'external_write',
     requiresApproval: true,
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        owner: {
-          type: Type.STRING,
-          description: 'The GitHub organization or username owner of the repository.'
-        },
-        repo: {
-          type: Type.STRING,
-          description: 'The name of the repository.'
-        },
-        title: {
-          type: Type.STRING,
-          description: 'The title of the GitHub issue.'
-        },
-        body: {
-          type: Type.STRING,
-          description: 'The detailed body/content of the GitHub issue.'
-        },
-        labels: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING },
-          description: 'Optional labels to apply to the issue.'
-        }
-      },
-      required: ['owner', 'repo', 'title']
-    },
+
     async execute(input: GitHubIssueInput, context: ToolExecutionContext) {
       const token = process.env.GITHUB_TOKEN;
       if (!token) {

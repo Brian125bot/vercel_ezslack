@@ -1,4 +1,3 @@
-import { Type } from '@google/genai';
 import type { ExternalAdapter } from './base.js';
 import type { AgentTool, ToolExecutionContext } from '../../agent/types.js';
 
@@ -51,20 +50,7 @@ export class WebSearchAdapter implements ExternalAdapter {
     description: 'Search the web for current information. Input: query (string), maxResults (optional int 1-10). Returns ranked results with title, url, content snippet, and relevance score.',
     riskLevel: 'read',
     requiresApproval: false,
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        query: {
-          type: Type.STRING,
-          description: 'The search query to look up.'
-        },
-        maxResults: {
-          type: Type.INTEGER,
-          description: 'The maximum number of search results to return (1-10).'
-        }
-      },
-      required: ['query']
-    },
+
     async execute(input: WebSearchInput, _context: ToolExecutionContext): Promise<WebSearchOutput> {
       const apiKey = process.env.TAVILY_API_KEY;
       if (!apiKey) {

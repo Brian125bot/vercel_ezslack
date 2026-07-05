@@ -2,23 +2,6 @@
 
 All notable changes to this project will be documented in this file.
 
-## [6.5.0] - Native Tool Calling & Conversational Loop - 2026-07-03
-
-### 🚀 Features & Fixes
-
-* **Native Gemini Tool Calling.** Replaced the custom JSON-based step planning loop with Gemini's native function calling (`tools` config in `@google/genai`). The planner module (`planner.ts`, `planNormalize.ts`, `planMutation.ts`) is fully retired.
-* **Conversational Multi-Turn Loop.** Rewrote `loop.ts` and `executor.ts` to implement a stateful multi-turn conversational loop. Turns are mapped to the `agent_steps` database table, and past `tool_calls` are fed back to Gemini as function response parts, preserving full backward-compatibility with existing dashboard trace metrics.
-* **Direct Multimodal Attachment Inputs.** Natively feeds Slack attachments (images, PDFs, screenshots) as `inlineData` parts in the first turn of the conversation, bypassing the need for legacy plan-drafting and intermediate "generate" extraction steps.
-* **Verification Feedback Integration.** Semantic verification failures now append system feedback directly into the conversation history, allowing the model to naturally replan and self-correct on subsequent turns.
-* **Interactive Conversational Updates.** Refactored `cancelUpdate.ts` so that active task modifications or feedback are appended directly to the history, re-queuing the run for seamless conversational adjustments.
-* **Code Cleanup.** Deleted obsolete legacy planning files and rule-based verifier (`verifier.ts`).
-
-### 🧪 Tests & Linting
-
-* Deleted obsolete legacy test suites (`executorInjection.test.ts`, `planNormalize.test.ts`, `verifier.test.ts`).
-* Rewrote `loop.test.ts` to verify turn-based native tool call executions, step creation, and re-queuing.
-* 100% clean type-checking with `npm run lint` and all unit tests passing (`12/12 files, 110/110 tests`).
-
 ## [6.4.0] - Thread History Bounding & DB Bloat Fix - 2026-07-01
 
 ### 🚀 Features & Fixes

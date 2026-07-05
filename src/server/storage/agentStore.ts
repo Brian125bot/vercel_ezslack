@@ -49,9 +49,9 @@ export const agentStore = {
   async createRun(input: CreateRunInput): Promise<AgentRun> {
     const id = crypto.randomUUID();
     const rows = await query<AgentRun>(
-      `INSERT INTO agent_runs (id, goal_id, plan_id, status, model, current_step_id, result_summary, failure_reason, attachments)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [id, input.goal_id, input.plan_id || null, input.status, input.model, input.current_step_id || null, input.result_summary || null, input.failure_reason || null, input.attachments ? JSON.stringify(input.attachments) : null]
+      `INSERT INTO agent_runs (id, goal_id, plan_id, status, model, current_step_id, result_summary, failure_reason)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [id, input.goal_id, input.plan_id || null, input.status, input.model, input.current_step_id || null, input.result_summary || null, input.failure_reason || null]
     );
     return rows[0];
   },
@@ -425,16 +425,6 @@ export const agentStore = {
          LIMIT 1
        ) RETURNING *`,
       [workerId, leaseSeconds]
-    );
-    return rows.length ? rows[0] : null;
-  },
-
-  async claimRun(runId: string, workerId: string, leaseSeconds: number): Promise<AgentRun | null> {
-    const rows = await query<AgentRun>(
-      `UPDATE agent_runs 
-       SET status = 'running', claimed_by = $1, claimed_at = now(), lease_expires_at = now() + interval '1 second' * $2, updated_at = now()
-       WHERE id = $3 AND status = 'queued' RETURNING *`,
-      [workerId, leaseSeconds, runId]
     );
     return rows.length ? rows[0] : null;
   },
