@@ -49,9 +49,9 @@ export const agentStore = {
   async createRun(input: CreateRunInput): Promise<AgentRun> {
     const id = crypto.randomUUID();
     const rows = await query<AgentRun>(
-      `INSERT INTO agent_runs (id, goal_id, plan_id, status, model, current_step_id, result_summary, failure_reason)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [id, input.goal_id, input.plan_id || null, input.status, input.model, input.current_step_id || null, input.result_summary || null, input.failure_reason || null]
+      `INSERT INTO agent_runs (id, goal_id, plan_id, status, model, current_step_id, result_summary, failure_reason, attachments)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [id, input.goal_id, input.plan_id || null, input.status, input.model, input.current_step_id || null, input.result_summary || null, input.failure_reason || null, JSON.stringify(input.attachments || [])]
     );
     return rows[0];
   },

@@ -49,6 +49,7 @@ export interface AgentRun {
   claimed_by?: string | null;
   claimed_at?: Date | null;
   lease_expires_at?: Date | null;
+  attachments?: any[]; // Cross-reference AgentAttachment in src/server/agent/types.ts
   started_at?: Date | null;
   finished_at?: Date | null;
   created_at: Date;
