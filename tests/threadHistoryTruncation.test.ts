@@ -25,10 +25,12 @@ describe('Thread History Truncation', () => {
     vi.clearAllMocks();
     isDbAvailableMock.mockResolvedValue(true);
     threadMemory.clear();
+    delete process.env.MAX_THREAD_HISTORY_CHARS;
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    delete process.env.MAX_THREAD_HISTORY_CHARS;
   });
 
   it('1. Message-count cap still enforced at the default of 20 for text-only threads (no regression)', async () => {
@@ -88,7 +90,8 @@ describe('Thread History Truncation', () => {
     expect(memHist?.[0].text?.startsWith('A'.repeat(4000))).toBe(true);
   });
 
-  it('4. Thread whose messages collectively exceed 40000 chars gets older messages dropped', async () => {
+  it('4. Thread whose messages collectively exceed 40000 chars gets older messages dropped (explicit env var)', async () => {
+    process.env.MAX_THREAD_HISTORY_CHARS = '40000';
     const threadKey = 'test-4';
     const messages: ThreadMessage[] = [];
     // MAX is 40000. Each message is ~4000, 11 messages = ~44000 chars.
@@ -170,5 +173,51 @@ describe('Thread History Truncation', () => {
     const rendered = renderContextForPrompt(ctx);
     expect(rendered).toContain('user: test text');
     expect(rendered).not.toContain('foo.png');
+  });
+});
+
+describe('Model-aware Thread History Budget', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    isDbAvailableMock.mockResolvedValue(true);
+    threadMemory.clear();
+    delete process.env.MAX_THREAD_HISTORY_CHARS;
+    delete process.env.THREAD_HISTORY_BUDGET_PERCENT;
+  });
+
+  afterEach(() => {
+    delete process.env.MAX_THREAD_HISTORY_CHARS;
+    delete process.env.THREAD_HISTORY_BUDGET_PERCENT;
+  });
+
+  it('9. Default budget is calculated correctly for 1M token model (1M * 4 * 0.05 = 200,000)', async () => {
+    const threadKey = 'test-9';
+    const messages: ThreadMessage[] = [];
+    // If each message is 4000 chars, 15 messages = 60,000 chars.
+    for (let i = 0; i < 15; i++) {
+      messages.push({ role: 'user', text: 'D'.repeat(4000) });
+    }
+
+    await saveThreadHistory(threadKey, messages);
+
+    const memHist = threadMemory.get(threadKey);
+    // With 200,000 default budget, it should keep all 15.
+    expect(memHist?.length).toBe(15);
+  });
+
+  it('10. Explicit MAX_THREAD_HISTORY_CHARS env var still takes precedence', async () => {
+    process.env.MAX_THREAD_HISTORY_CHARS = '20000';
+    const threadKey = 'test-10';
+    const messages: ThreadMessage[] = [];
+    // 6 messages of 4000 chars = 24,000 chars.
+    for (let i = 0; i < 6; i++) {
+      messages.push({ role: 'user', text: 'E'.repeat(4000) });
+    }
+
+    await saveThreadHistory(threadKey, messages);
+
+    const memHist = threadMemory.get(threadKey);
+    // Should truncate to 5 messages (5 * 4000 = 20,000)
+    expect(memHist?.length).toBe(5);
   });
 });
