@@ -1,11 +1,18 @@
 import { SlackEventLog, ThreadMessage } from '../types.js';
 import { sanitizeString } from './agent/sanitize.js';
-import { resolveModel, DEFAULT_MODEL } from './agent/models.js';
+import { resolveModel, DEFAULT_MODEL, getContextWindowTokens } from './agent/models.js';
 
 // ── Limits ──
 const MAX_THREAD_HISTORY_MESSAGES = parseInt(process.env.MAX_THREAD_HISTORY_MESSAGES || '20');
-const MAX_THREAD_HISTORY_CHARS = parseInt(process.env.MAX_THREAD_HISTORY_CHARS || '40000');
 const MAX_THREAD_MESSAGE_CHARS = parseInt(process.env.MAX_THREAD_MESSAGE_CHARS || '4000');
+
+const THREAD_HISTORY_BUDGET_PERCENT = parseFloat(process.env.THREAD_HISTORY_BUDGET_PERCENT || '0.05');
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+function defaultThreadHistoryCharBudget(model: string): number {
+  const tokens = getContextWindowTokens(model);
+  return Math.floor(tokens * CHARS_PER_TOKEN_ESTIMATE * THREAD_HISTORY_BUDGET_PERCENT);
+}
 
 // ── In-memory fallbacks (used when DB is unavailable) ──
 const memoryLogs: SlackEventLog[] = [];
@@ -211,11 +218,14 @@ export async function saveThreadHistory(threadKey: string, messages: ThreadMessa
     : sanitizedMessages;
 
   const trimmed: ThreadMessage[] = [];
+  const historyLimit = process.env.MAX_THREAD_HISTORY_CHARS
+    ? parseInt(process.env.MAX_THREAD_HISTORY_CHARS)
+    : defaultThreadHistoryCharBudget(selectedModel);
   let totalChars = 0;
   for (let i = sliced.length - 1; i >= 0; i--) {
     const msg = sliced[i];
     const msgLength = msg.text ? msg.text.length : 0;
-    if (totalChars + msgLength > MAX_THREAD_HISTORY_CHARS) {
+    if (totalChars + msgLength > historyLimit) {
       break;
     }
     trimmed.unshift(msg);

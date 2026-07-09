@@ -1,6 +1,18 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [6.7.0] - Model-Aware Thread History Budget - 2026-07-03
+
+### ✨ Features
+* **Model-Aware Thread History Budget**: MAX_THREAD_HISTORY_CHARS now defaults to a percentage of the selected Gemini model's actual context window (tokens × 4 chars/token × 5%).
+* This ensures that models with larger context windows can utilize more of their capacity for conversation history, while maintaining safety and efficiency.
+* Added `CONTEXT_WINDOW_TOKENS` mapping and `getContextWindowTokens()` helper in `src/server/agent/models.ts`.
+
+### ⚙️ Configuration
+* Introduced `THREAD_HISTORY_BUDGET_PERCENT` environment variable (default: `0.05`).
+* Backward Compatibility: Explicitly setting `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence and behaves exactly as before.
+
 ## [6.6.0] - Atomic Run Claiming & 508 Handling - 2026-07-16
 
 ### Fixed

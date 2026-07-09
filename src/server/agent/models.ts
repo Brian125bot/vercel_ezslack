@@ -18,6 +18,16 @@ export const ALLOWED_MODELS = [
 
 export type AllowedModel = typeof ALLOWED_MODELS[number];
 
+/** Approximate context window, in tokens, per allowed model. Used to size the
+ *  thread-history char budget proportionally instead of a fixed constant. */
+export const CONTEXT_WINDOW_TOKENS: Record<AllowedModel, number> = {
+  'gemini-3.5-flash': 1_000_000,
+  'gemini-3.1-flash-lite': 1_000_000,
+  'gemini-2.5-flash': 1_000_000,
+  'gemini-2.0-flash': 1_000_000,
+  'gemini-1.5-flash': 1_000_000,
+};
+
 /** Known-good model guaranteed to be broadly available. */
 export const SAFE_DEFAULT_MODEL: AllowedModel = 'gemini-2.5-flash';
 
@@ -34,4 +44,9 @@ export function isAllowedModel(model: string | null | undefined): model is Allow
  */
 export function resolveModel(model: string | null | undefined): AllowedModel {
   return isAllowedModel(model) ? model : SAFE_DEFAULT_MODEL;
+}
+
+export function getContextWindowTokens(model: string | null | undefined): number {
+  const resolved = resolveModel(model);
+  return CONTEXT_WINDOW_TOKENS[resolved];
 }
