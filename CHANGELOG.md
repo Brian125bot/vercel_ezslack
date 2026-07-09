@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [6.6.0] - Atomic Run Claiming & 508 Handling - 2026-07-16
+
+### Fixed
+* **Atomic Run Claiming**: Replaced the non-atomic `getRun` + `updateRunStatus` sequence in the Vercel Workflow handler with a single atomic `claimQueuedRunById` call. This prevents duplicate/concurrent invocations for the same `runId` from both entering `runLoop`, resolving the "concurrent-worker storm" bug.
+* **HTTP 508 Handling**: Updated `taskClient.ts` to treat HTTP 508 Loop Detected as a terminal state. This prevents useless retries when Vercel identifies a recursive function-invocation chain.
+
 
 ## [6.5.0] - Durable Run Attachments - 2026-07-09
 

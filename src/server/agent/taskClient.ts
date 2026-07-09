@@ -40,6 +40,15 @@ const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         return false;
       }
 
+      // 508 Loop Detected: Vercel's platform identified this as part of a
+      // recursive function-invocation chain. Another invocation already owns
+      // this run — retrying only adds another request to the same loop, so
+      // this is terminal, not transient.
+      if (res.status === 508) {
+        slog('taskClient', 'enqueue_error', { runId, error: 'HTTP 508 Loop Detected — not retrying', endpoint });
+        return false;
+      }
+
       // Server errors (5xx) — retry with backoff
       if (attempt < ENQUEUE_MAX_RETRIES) {
         const delay = ENQUEUE_RETRY_BASE_MS * Math.pow(2, attempt);
