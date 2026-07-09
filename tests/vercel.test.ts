@@ -42,6 +42,7 @@ vi.mock('../src/server/agent/orchestrator.js', () => ({
 vi.mock('../src/server/storage/agentStore.js', () => ({
   agentStore: {
     getRun: vi.fn().mockResolvedValue({ id: 'run-123', status: 'queued' }),
+    claimQueuedRunById: vi.fn().mockResolvedValue({ id: 'run-123', status: 'running' }),
     updateRunStatus: vi.fn().mockResolvedValue({}),
     hasPendingApproval: vi.fn().mockResolvedValue(false),
     updateGoalStatus: vi.fn().mockResolvedValue({}),
@@ -272,6 +273,19 @@ describe('Vercel Migration Integration Tests', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       fetchSpy.mockRestore();
     });
+
+    it('does not retry on HTTP 508 Loop Detected', async () => {
+      const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() =>
+        Promise.resolve(new Response('Loop Detected', { status: 508 }))
+      );
+
+      const { enqueueRunTask } = await import('../src/server/agent/taskClient.js');
+      const result = await enqueueRunTask('run-508-test');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(result).toBe(false);
+      fetchSpy.mockRestore();
+    });
   });
 
   describe('4. Vercel Workflow Handler - Model Selection (Fix 1)', () => {
@@ -335,6 +349,21 @@ describe('Vercel Migration Integration Tests', () => {
       expect(requeueCall[2]?.failure_reason).toContain('timeout');
       // If taskClient fails (because it's not a real environment or fetch fails), we now hit our new last-resort finalizeRun fallback.
       // The goal here is that runLoop attempted to queue it, but fell back to finalizing.
+    });
+  });
+  describe('6. Atomic Run Claim (Fix: concurrent worker storm)', () => {
+    it('returns 200 without invoking runLoop when the run is already claimed', async () => {
+      const { agentStore } = await import('../src/server/storage/agentStore.js');
+      (agentStore.claimQueuedRunById as any).mockResolvedValueOnce(null);
+
+      const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
+      const mockReq = { method: 'POST', body: { runId: 'run-already-claimed' }, get: vi.fn().mockReturnValue(''), headers: {} };
+      const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn(), send: vi.fn() };
+
+      await workflowHandler(mockReq as any, mockRes as any);
+
+      expect(mockRes.status).toHaveBeenCalledWith(200);
+      expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('already claimed') }));
     });
   });
 });

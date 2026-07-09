@@ -429,6 +429,25 @@ export const agentStore = {
     return rows.length ? rows[0] : null;
   },
 
+
+  /**
+   * Atomically claims a specific run by id, transitioning it out of 'queued'
+   * only if it is still 'queued'. Returns null if the run doesn't exist, was
+   * already claimed by another concurrent invocation, or has already moved
+   * on to a different status. This is the single-owner guarantee that
+   * prevents duplicate/concurrent Vercel Workflow invocations for the same
+   * runId from both entering runLoop.
+   */
+  async claimQueuedRunById(runId: string, workerId: string, leaseSeconds: number): Promise<AgentRun | null> {
+    const rows = await query<AgentRun>(
+      `UPDATE agent_runs
+       SET status = 'running', claimed_by = $1, claimed_at = now(), lease_expires_at = now() + interval '1 second' * $2, updated_at = now()
+       WHERE id = $3 AND status = 'queued'
+       RETURNING *`,
+      [workerId, leaseSeconds, runId]
+    );
+    return rows.length ? rows[0] : null;
+  },
   async renewLease(runId: string, leaseSeconds: number): Promise<void> {
     await query(
       `UPDATE agent_runs SET lease_expires_at = now() + interval '1 second' * $1, updated_at = now() WHERE id = $2`,

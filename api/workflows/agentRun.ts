@@ -37,28 +37,33 @@ export default async function handler(req: any, res: any) {
     const { event, eventId, signatureVerified, workspaceId, runId, logItemId } = body;
 
     // Handle deferred/subsequent runId triggers
+    // Handle deferred/subsequent runId triggers
     if (runId) {
       console.log(`[Vercel Workflow] Executing run ${runId}`);
-      const run = await agentStore.getRun(runId);
-      if (!run || run.status !== 'queued') {
-        return res.status(200).json({ message: 'Run not found or already processing/finished' });
-      }
-      
-      const { runLoop } = await import('../../src/server/agent/loop.js');
-      const { finalizeRun } = await import('../../src/server/agent/finalize.js');
       const crypto = await import('crypto');
       const workerId = `vercel-workflow-${crypto.randomUUID()}`;
-      const updatedRun = await agentStore.updateRunStatus(runId, 'running', { claimed_by: workerId, claimed_at: new Date() });
+      const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
+
+      // Atomic claim: exactly one concurrent invocation for this runId can
+      // transition it out of 'queued'. Every other duplicate invocation gets
+      // null back here and returns immediately — it never reaches runLoop,
+      // which is what prevents the concurrent-worker storm.
+      const claimedRun = await agentStore.claimQueuedRunById(runId, workerId, LEASE_SECONDS);
+      if (!claimedRun) {
+        return res.status(200).json({ message: 'Run not found or already claimed by another worker' });
+      }
+
+      const { runLoop } = await import('../../src/server/agent/loop.js');
+      const { finalizeRun } = await import('../../src/server/agent/finalize.js');
 
       try {
-        await runLoop(updatedRun, workerId);
+        await runLoop(claimedRun, workerId);
       } catch (err: any) {
         console.error(`[Vercel Workflow] runLoop error: ${err.message}`);
-        await finalizeRun(run, 'failed', err.message);
+        await finalizeRun(claimedRun, 'failed', err.message);
       }
       return res.status(200).json({ success: true });
     }
-
     // Otherwise, handle initial Slack event orchestration
     console.log(`[Vercel Workflow] Initiated background pipeline for ID: ${eventId}`);
     
