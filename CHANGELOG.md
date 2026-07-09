@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.5.0] - Durable Run Attachments - 2026-07-09
+
+### Fixed
+* **Durable Run Attachments**: Fixed a race condition/silent failure where attachments were lost across serverless HTTP hops due to in-memory caching. Attachments are now persisted in the `agent_runs` table (`jsonb` column).
+* Deleted `attachmentCache` (process-local Map) in favor of database persistence.
+* Migration: Added v5 `run_attachments` to `agent_runs`.
+
 ## [6.4.0] - Thread History Bounding & DB Bloat Fix - 2026-07-01
 
 ### 🚀 Features & Fixes
