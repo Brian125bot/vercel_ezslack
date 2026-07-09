@@ -1,6 +1,14 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [6.7.0] - Model-Aware Thread History Budgeting - 2026-07-20
+
+### Enhanced
+* **Model-Aware Thread History Budgeting**: Previously `MAX_THREAD_HISTORY_CHARS` was a fixed 40000 regardless of model. Now it defaults to a percentage (`THREAD_HISTORY_BUDGET_PERCENT`, default 5%) of the resolved model's real context window, converted to an approximate char count. Explicitly setting `MAX_THREAD_HISTORY_CHARS` in the environment still overrides this and behaves exactly as before.
+* Added `CONTEXT_WINDOW_TOKENS` map and `getContextWindowTokens()` helper in `src/server/agent/models.ts`.
+* Env vars added: `THREAD_HISTORY_BUDGET_PERCENT` (default 0.05).
+
 ## [6.6.0] - Atomic Run Claiming & 508 Handling - 2026-07-16
 
 ### Fixed
