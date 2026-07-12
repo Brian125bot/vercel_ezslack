@@ -3,15 +3,15 @@ import { sanitizeString } from './agent/sanitize.js';
 import { resolveModel, DEFAULT_MODEL, getContextWindowTokens } from './agent/models.js';
 
 // ── Limits ──
-const MAX_THREAD_HISTORY_MESSAGES = parseInt(process.env.MAX_THREAD_HISTORY_MESSAGES || '20');
+const get_MAX_THREAD_HISTORY_MESSAGES = () => parseInt(process.env.MAX_THREAD_HISTORY_MESSAGES || '20');
 const MAX_THREAD_MESSAGE_CHARS = parseInt(process.env.MAX_THREAD_MESSAGE_CHARS || '4000');
 
-const THREAD_HISTORY_BUDGET_PERCENT = parseFloat(process.env.THREAD_HISTORY_BUDGET_PERCENT || '0.05');
-const CHARS_PER_TOKEN_ESTIMATE = 4;
+const get_THREAD_HISTORY_BUDGET_PERCENT = () => parseFloat(process.env.THREAD_HISTORY_BUDGET_PERCENT || '0.05');
+const get_CHARS_PER_TOKEN_ESTIMATE = () => 4;
 
 function defaultThreadHistoryCharBudget(model: string): number {
   const tokens = getContextWindowTokens(model);
-  return Math.floor(tokens * CHARS_PER_TOKEN_ESTIMATE * THREAD_HISTORY_BUDGET_PERCENT);
+  return Math.floor(tokens * get_CHARS_PER_TOKEN_ESTIMATE() * get_THREAD_HISTORY_BUDGET_PERCENT());
 }
 
 // ── In-memory fallbacks (used when DB is unavailable) ──
@@ -213,19 +213,22 @@ export async function saveThreadHistory(threadKey: string, messages: ThreadMessa
     return newMsg;
   });
 
-  const sliced = sanitizedMessages.length > MAX_THREAD_HISTORY_MESSAGES
-    ? sanitizedMessages.slice(-MAX_THREAD_HISTORY_MESSAGES)
+  const maxMsgs = get_MAX_THREAD_HISTORY_MESSAGES();
+  const sliced = sanitizedMessages.length > maxMsgs
+    ? sanitizedMessages.slice(-maxMsgs)
     : sanitizedMessages;
 
-  const trimmed: ThreadMessage[] = [];
-  const historyLimit = process.env.MAX_THREAD_HISTORY_CHARS
+  const currentModel = await getSelectedModel();
+  const maxHistoryChars = process.env.MAX_THREAD_HISTORY_CHARS
     ? parseInt(process.env.MAX_THREAD_HISTORY_CHARS)
-    : defaultThreadHistoryCharBudget(selectedModel);
+    : defaultThreadHistoryCharBudget(currentModel);
+
+  const trimmed: ThreadMessage[] = [];
   let totalChars = 0;
   for (let i = sliced.length - 1; i >= 0; i--) {
     const msg = sliced[i];
     const msgLength = msg.text ? msg.text.length : 0;
-    if (totalChars + msgLength > historyLimit) {
+    if (totalChars + msgLength > maxHistoryChars) {
       break;
     }
     trimmed.unshift(msg);
