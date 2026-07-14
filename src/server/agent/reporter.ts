@@ -92,6 +92,12 @@ export function buildRunReport(trace: AgentRunTrace): string {
     lines.push(`_Failure reason: ${run.failure_reason}_`);
   }
 
+  // WS6: cost observability — surface token usage accumulated by the ReAct loop.
+  if (run.total_tokens && run.total_tokens > 0) {
+    lines.push('');
+    lines.push(`_Tokens used: ${run.total_tokens.toLocaleString()}_`);
+  }
+
   return lines.join('\n');
 }
 

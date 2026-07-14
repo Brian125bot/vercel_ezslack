@@ -224,5 +224,20 @@ export const migrations = [
     sql: `
       ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS attachments jsonb NOT NULL DEFAULT '[]';
     `
+  },
+  {
+    version: 6,
+    name: 'react_loop_resume_and_cost',
+    sql: `
+      -- Accumulated Gemini conversation turns for the ReAct agent loop. Lets a
+      -- run resume its loop across serverless re-queues WITHOUT re-executing
+      -- already-completed side-effecting tools (the model re-reads prior
+      -- function responses from this column instead).
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS agent_messages jsonb NOT NULL DEFAULT '[]';
+
+      -- Running total of tokens consumed by a run (prompt + candidates across
+      -- every loop turn), for cost observability on the dashboard/reporter.
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS total_tokens integer NOT NULL DEFAULT 0;
+    `
   }
 ];

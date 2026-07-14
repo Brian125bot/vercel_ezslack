@@ -97,6 +97,53 @@ export interface AgentTool<TInput = any, TOutput = any> {
   riskLevel: AgentRiskLevel;
   requiresApproval: boolean;
   execute(input: TInput, context: ToolExecutionContext): Promise<TOutput>;
+  /**
+   * Optional JSON-Schema-style declaration of the tool's input parameters.
+   * When present it is emitted to the model as a Gemini FunctionDeclaration
+   * (native tool-calling) and used to validate `injectInto` fields. Omitted on
+   * tools that pre-date this field for backward compatibility.
+   */
+  parameters?: ToolParameterSchema;
+}
+
+/**
+ * Enhanced AgentTool interface for the ReAct loop with better type safety
+ * and parameter validation support.
+ */
+export interface AgentToolEnhanced<TInput = any, TOutput = any> extends AgentTool<TInput, TOutput> {
+  name: string;
+  description: string;
+  riskLevel: AgentRiskLevel;
+  requiresApproval: boolean;
+  execute(input: TInput, context: ToolExecutionContext): Promise<TOutput>;
+  parameters: ToolParameterSchema;  // Required for ReAct loop tools
+  validation?: (input: TInput) => ValidationResult;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors?: string[];
+}
+
+/**
+ * A minimal, JSON-Schema-flavoured parameter declaration. We intentionally keep
+ * this as plain data (no @google/genai enum imports) so it stays portable and
+ * easy to assert against in tests; {@link toFunctionDeclarations} adapts it to
+ * the SDK's `FunctionDeclaration.parameters` shape.
+ */
+export interface ToolParameterSchema {
+  type: 'object';
+  properties: Record<string, ToolParameterProperty>;
+  required?: string[];
+}
+
+export interface ToolParameterProperty {
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'array';
+  description?: string;
+  enum?: string[];
+  items?: ToolParameterProperty;
+  minimum?: number;
+  maximum?: number;
 }
 
 export type IntentCategory = 

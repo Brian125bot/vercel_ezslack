@@ -1,9 +1,21 @@
-import type { AgentTool } from '../agent/types.js';
+import type { AgentTool, ToolParameterSchema } from '../agent/types.js';
 import { slackReplyInThreadTool } from './slack.js';
 import { memoryWriteTool, memorySearchTool } from './memory.js';
 import { taskRecordTool } from './task.js';
 import { GitHubIssueAdapter, EmailAdapter, WebSearchAdapter } from './adapters/index.js';
 import type { ExternalAdapter } from './adapters/index.js';
+
+/**
+ * A Gemini SDK `FunctionDeclaration` (plain-data subset). We emit
+ * `parametersJsonSchema` rather than the older `parameters`/`Type`-enum form so
+ * the schema stays plain JSON-Schema data (no SDK enum coupling) and is
+ * straightforward to assert against in tests.
+ */
+export interface ToolFunctionDeclaration {
+  name: string;
+  description: string;
+  parametersJsonSchema?: ToolParameterSchema;
+}
 
 class ToolRegistry {
   private tools = new Map<string, AgentTool>();
@@ -19,6 +31,20 @@ class ToolRegistry {
 
   getAll(): AgentTool[] {
     return Array.from(this.tools.values());
+  }
+
+  /**
+   * Emit every registered tool as a Gemini FunctionDeclaration. Because adapters
+   * only register their tools when env-configured, the model is never advertised
+   * a tool that cannot actually run — this is the fix for "plan silently does
+   * nothing" when an adapter key is missing.
+   */
+  toFunctionDeclarations(): ToolFunctionDeclaration[] {
+    return this.getAll().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      ...(tool.parameters ? { parametersJsonSchema: tool.parameters } : {})
+    }));
   }
 
   /** Register an external adapter if its env vars are configured */

@@ -21,3 +21,42 @@ describe('tool registry completeness', () => {
     }
   });
 });
+
+// Native tool-calling: the model can only see what the registry advertises, so
+// every registered tool must surface as a FunctionDeclaration with a schema.
+describe('toFunctionDeclarations (native tool-calling catalogue)', () => {
+  it('emits one declaration per registered tool, keyed by the same name', () => {
+    const declarations = toolsRegistry.toFunctionDeclarations();
+    const registered = toolsRegistry.getAll().map(t => t.name);
+    const declared = declarations.map(d => d.name);
+
+    expect(declared).toEqual(registered);
+    // No duplicate names — the model would be ambiguous otherwise.
+    expect(new Set(declared).size).toBe(declared.length);
+  });
+
+  it('every declaration has a non-empty name and description', () => {
+    for (const d of toolsRegistry.toFunctionDeclarations()) {
+      expect(d.name).toBeTruthy();
+      expect(d.description.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('every declaration carries a JSON-schema parameters object', () => {
+    for (const d of toolsRegistry.toFunctionDeclarations()) {
+      // All registered tools now declare parameters; assert none are missing.
+      expect(d.parametersJsonSchema, `${d.name} missing parameters`).toBeDefined();
+      expect(d.parametersJsonSchema!.type).toBe('object');
+      expect(Object.keys(d.parametersJsonSchema!.properties).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('required field names exist in properties (schema self-consistency)', () => {
+    for (const d of toolsRegistry.toFunctionDeclarations()) {
+      const props = Object.keys(d.parametersJsonSchema!.properties);
+      for (const req of d.parametersJsonSchema!.required || []) {
+        expect(props, `${d.name} requires unknown field ${req}`).toContain(req);
+      }
+    }
+  });
+});

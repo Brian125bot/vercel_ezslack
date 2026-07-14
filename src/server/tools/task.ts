@@ -6,6 +6,14 @@ export const taskRecordTool: AgentTool<{ title: string; notes?: string }> = {
   description: 'Record an internal task or action item.',
   riskLevel: 'internal_write',
   requiresApproval: false,
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Short title of the task or action item.' },
+      notes: { type: 'string', description: 'Optional additional detail about the task.' }
+    },
+    required: ['title']
+  },
   async execute(input, context) {
     // Record as memory for now or a sub-task if we implement it.
     await agentStore.writeMemory({

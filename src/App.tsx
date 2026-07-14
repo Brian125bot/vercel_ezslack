@@ -1052,6 +1052,7 @@ export default function App() {
                           </div>
                           <div className="text-[10px] text-slate-400 mt-1 truncate">
                             {new Date(r.created_at).toLocaleString()}
+                            {r.total_tokens ? ` · ${Number(r.total_tokens).toLocaleString()} tokens` : ''}
                           </div>
                         </button>
                       ))
@@ -1077,14 +1078,23 @@ export default function App() {
                                  </div>
                                </div>
                              )}
-                             {runTrace.run?.failure_reason && (
-                               <div className="mt-3 pt-3 border-t border-slate-100">
-                                 <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Failure Reason</div>
-                                 <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 p-2.5 rounded-lg">
-                                   {runTrace.run.failure_reason}
-                                 </div>
-                               </div>
-                             )}
+                              {runTrace.run?.failure_reason && (
+                                <div className="mt-3 pt-3 border-t border-slate-100">
+                                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Failure Reason</div>
+                                  <div className="text-sm text-rose-700 bg-rose-50 border border-rose-100 p-2.5 rounded-lg">
+                                    {runTrace.run.failure_reason}
+                                  </div>
+                                </div>
+                              )}
+
+                              {runTrace.run?.total_tokens ? (
+                                <div className="mt-3 pt-3 border-t border-slate-100">
+                                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Token Usage</div>
+                                  <div className="text-sm text-slate-700 bg-slate-50 border border-slate-100 p-2.5 rounded-lg">
+                                    {Number(runTrace.run.total_tokens).toLocaleString()} tokens
+                                  </div>
+                                </div>
+                              ) : null}
                           </div>
 
                           {runTrace.auditEvents?.find((e: any) => e.type === 'run.semantic_verified') && (

@@ -543,6 +543,25 @@ export const agentStore = {
     return rows[0];
   },
 
+  // ── ReAct loop resume: persist accumulated conversation turns so a run can
+  //    resume its agent loop across a serverless re-queue without re-executing
+  //    already-completed (side-effecting) tools. ──
+  async updateRunMessages(id: string, messages: any): Promise<void> {
+    await query(
+      `UPDATE agent_runs SET agent_messages = $1 WHERE id = $2`,
+      [JSON.stringify(messages || []), id]
+    );
+  },
+
+  // ── ReAct loop cost accounting: accumulate token usage across turns. ──
+  async addRunTokens(id: string, delta: number): Promise<void> {
+    if (!delta || delta <= 0) return;
+    await query(
+      `UPDATE agent_runs SET total_tokens = COALESCE(total_tokens, 0) + $1 WHERE id = $2`,
+      [delta, id]
+    );
+  },
+
   // ── W4-A: Scheduled triggers ──
   async createScheduledTrigger(input: {
     goal_id: string;

@@ -32,6 +32,17 @@ export class GitHubIssueAdapter implements ExternalAdapter {
     description: 'Create a GitHub issue. Requires owner, repo, title. Optional: body, labels.',
     riskLevel: 'external_write',
     requiresApproval: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string', description: 'GitHub repository owner (user or org).' },
+        repo: { type: 'string', description: 'GitHub repository name.' },
+        title: { type: 'string', description: 'Title of the issue.' },
+        body: { type: 'string', description: 'Markdown body/description of the issue.' },
+        labels: { type: 'array', description: 'Labels to apply.', items: { type: 'string' } }
+      },
+      required: ['owner', 'repo', 'title']
+    },
 
     async execute(input: GitHubIssueInput, context: ToolExecutionContext) {
       const token = process.env.GITHUB_TOKEN;

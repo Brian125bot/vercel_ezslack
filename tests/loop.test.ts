@@ -11,6 +11,7 @@ const {
   mockFinalizeRun,
   mockVerifyRun,
   mockVerifySemantically,
+  mockRunAgentLoop,
 } = vi.hoisted(() => ({
   mockAgentStore: {
     getGoal: vi.fn(),
@@ -32,12 +33,15 @@ const {
     updateStepStatus: vi.fn(),
     appendAuditEvent: vi.fn(),
     createApprovalRequest: vi.fn(),
+    updateApprovalMessageTs: vi.fn(),
+    updateApprovalStatus: vi.fn(),
   },
   mockCreatePlan: vi.fn(),
   mockExecuteStep: vi.fn(),
   mockFinalizeRun: vi.fn(),
   mockVerifyRun: vi.fn(),
   mockVerifySemantically: vi.fn(),
+  mockRunAgentLoop: vi.fn(),
 }));
 
 vi.mock('../src/server/storage/agentStore.js', () => ({
@@ -75,6 +79,19 @@ vi.mock('../src/server/agent/semanticVerifier.js', () => ({
 
 vi.mock('../src/server/agent/log.js', () => ({
   slog: vi.fn()
+}));
+
+vi.mock('../src/server/agent/reactLoop.js', () => ({
+  runAgentLoop: mockRunAgentLoop,
+}));
+
+vi.mock('../src/server/agent/attachments.js', () => ({
+  attachmentsToGeminiParts: vi.fn().mockReturnValue([]),
+}));
+
+vi.mock('../src/server/tools/slack.js', () => ({
+  slackReplyInThreadTool: { execute: vi.fn().mockResolvedValue({ status: 'simulated_dispatch' }) },
+  postApprovalBlockKit: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { runLoop } from '../src/server/agent/loop.js';
@@ -138,6 +155,9 @@ function makePlanDraft(overrides: any = {}) {
 describe('Agent Loop (W4-F6)', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // Default: disable the ReAct loop so the existing tests exercise the
+    // single-shot planner fallback path.
+    process.env.AGENT_LOOP_ENABLED = 'false';
     // Default: getApprovalsForRun and getAuditEventsForRun return empty
     mockAgentStore.getApprovalsForRun.mockResolvedValue([]);
     mockAgentStore.getAuditEventsForRun.mockResolvedValue([]);

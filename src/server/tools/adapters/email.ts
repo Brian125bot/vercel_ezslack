@@ -34,6 +34,15 @@ export class EmailAdapter implements ExternalAdapter {
     description: 'Send an email. Requires to, subject, body.',
     riskLevel: 'external_write',
     requiresApproval: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        to: { type: 'string', description: 'Recipient email address.' },
+        subject: { type: 'string', description: 'Email subject line.' },
+        body: { type: 'string', description: 'Email body content.' }
+      },
+      required: ['to', 'subject', 'body']
+    },
 
     async execute(input: SendEmailInput, context: ToolExecutionContext) {
       const webhookUrl = process.env.EMAIL_WEBHOOK_URL;

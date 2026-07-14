@@ -50,6 +50,14 @@ export class WebSearchAdapter implements ExternalAdapter {
     description: 'Search the web for current information. Input: query (string), maxResults (optional int 1-10). Returns ranked results with title, url, content snippet, and relevance score.',
     riskLevel: 'read',
     requiresApproval: false,
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The search query string.' },
+        maxResults: { type: 'integer', description: 'Number of results to return (1-10).', minimum: 1, maximum: 10 }
+      },
+      required: ['query']
+    },
 
     async execute(input: WebSearchInput, _context: ToolExecutionContext): Promise<WebSearchOutput> {
       const apiKey = process.env.TAVILY_API_KEY;

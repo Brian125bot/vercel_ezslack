@@ -1,4 +1,4 @@
-import type { AgentTool, ToolExecutionContext } from '../agent/types.js';
+import type { AgentTool, ToolExecutionContext, AgentToolEnhanced } from '../agent/types.js';
 import type { ApprovalRequest } from '../storage/types.js';
 import { agentStore } from '../storage/agentStore.js';
 import { geminiCall } from '../agent/geminiClient.js';
@@ -13,6 +13,13 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
   description: 'Reply to the user in a Slack thread.',
   riskLevel: 'internal_write',
   requiresApproval: false,
+  parameters: {
+    type: 'object',
+    properties: {
+      text: { type: 'string', description: 'The message text to post in the Slack thread.' }
+    },
+    required: ['text']
+  },
   async execute(input, context) {
     let replyText = input.text;
 
@@ -195,5 +202,70 @@ export async function updateApprovalMessage(
     });
   } catch (err: any) {
     console.error('[Approval BlockKit] Failed to update message:', err.message);
+  }
+}
+
+/**
+ * WS6: Surface streamed agent output to the user. Posts an initial Slack message
+ * for the thread and incrementally updates it as text chunks arrive, so the user
+ * sees the answer form in real time instead of waiting for the whole ReAct loop
+ * to finish. Updates are throttled to avoid hitting Slack rate limits. When no
+ * real token is configured (local/dev/mock) the stream is drained and discarded.
+ */
+export async function streamReplyToThread(
+  context: ToolExecutionContext,
+  stream: AsyncIterable<string>
+): Promise<void> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token || token.startsWith('xoxb-mock') || token.startsWith('mock:')) {
+    // Simulated environment: consume the stream so the generator completes.
+    for await (const _ of stream) { /* drain */ }
+    return;
+  }
+
+  try {
+    const { WebClient } = await import('@slack/web-api');
+    const client = new WebClient(token);
+
+    let ts: string | undefined;
+    let acc = '';
+    let lastUpdate = 0;
+
+    for await (const chunk of stream) {
+      acc += chunk;
+      if (!ts) {
+        const res = await client.chat.postMessage({
+          channel: context.channelId,
+          thread_ts: context.threadTs || context.messageTs,
+          text: acc.slice(0, SLACK_MAX_TEXT)
+        });
+        ts = res.ts;
+      } else {
+        const now = Date.now();
+        if (now - lastUpdate > 800 && acc.length > 0) {
+          await client.chat.update({
+            channel: context.channelId,
+            ts,
+            text: acc.slice(0, SLACK_MAX_TEXT)
+          });
+          lastUpdate = now;
+        }
+      }
+    }
+
+    // Final reconcile in case the last update was throttled.
+    if (ts && acc.length > 0) {
+      await client.chat.update({
+        channel: context.channelId,
+        ts,
+        text: acc.slice(0, SLACK_MAX_TEXT)
+      });
+    }
+  } catch (err: any) {
+    if (context.channelId?.includes('SIMULATED') || err.message?.includes('channel_not_found')) {
+      console.warn(`[Slack Stream] Simulated/discarded reply (${context.channelId}).`);
+      return;
+    }
+    console.error('[Slack Stream] Failed to stream reply:', err.message);
   }
 }

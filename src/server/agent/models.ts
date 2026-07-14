@@ -40,7 +40,8 @@ export function resolveModel(model: string | null | undefined): AllowedModel {
  *  thread-history char budget proportionally instead of a fixed constant. */
 export const CONTEXT_WINDOW_TOKENS: Record<AllowedModel, number> = {
   'gemini-3.5-flash': 1_000_000,
-  'gemini-3.1-flash-lite': 1_000_000,
+  // Flash-lite is a smaller, cheaper tier with a narrower context window.
+  'gemini-3.1-flash-lite': 128_000,
   'gemini-2.5-flash': 1_000_000,
   'gemini-2.0-flash': 1_000_000,
   'gemini-1.5-flash': 1_000_000,
@@ -48,5 +49,26 @@ export const CONTEXT_WINDOW_TOKENS: Record<AllowedModel, number> = {
 
 export function getContextWindowTokens(model: string | null | undefined): number {
   const resolved = resolveModel(model);
-  return CONTEXT_WINDOW_TOKENS[resolved];
+  const tokens = CONTEXT_WINDOW_TOKENS[resolved];
+  console.log(`[Models] Context window for ${model} (${resolved}): ${tokens.toLocaleString()} tokens`);
+  return tokens;
+}
+
+/**
+ * Get the recommended max output tokens for a given model, factoring in
+ * the specific model's capabilities and context window.
+ */
+export function getMaxOutputTokens(model: string | null | undefined): number {
+  const resolved = resolveModel(model);
+  
+  // Flash models typically have lower output limits than larger models
+  const modelConfig = {
+    'gemini-3.5-flash': 8192,
+    'gemini-3.1-flash-lite': 4096,
+    'gemini-2.5-flash': 8192,
+    'gemini-2.0-flash': 8192,
+    'gemini-1.5-flash': 4096,
+  };
+  
+  return modelConfig[resolved] || 4096;
 }

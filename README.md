@@ -1,9 +1,9 @@
 # 🧠 Dynamic Gemini Slack AI Agent Backend
 
-[![Engine](https://img.shields.io/badge/Gemini-2.5%20Flash%20%7C%203.5%20Flash-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
+[![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-11%20files%20%7C%2094%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-16%20files%20%7C%20140%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -12,7 +12,7 @@ Designed specifically to run under the strict timeout requirements of Slack API 
 
 ---
 
-### Multimodal Input
+### Multimodal Input & Thread History Bounds
 
 The agent can see and reason about images, screenshots, and PDFs attached to
 Slack messages. Supported formats: PNG, JPEG, WebP, HEIC/HEIF, and PDF, up to
@@ -20,6 +20,25 @@ Slack messages. Supported formats: PNG, JPEG, WebP, HEIC/HEIF, and PDF, up to
 and `MAX_ATTACHMENTS_PER_MESSAGE`). This works for both direct replies and
 multi-step durable tasks — attachments are passed to Gemini as native
 multimodal input, not OCR'd or pre-processed.
+
+**Thread History Bounding** — Prevents unbounded row growth in `thread_memories`
+and stops the agent from re-embedding stale attachment payloads. Historical
+messages with attachments persist metadata only (filename, mimeType, sizeBytes)
+without `base64Data`, and are summarized via a text note in the model context.
+Configurable via:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_THREAD_HISTORY_MESSAGES` | 20 | Max messages retained in thread history |
+| `MAX_THREAD_HISTORY_CHARS` | 40000 | Cumulative character cap for history |
+| `MAX_THREAD_MESSAGE_CHARS` | 4000 | Per-message truncation limit |
+
+**Model-Aware Thread History Budget** — `MAX_THREAD_HISTORY_CHARS` now defaults
+to a percentage of the selected Gemini model's actual context window (tokens ×
+4 chars/token × 5%). This ensures models with larger context windows can
+utilize more capacity for conversation history while maintaining safety and
+efficiency. Override with `THREAD_HISTORY_BUDGET_PERCENT` (default `0.05`).
+Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 
 
 
@@ -112,11 +131,17 @@ multimodal input, not OCR'd or pre-processed.
 | Decision | Rationale |
 |----------|-----------|
 | ACK Slack within 15ms, delegate to Vercel Workflow | Slack cancels and retries if no `200 OK` within 3 seconds |
+| Atomic `claimQueuedRunById` for run claiming | Prevents duplicate/concurrent invocations from both entering `runLoop` |
 | `FOR UPDATE SKIP LOCKED` queue claims | Concurrency fallback for synchronous execution paths |
 | Semantic + rule-based dual verification | Rules catch structural failures; LLM catches semantic mismatches |
 | `generate` step kind | Solves the "chat wrapper" problem — content generation deferred to exec time |
 | Atomic `DELETE ... RETURNING` for scheduler | Prevents double-firing across concurrent function invocations |
 | Dynamic adapter registration | External tools only activate when env vars are set |
+| HTTP 508 Loop Detected as terminal state | Prevents useless retries when Vercel identifies recursive invocation chains |
+| Model-aware thread history budget | Context window proportional to selected model's token limit |
+| Thread history message/char bounds | Prevents unbounded DB growth and token window saturation |
+| `injectInto` field for generate-step output routing | Routes generated content into any downstream tool field |
+| Durable run attachments persisted in DB | Survives serverless HTTP hops without in-memory cache |
 
 ---
 
@@ -301,16 +326,19 @@ Supported patterns:
 - `"follow up (tomorrow|next week|in N units)"`
 - `"schedule (this|it) for tomorrow / next week / in N units"`
 - Bare `"in N units"` with action verb context guard
+- Single-letter units: `10m` → `10 minutes`, `2h` → `2 hours`, etc.
+- `"let me know in X"` / `"know in X"` patterns
 
 ### Scheduled Triggers Poller
 
-- Triggered on-demand via the scheduler poll webhook endpoint.
+- Triggered on-demand via the scheduler poll webhook endpoint (`/api/cron/poll`).
 - Atomic `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *` prevents double-firing.
 - Recurring triggers (cron/interval): re-inserted with next run time after claim.
 - One-shot triggers: not re-inserted after firing.
 - `cron-parser` (v5) for full cron expression support.
 - Scheduled runs inherit the model from the goal's most recent run.
-- Lifecycle is handled on-demand via HTTP webhooks, replacing persistent setInterval polling loops.
+- Lifecycle is handled on-demand via HTTP webhooks, replacing persistent `setInterval` polling loops.
+- Cron handler also runs `recoverStaleClaims()` and `reapExpiredApprovals()` at startup.
 
 ---
 
@@ -354,7 +382,9 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 | Mechanism | Description |
 |-----------|-------------|
 | **Execution** | Self-triggered HTTP fetch to `/api/workflows/agentRun` with `waitUntil()` from `@vercel/functions` |
-| **Trigger Retry** | Exponential backoff retry (3 attempts: 1s → 2s → 4s) on transient fetch failures (5xx, network errors) |
+| **Trigger Retry** | Exponential backoff retry (3 attempts: 1s → 2s → 4s) on transient fetch failures (5xx, network errors). Client errors (4xx) are not retried. |
+| **HTTP 508 Handling** | Treats HTTP 508 Loop Detected as terminal — prevents useless retries when Vercel identifies a recursive function-invocation chain. |
+| **Atomic Run Claiming** | `claimQueuedRunById` atomically transitions a run from `queued` to `running`. Duplicate concurrent invocations for the same `runId` receive `null` and exit immediately, preventing the "concurrent-worker storm" bug. |
 | **Scheduling** | Vercel Cron triggers the polling webhook (`/api/cron/poll`) daily at 9 AM UTC |
 | **Stale Recovery** | `recoverStaleClaims()` + `reapExpiredApprovals()` run at cron start and workflow bootstrap |
 | **Timeout Guard** | Cooperative wall-clock check (configurable `RUN_TIMEOUT_MS`, default 45s) before plan creation, each step, and verification — gracefully re-queues instead of hard-terminating on Vercel's serverless timeout |
@@ -366,7 +396,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-11 test files, 94 test cases. Run with:
+16 test files, 140 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -387,6 +417,11 @@ npm run test:coverage # With coverage report
 | Plan Normalization | `tests/planNormalize.test.ts` | 5 | Plan draft cleaning (tool hallucination, kind coercion) |
 | Model Resolution | `tests/models.test.ts` | 3 | Model name safe resolution with fallback |
 | Vercel Integration | `tests/vercel.test.ts` | 11 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard |
+| Attachments | `tests/attachments.test.ts` | 13 | Slack file download, size/count limits, MIME types, inlineData parts |
+| Executor Injection | `tests/executorInjection.test.ts` | 6 | Backward compat, explicit injection targets, precedence, resolution |
+| Thread History Truncation | `tests/threadHistoryTruncation.test.ts` | 17 | Char/message caps, attachment metadata-only persistence, budget calc |
+| Web Search | `tests/webSearch.test.ts` | 8 | Tavily adapter integration, result formatting, error handling |
+| Tool Registry | `tests/registry.test.ts` | 5 | Adapter registration completeness, tool catalog freshness |
 
 ### CI Gate
 

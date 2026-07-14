@@ -6,13 +6,36 @@ import { executeStep } from './executor.js';
 import { finalizeRun } from './finalize.js';
 import { verifyRun } from './verifier.js';
 import { verifySemantically } from './semanticVerifier.js';
+import { runAgentLoop } from './reactLoop.js';
 import { slog } from './log.js';
 
 const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
 const MAX_ITERATIONS = 3;
 const MAX_TRANSIENT_RETRIES = 1;
 const LEASE_HEARTBEAT_MS = 60_000; // Renew lease every 60 seconds
-const MAX_RUN_WALL_TIME_MS = parseInt(process.env.RUN_TIMEOUT_MS || '45000'); // Soft limit: re-queue before Vercel timeout
+
+/**
+ * Single source of truth for the run wall-clock budget. If Vercel exposes
+ * `MAX_DURATION` (function max runtime, in seconds), leave a 5s margin for
+ * shutdown; otherwise fall back to RUN_TIMEOUT_MS (default 45s).
+ */
+export function getRunWallTimeMs(): number {
+  const maxDuration = parseInt(process.env.MAX_DURATION || '0');
+  if (maxDuration > 0) return Math.max(5000, maxDuration * 1000 - 5000);
+  return parseInt(process.env.RUN_TIMEOUT_MS || '45000');
+}
+
+/** The agent loop is the default complex-task path; set `false` to fall back
+ *  to the single-shot planner. */
+export function isAgentLoopEnabled(): boolean {
+  return process.env.AGENT_LOOP_ENABLED !== 'false';
+}
+
+/** True when this run was (or is being) driven by the ReAct loop — detected via
+ *  the persisted conversation turns or the loop-authored plan summary prefix. */
+function looksLikeLoopRun(run: AgentRun): boolean {
+  return Array.isArray(run.agent_messages) && run.agent_messages.length > 0;
+}
 
 async function buildScopedTrace(runId: string, planId?: string | null): Promise<AgentRunTrace> {
   // Single call fetches run, goal, plan, steps, toolCalls, approvals, and auditEvents
@@ -40,9 +63,15 @@ async function buildScopedTrace(runId: string, planId?: string | null): Promise<
 export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void> {
   let run = runIn;
   const runStartTime = Date.now();
-  const wouldExceedTimeout = (): boolean => (Date.now() - runStartTime) >= MAX_RUN_WALL_TIME_MS;
+  const wallTimeMs = getRunWallTimeMs();
+  const deadlineMs = runStartTime + wallTimeMs;
+  // Abort controller tied to the deadline: cancels in-flight Gemini calls when
+  // the budget is nearly spent, instead of waiting for each call's own timeout.
+  const abortController = new AbortController();
+  const abortTimer = setTimeout(() => abortController.abort('run_wall_clock'), Math.max(0, wallTimeMs - 2000));
+  const wouldExceedTimeout = (): boolean => (Date.now() - runStartTime) >= wallTimeMs;
 
-  slog('loop', 'runLoop.start', { run_id: run.id, goal_id: run.goal_id, worker_id: workerId });
+  slog('loop', 'runLoop.start', { run_id: run.id, goal_id: run.goal_id, worker_id: workerId, wall_time_ms: wallTimeMs });
 
   const goal = await agentStore.getGoal(run.goal_id);
 
@@ -74,16 +103,16 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
         run = await agentStore.updateRunStatus(run.id, 'running');
       }
     } else {
-      // Create new plan path
+      // ── No plan yet: dispatch to the ReAct loop or the single-shot planner ──
       run = await agentStore.incrementRunIteration(run.id);
 
-      // W5-C: Timeout guard before expensive plan creation
+      // W5-C: Timeout guard before expensive plan creation / loop start
       if (wouldExceedTimeout()) {
         slog('loop', 'timeout_guard', { run_id: run.id, elapsed: Date.now() - runStartTime, phase: 'plan_creation' });
         clearInterval(leaseHeartbeat);
         await agentStore.updateRunStatus(run.id, 'queued', {
           claimed_by: null, claimed_at: null, lease_expires_at: null,
-          failure_reason: `Run paused near wall-clock timeout (${MAX_RUN_WALL_TIME_MS}ms) before plan creation`
+          failure_reason: `Run paused near wall-clock timeout (${wallTimeMs}ms) before plan creation`
         });
         const { enqueueRunTask } = await import('./taskClient.js');
       const requeued = await enqueueRunTask(run.id);
@@ -97,7 +126,64 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       return;
       }
 
-      const ctx = await assembleContext(goal, run);
+      // ── ReAct agent loop (default) ───────────────────────────────────────
+      if (isAgentLoopEnabled()) {
+        const execContext: import('./types.js').ToolExecutionContext = {
+          runId: run.id,
+          stepId: '',
+          workspaceId: goal.workspace_id,
+          channelId: goal.source_channel_id || '',
+          userId: goal.created_by_user_id,
+          messageTs: goal.source_message_ts || '',
+          threadTs: goal.source_thread_ts || ''
+        };
+
+        const loopResult = await runAgentLoop(run, goal, {
+          deadlineMs,
+          signal: abortController.signal,
+          execContext
+        });
+
+        // Reload run after the loop (plan_id may have been set, status may have changed).
+        run = await agentStore.getRun(run.id) || run;
+        planId = run.plan_id;
+
+        if (loopResult.status === 'yield') {
+          slog('loop', 'agent_loop_yield', { run_id: run.id, reason: loopResult.reason });
+          clearInterval(leaseHeartbeat);
+          if (loopResult.reason === 'approval') {
+            // Run is already in awaiting_approval; the interactivity handler
+            // resumes it via resumeAgentPipeline().
+            return;
+          }
+          // Wall-clock: re-queue for resume (messages are persisted).
+          await agentStore.updateRunStatus(run.id, 'queued', {
+            claimed_by: null, claimed_at: null, lease_expires_at: null,
+            failure_reason: `Loop yielded near wall-clock deadline (${wallTimeMs}ms)`
+          });
+          const { enqueueRunTask } = await import('./taskClient.js');
+          const requeued = await enqueueRunTask(run.id);
+          if (!requeued) {
+            clearInterval(leaseHeartbeat);
+            await finalizeRun(run, 'failed', 'Re-enqueue failed after loop yield');
+          }
+          return;
+        }
+
+        if (loopResult.status === 'capped') {
+          slog('loop', 'agent_loop_capped', { run_id: run.id, reason: loopResult.reason });
+          clearInterval(leaseHeartbeat);
+          await finalizeRun(run, 'failed', loopResult.reason);
+          return;
+        }
+
+        // Loop completed — fall through to the verify/finalize tail below using
+        // the steps + tool_calls the loop persisted into the ledger.
+        slog('loop', 'agent_loop_completed', { run_id: run.id });
+
+      // ── Single-shot planner fallback ────────────────────────────────────
+      } else {
+        const ctx = await assembleContext(goal, run);
       const contextBlock = renderContextForPrompt(ctx);
       
       const planDraft = await createPlan(goal.title, goal.original_instruction, run.model, contextBlock, ctx?.attachments);
@@ -162,7 +248,8 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       }
       
       run = await agentStore.updateRunStatus(run.id, 'running', { plan_id: planId });
-    }
+      } // end planner fallback
+    } // end no-plan path
 
     // Execute plan steps
     const steps = await agentStore.getStepsForPlan(planId);
@@ -200,7 +287,7 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
         clearInterval(leaseHeartbeat);
         await agentStore.updateRunStatus(run.id, 'queued', {
           claimed_by: null, claimed_at: null, lease_expires_at: null,
-          failure_reason: `Run paused near wall-clock timeout (${MAX_RUN_WALL_TIME_MS}ms) before step "${step.title}"`
+          failure_reason: `Run paused near wall-clock timeout (${wallTimeMs}ms) before step "${step.title}"`
         });
         const { enqueueRunTask } = await import('./taskClient.js');
       const requeued = await enqueueRunTask(run.id);
@@ -252,7 +339,7 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       clearInterval(leaseHeartbeat);
       await agentStore.updateRunStatus(run.id, 'queued', {
         claimed_by: null, claimed_at: null, lease_expires_at: null,
-        failure_reason: `Run paused near wall-clock timeout (${MAX_RUN_WALL_TIME_MS}ms) before verification`
+        failure_reason: `Run paused near wall-clock timeout (${wallTimeMs}ms) before verification`
       });
       const { enqueueRunTask } = await import('./taskClient.js');
       const requeued = await enqueueRunTask(run.id);
@@ -349,6 +436,7 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
     slog('loop', 'runLoop.error', { run_id: run.id, error: err.message });
     await finalizeRun(run, 'failed', err.message);
   } finally {
+    clearTimeout(abortTimer);
     slog('loop', 'runLoop.complete', {
       run_id: run.id,
       elapsed: Date.now() - runStartTime,

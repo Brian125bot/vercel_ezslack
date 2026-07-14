@@ -7,6 +7,15 @@ export const memoryWriteTool: AgentTool<{ content: string; kind: string; visibil
   description: 'Write a memory record.',
   riskLevel: 'internal_write',
   requiresApproval: false,
+  parameters: {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: 'The fact or note to remember.' },
+      kind: { type: 'string', description: 'Memory kind.', enum: ['fact', 'task', 'preference', 'note'] },
+      visibility: { type: 'string', description: 'Who can see this memory.', enum: ['private', 'workspace', 'public'] }
+    },
+    required: ['content']
+  },
   async execute(input, context) {
     const content = input.content || '';
 
@@ -33,6 +42,14 @@ export const memorySearchTool: AgentTool<{ query: string; kind?: string }> = {
   description: 'Search memory records.',
   riskLevel: 'read',
   requiresApproval: false,
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Text to match against stored memory records.' },
+      kind: { type: 'string', description: 'Optional kind filter.', enum: ['fact', 'task', 'preference', 'note'] }
+    },
+    required: ['query']
+  },
   async execute(input, context) {
     const records = await agentStore.searchMemory({
       workspace_id: context.workspaceId,

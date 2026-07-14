@@ -50,6 +50,11 @@ export interface AgentRun {
   claimed_at?: Date | null;
   lease_expires_at?: Date | null;
   attachments?: any[]; // Cross-reference AgentAttachment in src/server/agent/types.ts
+  /** Persisted ReAct-loop conversation turns (contents[]). Lets a run resume
+   *  its agent loop across serverless re-queues without re-running tools. */
+  agent_messages?: any[];
+  /** Running total of tokens consumed across all loop turns. */
+  total_tokens?: number;
   started_at?: Date | null;
   finished_at?: Date | null;
   created_at: Date;

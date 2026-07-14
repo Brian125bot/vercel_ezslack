@@ -7,3 +7,6 @@ coverage/
 .env*
 !.env.example
 .vercel
+
+# opencode tool artifacts
+.zcode/
