@@ -104,8 +104,13 @@ export async function updateLog(id: string, updates: Partial<SlackEventLog>) {
       };
       for (const [jsKey, dbCol] of Object.entries(fieldMap)) {
         if ((sanitized as any)[jsKey] !== undefined) {
+          let val = (sanitized as any)[jsKey] ?? null;
+          if (dbCol === 'processing_time_ms' && typeof val === 'number' && val > 2147483647) {
+            console.warn(`[State] Clamping processing_time_ms ${val} to INT4 max (likely Date.now() leak)`);
+            val = 2147483647;
+          }
           setClauses.push(`${dbCol} = $${idx}`);
-          params.push((sanitized as any)[jsKey] ?? null);
+          params.push(val);
           idx++;
         }
       }

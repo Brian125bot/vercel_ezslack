@@ -239,5 +239,22 @@ export const migrations = [
       -- every loop turn), for cost observability on the dashboard/reporter.
       ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS total_tokens integer NOT NULL DEFAULT 0;
     `
+  },
+  {
+    version: 7,
+    name: 'widen_processing_time_ms',
+    sql: `
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'slack_event_logs'
+            AND column_name = 'processing_time_ms'
+            AND data_type = 'integer'
+        ) THEN
+          ALTER TABLE slack_event_logs ALTER COLUMN processing_time_ms TYPE bigint;
+        END IF;
+      END $$;
+    `
   }
 ];
