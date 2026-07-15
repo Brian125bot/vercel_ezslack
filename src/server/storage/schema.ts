@@ -256,5 +256,61 @@ export const migrations = [
         END IF;
       END $$;
     `
+  },
+  {
+    version: 8,
+    name: 'sandbox_sessions',
+    sql: `
+      CREATE TABLE IF NOT EXISTS sandbox_sessions (
+        session_key text PRIMARY KEY,
+        sandbox_id text NOT NULL,
+        expires_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_expires ON sandbox_sessions(expires_at);
+    `
+  },
+  {
+    version: 9,
+    name: 'skills_and_agent_sessions',
+    sql: `
+      CREATE TABLE IF NOT EXISTS skills (
+        id uuid PRIMARY KEY,
+        workspace_id text NOT NULL,
+        user_id text,
+        name text NOT NULL,
+        content text NOT NULL,
+        scope text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_sessions (
+        session_key text PRIMARY KEY,
+        sandbox_id text,
+        skill_set jsonb,
+        context_summary text,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_skills_workspace_user ON skills(workspace_id, user_id);
+      CREATE INDEX IF NOT EXISTS idx_skills_scope ON skills(scope);
+    `
+  },
+  {
+    version: 10,
+    name: 'sub_agents_and_costs',
+    sql: `
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS parent_run_id uuid REFERENCES agent_runs(id);
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS total_tokens integer NOT NULL DEFAULT 0;
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS estimated_cost_usd numeric;
+      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS sandbox_seconds integer NOT NULL DEFAULT 0;
+
+      ALTER TABLE scheduled_triggers ADD COLUMN IF NOT EXISTS cron_expression text;
+      ALTER TABLE scheduled_triggers ADD COLUMN IF NOT EXISTS payload jsonb;
+
+      CREATE INDEX IF NOT EXISTS idx_runs_parent ON agent_runs(parent_run_id);
+    `
   }
 ];

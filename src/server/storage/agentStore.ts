@@ -10,7 +10,8 @@ import type {
   MemoryRecord, CreateMemoryInput, SearchMemoryInput,
   AuditEvent, CreateAuditEventInput,
   AgentRunTrace, ListRunsFilter,
-  ScheduledTrigger
+  ScheduledTrigger,
+  Skill, CreateSkillInput
 } from './types.js';
 
 import { sanitizePayload } from '../agent/sanitize.js';
@@ -593,7 +594,7 @@ export const agentStore = {
     );
   },
 
-  async reinsertScheduledTrigger(trigger: ScheduledTrigger, nextRunAt: Date | null): Promise<void> {
+async reinsertScheduledTrigger(trigger: ScheduledTrigger, nextRunAt: Date | null): Promise<void> {
     // Re-insert recurring trigger with updated next_run_at after successful claim
     if (nextRunAt) {
       await query(
@@ -604,4 +605,50 @@ export const agentStore = {
     }
     // If nextRunAt is null → one-shot trigger, don't re-insert (effectively disabled)
   },
+
+  // ── Skills (Phase 3) ─────────────────────────────────────────────────────
+  async listSkills(filter: { workspace_id: string; scope: 'builtin' | 'workspace' | 'user'; user_id?: string }): Promise<Skill[]> {
+    let sql = `SELECT * FROM skills WHERE workspace_id = $1 AND scope = $2`;
+    const params: any[] = [filter.workspace_id, filter.scope];
+    if (filter.user_id) {
+      params.push(filter.user_id);
+      sql += ` AND user_id = $${params.length}`;
+    }
+    sql += ` ORDER BY name ASC`;
+    return query<Skill>(sql, params);
+  },
+
+  async createSkill(input: CreateSkillInput): Promise<Skill> {
+    const id = crypto.randomUUID();
+    const rows = await query<Skill>(
+      `INSERT INTO skills (id, workspace_id, user_id, name, content, scope)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [id, input.workspace_id, input.user_id || null, input.name, input.content, input.scope]
+    );
+    return rows[0];
+  },
+
+  async updateSkill(id: string, patch: Partial<CreateSkillInput>): Promise<Skill> {
+    const setClauses: string[] = ['updated_at = now()'];
+    const params: any[] = [];
+    let idx = 1;
+    for (const [key, value] of Object.entries(patch)) {
+      if (value !== undefined) {
+        setClauses.push(`${key} = $${idx}`);
+        params.push(value);
+        idx++;
+      }
+    }
+    params.push(id);
+    const rows = await query<Skill>(
+      `UPDATE skills SET ${setClauses.join(', ')} WHERE id = $${idx} RETURNING *`,
+      params
+    );
+    if (!rows.length) throw new Error(`Skill ${id} not found`);
+    return rows[0];
+  },
+
+  async deleteSkill(id: string): Promise<void> {
+    await query(`DELETE FROM skills WHERE id = $1`, [id]);
+  }
 };

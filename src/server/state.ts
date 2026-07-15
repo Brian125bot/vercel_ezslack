@@ -22,6 +22,67 @@ const memoryProcessedMessages = new Set<string>();
 const memoryEventTimestamps = new Map<string, number>();
 let memorySelectedModel: string = DEFAULT_MODEL;
 
+// ── Sandbox Session Cache (Phase 1) ──
+const memorySandboxCache = new Map<string, { sandboxId: string; expiresAt: number }>();
+const SANDBOX_TTL_MS = parseInt(process.env.SANDBOX_TTL_MS || '900000'); // 15 min default
+
+export async function getSessionSandboxId(sessionKey: string): Promise<string | null> {
+  // Check in-memory cache first
+  const cached = memorySandboxCache.get(sessionKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.sandboxId;
+  }
+  if (cached) {
+    memorySandboxCache.delete(sessionKey);
+  }
+
+  // Check DB
+  const q = await getQuery();
+  if (q) {
+    try {
+      const rows = await q(
+        `SELECT sandbox_id, expires_at FROM sandbox_sessions WHERE session_key = $1 AND expires_at > now()`,
+        [sessionKey]
+      );
+      if (rows.length) {
+        const sandboxId = rows[0].sandbox_id;
+        const expiresAt = new Date(rows[0].expires_at).getTime();
+        memorySandboxCache.set(sessionKey, { sandboxId, expiresAt });
+        return sandboxId;
+      }
+    } catch (e) {
+      console.warn('[State] Failed to read sandbox session from DB:', e);
+    }
+  }
+  return null;
+}
+
+export async function setSessionSandboxId(sessionKey: string, sandboxId: string): Promise<void> {
+  const expiresAt = Date.now() + SANDBOX_TTL_MS;
+
+  // Update in-memory cache
+  memorySandboxCache.set(sessionKey, { sandboxId, expiresAt });
+
+  // Persist to DB
+  const q = await getQuery();
+  if (q) {
+    try {
+      await q(
+        `INSERT INTO sandbox_sessions (session_key, sandbox_id, expires_at, updated_at)
+         VALUES ($1, $2, to_timestamp($3/1000), now())
+         ON CONFLICT (session_key) DO UPDATE SET sandbox_id = $2, expires_at = to_timestamp($3/1000), updated_at = now()`,
+        [sessionKey, sandboxId, expiresAt]
+      );
+    } catch (e) {
+      console.warn('[State] Failed to persist sandbox session:', e);
+    }
+  }
+}
+
+export function generateSessionKey(workspaceId: string, channelId: string, threadTs?: string): string {
+  return threadTs ? `${workspaceId}:${channelId}:${threadTs}` : `${workspaceId}:${channelId}`;
+}
+
 export const maxLogs = 50;
 const MAX_DEDUP_SET_SIZE = 10000; // Prevent OOM under sustained load
 

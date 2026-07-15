@@ -154,6 +154,19 @@ export interface ScheduledTrigger {
   created_at: Date;
 }
 
+export interface Skill {
+  id: string;
+  workspace_id: string;
+  user_id?: string | null;
+  name: string;
+  content: string;
+  scope: 'builtin' | 'workspace' | 'user';
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface CreateSkillInput extends Omit<Skill, 'id' | 'created_at' | 'updated_at'> {}
+
 export interface CreateGoalInput extends Omit<AgentGoal, 'id' | 'created_at' | 'updated_at' | 'completed_at'> {}
 export type UpdateGoalInput = Partial<Omit<AgentGoal, 'id' | 'created_at' | 'updated_at'>>;
 
@@ -177,6 +190,28 @@ export interface SearchMemoryInput {
   limit?: number;
 }
 export interface CreateAuditEventInput extends Omit<AuditEvent, 'id' | 'created_at'> {}
+
+// Sub-Agent infrastructure
+export interface SubAgent {
+  id: string;
+  parentRunId: string;
+  name: string;
+  description?: string;
+  role: string;
+  model: string;
+  goalId?: string;
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  executionOrder?: number;
+  context?: any;
+  result?: any;
+  cost?: number;
+  createdAt: Date;
+  startedAt?: Date;
+  finishedAt?: Date;
+}
+
+export interface CreateSubAgentInput extends Omit<SubAgent, 'id' | 'created_at'> {}
+export type UpdateSubAgentInput = Partial<Omit<SubAgent, 'id' | 'created_at' | 'parentRunId' | 'name' | 'created_at'>>;
 
 export interface AgentRunTrace {
   run: AgentRun;

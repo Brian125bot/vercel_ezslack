@@ -2,7 +2,7 @@ import type { AgentTool, ToolParameterSchema } from '../agent/types.js';
 import { slackReplyInThreadTool } from './slack.js';
 import { memoryWriteTool, memorySearchTool } from './memory.js';
 import { taskRecordTool } from './task.js';
-import { GitHubIssueAdapter, EmailAdapter, WebSearchAdapter } from './adapters/index.js';
+import { GitHubIssueAdapter, EmailAdapter, WebSearchAdapter, WebFetchAdapter, SandboxAdapter } from './adapters/index.js';
 import type { ExternalAdapter } from './adapters/index.js';
 
 /**
@@ -77,3 +77,5 @@ toolsRegistry.register(taskRecordTool);
 toolsRegistry.registerAdapter(new GitHubIssueAdapter());
 toolsRegistry.registerAdapter(new EmailAdapter());
 toolsRegistry.registerAdapter(new WebSearchAdapter());
+toolsRegistry.registerAdapter(new WebFetchAdapter());
+toolsRegistry.registerAdapter(new SandboxAdapter());

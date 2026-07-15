@@ -23,6 +23,7 @@ import { checkPolicy } from './policy.js';
 import { assembleContext, renderContextForPrompt } from './context.js';
 import { attachmentsToGeminiParts } from './attachments.js';
 import { slog } from './log.js';
+import { loadSkillsForWorkspace, formatSkillsForPrompt, type LoadedSkill } from './skills.js';
 
 const MAX_AGENT_LOOP_TURNS = parseInt(process.env.MAX_AGENT_LOOP_TURNS || '8');
 const MAX_TOOL_CALLS_PER_RUN = parseInt(process.env.MAX_TOOL_CALLS_PER_RUN || '10');
@@ -95,7 +96,8 @@ export async function runAgentLoop(
   } else {
     const planningCtx = await assembleContext(goal, run);
     const contextBlock = renderContextForPrompt(planningCtx);
-    const systemPrompt = buildSystemPrompt(goal, contextBlock);
+    const skills = await loadSkillsForWorkspace(goal.workspace_id, goal.created_by_user_id);
+    const systemPrompt = buildSystemPrompt(goal, contextBlock, skills);
     const firstParts = buildFirstUserParts(goal, systemPrompt, planningCtx.attachments);
     contents = [{ role: 'user', parts: firstParts }];
   }
@@ -216,7 +218,9 @@ export async function runAgentLoop(
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(goal: AgentGoal, contextBlock: string): string {
+function buildSystemPrompt(goal: AgentGoal, contextBlock: string, skills: LoadedSkill[]): string {
+  const skillsBlock = formatSkillsForPrompt(skills);
+
   return [
     'You are a Slack AI agent solving a task by calling tools step by step.',
     'Observe each tool result before deciding the next action.',
@@ -226,7 +230,8 @@ function buildSystemPrompt(goal: AgentGoal, contextBlock: string): string {
     `Goal: ${goal.title}`,
     goal.original_instruction,
     '',
-    contextBlock
+    contextBlock,
+    skillsBlock
   ].join('\n');
 }
 
