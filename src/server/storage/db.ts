@@ -44,7 +44,6 @@ export async function getAdminDbPool(): Promise<Pool> {
     adminPool = new Pool({
       ...config,
       connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
     });
   } else {
     throw new Error('No database configuration found for admin pool.');
@@ -100,7 +99,6 @@ export async function getDbPool(): Promise<Pool> {
     pool = new Pool({
       ...config,
       connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
     });
   } else {
     throw new Error('No database configuration found. Set DATABASE_URL, CLOUD_SQL_CONNECTION_NAME, or SQL_HOST.');

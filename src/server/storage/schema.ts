@@ -312,5 +312,22 @@ export const migrations = [
 
       CREATE INDEX IF NOT EXISTS idx_runs_parent ON agent_runs(parent_run_id);
     `
+  },
+  {
+    version: 11,
+    name: 'widen_step_order_index',
+    sql: `
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'agent_steps'
+            AND column_name = 'order_index'
+            AND data_type = 'integer'
+        ) THEN
+          ALTER TABLE agent_steps ALTER COLUMN order_index TYPE bigint;
+        END IF;
+      END $$;
+    `
   }
 ];

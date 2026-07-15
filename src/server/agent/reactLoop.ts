@@ -106,6 +106,7 @@ export async function runAgentLoop(
   const tools = toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : undefined;
 
   let toolCallsMade = await countExistingToolCalls(run.id);
+  let stepOrder = 0;
   let outcome: AgentLoopOutcome | null = null;
 
   for (let turn = 0; turn < MAX_AGENT_LOOP_TURNS; turn++) {
@@ -159,7 +160,7 @@ export async function runAgentLoop(
           break;
         }
 
-        const toolResult = await executeOneToolCall(run, goal, planId!, fc.name, fc.args, ctx.execContext);
+        const toolResult = await executeOneToolCall(run, goal, planId!, fc.name, fc.args, ctx.execContext, ++stepOrder);
         // A tool call that needed approval yields the whole run.
         if (toolResult.kind === 'approval') {
           await agentStore.updateRunMessages(run.id, contents);
@@ -263,13 +264,14 @@ async function executeOneToolCall(
   planId: string,
   toolName: string,
   args: Record<string, unknown>,
-  execContext: ToolExecutionContext
+  execContext: ToolExecutionContext,
+  orderIndex: number
 ): Promise<ToolExecResult> {
   const tool = toolsRegistry.get(toolName);
 
   // Unknown/unconfigured tool: honest failure (the model hallucinated a name).
   if (!tool) {
-    const step = await persistLoopStep(run, goal, planId, toolName, args, 'failed', {
+    const step = await persistLoopStep(run, goal, planId, toolName, args, 'failed', orderIndex, {
       error: `Tool not found: ${toolName}`
     });
     await agentStore.appendAuditEvent({
@@ -288,7 +290,7 @@ async function executeOneToolCall(
   const step = await agentStore.createStep({
     run_id: run.id,
     plan_id: planId,
-    order_index: Date.now(), // monotonic within a loop; ordering is informational here
+    order_index: orderIndex,
     title: `${toolName}`,
     status: 'running',
     input: { kind: 'tool', toolName, input: args }
@@ -342,7 +344,7 @@ async function executeOneToolCall(
     }
     // Blocked outright (destructive/privileged).
     await agentStore.updateToolCallStatus(toolCall.id, 'blocked', { error: policy.reason });
-    await persistLoopStep(run, goal, planId, toolName, args, 'blocked', { error: policy.reason }, step);
+    await persistLoopStep(run, goal, planId, toolName, args, 'blocked', orderIndex, { error: policy.reason }, step);
     return { kind: 'done', response: { error: `Blocked by policy: ${policy.reason}` } };
   }
 
@@ -383,6 +385,7 @@ async function persistLoopStep(
   toolName: string,
   args: Record<string, unknown>,
   status: 'succeeded' | 'failed' | 'blocked',
+  orderIndex: number,
   patch: { output?: any; error?: string },
   existing?: any
 ): Promise<any> {
@@ -392,7 +395,7 @@ async function persistLoopStep(
   return agentStore.createStep({
     run_id: run.id,
     plan_id: _planId,
-    order_index: Date.now(),
+    order_index: orderIndex,
     title: toolName,
     status,
     input: { kind: 'tool', toolName, input: args },
