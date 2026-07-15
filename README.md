@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-16%20files%20%7C%20140%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-8%20files%20%7C%2079%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -344,7 +344,7 @@ Supported patterns:
 
 ## 🗄 Database Schema
 
-PostgreSQL with 2 idempotent migrations. All DDL uses `IF NOT EXISTS` / `IF EXISTS` guards.
+PostgreSQL with 11 idempotent migrations (v1–v11). All DDL uses `IF NOT EXISTS` / `IF EXISTS` guards.
 
 ### Tables
 
@@ -396,7 +396,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-16 test files, 140 test cases. Run with:
+8 test files, 79 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -406,22 +406,14 @@ npm run test:coverage # With coverage report
 
 | Suite | File | Cases | Tests |
 |-------|------|:-----:|-------|
-| Intent Classification | `tests/intent.test.ts` | 11 | Heuristic patterns for all 6 intent categories |
-| Policy Gate | `tests/policy.test.ts` | 6 | Risk-level-based allow/deny/approval decisions |
+| Attachment Conversion | `tests/attachments.test.ts` | 13 | Slack file download, size/count limits, MIME types, inlineData parts |
+| Vercel Integration | `tests/vercel.test.ts` | 13 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard |
 | Secret Sanitization | `tests/sanitize.test.ts` | 11 | Token/password/key detection and redaction |
-| Rule Verifier | `tests/verifier.test.ts` | 6 | Post-execution rule-based outcome verification |
-| Action Reporter | `tests/reporter.test.ts` | 8 | Structured Slack report generation |
-| Deferral Detection | `tests/deferral.test.ts` | 17 | Time-deferred pattern matching, false positive prevention |
-| Agent Loop | `tests/loop.test.ts` | 4 | Full closed-loop integration (plan→execute→verify→finalize) |
-| Migration Idempotency | `tests/migration.test.ts` | 9 | Static SQL analysis for IF NOT EXISTS guards |
-| Plan Normalization | `tests/planNormalize.test.ts` | 5 | Plan draft cleaning (tool hallucination, kind coercion) |
-| Model Resolution | `tests/models.test.ts` | 3 | Model name safe resolution with fallback |
-| Vercel Integration | `tests/vercel.test.ts` | 11 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard |
-| Attachments | `tests/attachments.test.ts` | 13 | Slack file download, size/count limits, MIME types, inlineData parts |
-| Executor Injection | `tests/executorInjection.test.ts` | 6 | Backward compat, explicit injection targets, precedence, resolution |
-| Thread History Truncation | `tests/threadHistoryTruncation.test.ts` | 17 | Char/message caps, attachment metadata-only persistence, budget calc |
-| Web Search | `tests/webSearch.test.ts` | 8 | Tavily adapter integration, result formatting, error handling |
-| Tool Registry | `tests/registry.test.ts` | 5 | Adapter registration completeness, tool catalog freshness |
+| Gemini Client | `tests/geminiClient.test.ts` | 11 | mapStructured response parsing, thoughtSignature preservation |
+| Web Search | `tests/webSearch.test.ts` | 10 | Tavily adapter integration, result formatting, error handling |
+| Tool Registry | `tests/registry.test.ts` | 9 | Adapter registration completeness, tool catalog freshness |
+| Agent Loop | `tests/loop.test.ts` | 6 | Full closed-loop integration (plan→execute→verify→finalize) |
+| ReAct Agent Loop | `tests/agent-loop.test.ts` | 6 | runAgentLoop with tool calls, yields, wall-clock deadline, turn cap |
 
 ### CI Gate
 
@@ -521,17 +513,14 @@ npm run test:coverage # With coverage report
 │               ├── githubIssue.ts    # GitHub Issues adapter
 │               └── email.ts          # Email webhook adapter
 ├── tests/
-│   ├── intent.test.ts                # 11 intent classification tests
-│   ├── policy.test.ts                # 6 policy gate tests
 │   ├── sanitize.test.ts              # 11 secret redaction tests
-│   ├── verifier.test.ts              # 6 rule verification tests
-│   ├── reporter.test.ts              # 8 report generation tests
-│   ├── deferral.test.ts              # 17 deferral detection tests
-│   ├── loop.test.ts                  # 4 closed-loop integration tests
-│   ├── migration.test.ts             # 9 migration idempotency tests
-│   ├── planNormalize.test.ts         # 5 plan normalization tests
-│   ├── models.test.ts                # 3 model resolution tests
-│   └── vercel.test.ts                # 11 Vercel integration tests
+│   ├── loop.test.ts                  # 6 agent-loop integration tests
+│   ├── vercel.test.ts                # 13 Vercel integration tests
+│   ├── attachments.test.ts           # 13 attachment processing tests
+│   ├── webSearch.test.ts             # 10 web search adapter tests
+│   ├── registry.test.ts              # 9 tool registry tests
+│   ├── geminiClient.test.ts          # 11 Gemini client response parsing tests
+│   └── agent-loop.test.ts            # 6 ReAct loop orchestration tests
 ├── docs/
 │   └── intent-routing.md             # Intent routing architecture spec
 ├── slack-manifest.json               # Slack App Manifest (copy-paste ready)
@@ -539,7 +528,7 @@ npm run test:coverage # With coverage report
 ├── Dockerfile                        # Multi-stage Node 22 Alpine build
 ├── vitest.config.ts                  # Vitest configuration
 ├── vite.config.ts                    # Vite build configuration
-├── CHANGELOG.md                      # Version history (v2.0.0 → v3.1.0)
+├── CHANGELOG.md                      # Version history (v2.0.0 → v6.9.0)
 ├── .env.example                      # Environment variable template
 └── package.json                      # Dependencies and scripts
 ```
@@ -687,3 +676,10 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v6.0.8 | ✅ Done | Vercel Migration (Vercel Serverless, Vercel Workflows, Neon Postgres, Vercel Cron) |
 | v6.1.4 | ✅ Done | Vercel Stability Hardening (cold-start model selection, retry, stale lease recovery, timeout guard) |
 | v6.2.1 | ✅ Done | Production Reliability & Feedback Fixes (interactivity sig verify, model selection in slack.ts, step-level approval resume, confidence normalization, semaphore timeout, observability) |
+| v6.3.0 | ✅ Done | Multimodal Input & Generic Output Injection (images/PDFs, `injectInto` field) |
+| v6.4.0 | ✅ Done | Thread History Bounding & DB Bloat Fix (message/char caps, attachment metadata-only) |
+| v6.5.0 | ✅ Done | Durable Run Attachments (persist attachments in DB, remove in-memory cache) |
+| v6.6.0 | ✅ Done | Atomic Run Claiming & 508 Handling (prevent concurrent workers, 508 terminal state) |
+| v6.7.0 | ✅ Done | Model-Aware Thread History Budget (context-window proportional budget) |
+| v6.8.0 | ✅ Done | Fix order_index overflow — migration v11 `bigint`, sequential counter, remove SSL override |
+| v6.9.0 | ✅ Done | Fix Gemini thoughtSignature — preserve raw parts through streaming response pipeline |

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.9.0] - Fix Gemini thoughtSignature for streaming function calls - 2026-07-15
+
+### Fixed
+* **thoughtSignature preservation in Gemini streaming responses.** The Gemini API now requires `thoughtSignature` on `functionCall` parts in conversation history. The Google Gen AI SDK's `response.functionCalls()` getter strips this field, causing `Function call is missing a thought_signature in functionCall parts` errors on subsequent turns. Fixed by:
+  - Adding a `parts` field to `GeminiStructuredResponse` type (`src/server/agent/geminiClient.ts`)
+  - `mapStructured()` now captures raw `candidates[0].content.parts`
+  - `geminiAgentStep()` accumulates raw parts across streaming chunks, deduplicating by name+args
+  - `reactLoop.ts` uses `response.parts` (raw parts with `thoughtSignature`) instead of reconstructing from stripped `functionCalls`
+* All test mocks updated: `geminiClient.test.ts` and `agent-loop.test.ts` include `_candidates` + `parts` + `thoughtSignature` in mock returns.
+
+## [6.8.0] - Fix order_index overflow & SSL warning - 2026-07-15
+
+### Fixed
+* **`order_index` integer overflow.** `Date.now()` (13-digit millisecond timestamp) exceeded PostgreSQL `integer` (INT4 max 2,147,483,647) when stored in `agent_steps.order_index`, causing runs to fail with `value "1784151602289" is out of range for type integer`. Two-part fix:
+  - Migration v11 (`widen_step_order_index`): altered `agent_steps.order_index` from `integer` to `bigint` (`src/server/storage/schema.ts`)
+  - `reactLoop.ts`: replaced `Date.now()` with a sequential `stepOrder` counter in both `executeOneToolCall` and `persistLoopStep`, matching the existing pattern in `loop.ts`
+* **SSL security warning suppressed.** `pg` v8.12+ warns when `ssl: { rejectUnauthorized: false }` is configured with passwordless auth. Removed the redundant `ssl: { rejectUnauthorized: false }` from both pool configs in `src/server/storage/db.ts` — Neon's connection string already bundles `?sslmode=require`, so the override was unnecessary.
+
 ## [6.7.0] - Model-Aware Thread History Budgeting - 2026-07-20
 
 ### Enhanced
