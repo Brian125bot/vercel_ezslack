@@ -119,7 +119,10 @@ describe('runAgentLoop (ReAct loop)', () => {
 
   it('executes a tool call, observes its result, then produces a final answer', async () => {
     geminiAgentStep
-      .mockResolvedValueOnce({ functionCalls: [{ name: 'task.record', args: { title: 'x' } }] })
+      .mockResolvedValueOnce({
+        functionCalls: [{ name: 'task.record', args: { title: 'x' } }],
+        parts: [{ functionCall: { name: 'task.record', args: { title: 'x' } }, thoughtSignature: 'sig' }],
+      })
       .mockResolvedValueOnce({ text: 'done after tool' });
     toolExecute.mockResolvedValue({ recorded: true });
 
@@ -150,7 +153,10 @@ describe('runAgentLoop (ReAct loop)', () => {
 
   it('caps the run after exceeding MAX_AGENT_LOOP_TURNS without a final answer', async () => {
     // The model keeps requesting a tool call and never answers → loop must cap.
-    geminiAgentStep.mockResolvedValue({ functionCalls: [{ name: 'task.record', args: { title: 'x' } }] });
+    geminiAgentStep.mockResolvedValue({
+      functionCalls: [{ name: 'task.record', args: { title: 'x' } }],
+      parts: [{ functionCall: { name: 'task.record', args: { title: 'x' } }, thoughtSignature: 'sig' }],
+    });
     toolExecute.mockResolvedValue({ recorded: true });
 
     const outcome = await runAgentLoop(makeRun(), goal, {
@@ -166,6 +172,7 @@ describe('runAgentLoop (ReAct loop)', () => {
   it('yields (approval) when a tool requires human approval', async () => {
     geminiAgentStep.mockResolvedValueOnce({
       functionCalls: [{ name: 'email.send', args: { to: 'a@b.co', body: 'hi' } }],
+      parts: [{ functionCall: { name: 'email.send', args: { to: 'a@b.co', body: 'hi' } }, thoughtSignature: 'sig' }],
     });
     toolsRegistry.get.mockReturnValue(
       tool('email.send', { riskLevel: 'external_write', requiresApproval: true })
@@ -187,7 +194,10 @@ describe('runAgentLoop (ReAct loop)', () => {
 
   it('surfaces an unknown tool name honestly instead of crashing', async () => {
     geminiAgentStep
-      .mockResolvedValueOnce({ functionCalls: [{ name: 'does.not.exist', args: {} }] })
+      .mockResolvedValueOnce({
+        functionCalls: [{ name: 'does.not.exist', args: {} }],
+        parts: [{ functionCall: { name: 'does.not.exist', args: {} }, thoughtSignature: 'sig' }],
+      })
       .mockResolvedValueOnce({ text: 'No such tool; here is my final answer.' });
 
     const outcome = await runAgentLoop(makeRun(), goal, {

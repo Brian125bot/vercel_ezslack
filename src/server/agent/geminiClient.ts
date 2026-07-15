@@ -42,6 +42,9 @@ export interface GeminiFunctionCall {
 export interface GeminiStructuredResponse {
   text?: string;
   functionCalls?: GeminiFunctionCall[];
+  /** Raw parts from the response candidate, preserved so that Part-level fields
+   *  (notably `thoughtSignature`) survive into conversation history. */
+  parts?: any[];
   finishReason?: string;
   promptTokenCount?: number;
   candidatesTokenCount?: number;
@@ -170,6 +173,7 @@ function mapStructured(response: any): GeminiStructuredResponse {
   return {
     ...(text ? { text } : {}),
     ...(functionCalls && functionCalls.length > 0 ? { functionCalls } : {}),
+    parts: response.candidates?.[0]?.content?.parts,
     ...(candidate?.finishReason ? { finishReason: String(candidate.finishReason) } : {}),
     ...(usage?.promptTokenCount != null ? { promptTokenCount: usage.promptTokenCount } : {}),
     ...(usage?.candidatesTokenCount != null ? { candidatesTokenCount: usage.candidatesTokenCount } : {}),
@@ -226,6 +230,7 @@ export async function geminiAgentStep(
   const functionCalls: GeminiFunctionCall[] = [];
   let finishReason: string | undefined;
   let usage: any;
+  let rawParts: any[] | undefined;
 
   try {
     const stream = await ai.models.generateContentStream({
@@ -237,6 +242,11 @@ export async function geminiAgentStep(
         ...(signal ? { abortSignal: signal } : {})
       }
     });
+
+    // Collect raw functionCall parts from chunks while deduplicating by
+    // (name + serialized args) to handle potential incremental streaming.
+    const seenParts = new Set<string>();
+    const accumulatedParts: any[] = [];
 
     for await (const chunk of stream) {
       if (chunk.text) {
@@ -251,11 +261,23 @@ export async function geminiAgentStep(
             ...(fc.id ? { id: fc.id } : {})
           });
         }
+        // Preserve Part-level fields (thoughtSignature) from the raw response.
+        const chunkParts = chunk.candidates?.[0]?.content?.parts || [];
+        for (const part of chunkParts) {
+          if (part.functionCall) {
+            const key = part.functionCall.name + JSON.stringify(part.functionCall.args || {});
+            if (!seenParts.has(key)) {
+              seenParts.add(key);
+              accumulatedParts.push(part);
+            }
+          }
+        }
       }
       const candidate = chunk.candidates?.[0];
       if (candidate?.finishReason) finishReason = String(candidate.finishReason);
       if (chunk.usageMetadata) usage = chunk.usageMetadata;
     }
+    if (accumulatedParts.length > 0) rawParts = accumulatedParts;
   } catch (err: any) {
     // A deadline abort is intentional; surface it distinctly.
     const aborted =
@@ -269,6 +291,7 @@ export async function geminiAgentStep(
   const structured: GeminiStructuredResponse = {
     ...(text ? { text } : {}),
     ...(functionCalls.length > 0 ? { functionCalls } : {}),
+    parts: rawParts,
     ...(finishReason ? { finishReason } : {}),
     ...(usage?.promptTokenCount != null ? { promptTokenCount: usage.promptTokenCount } : {}),
     ...(usage?.candidatesTokenCount != null ? { candidatesTokenCount: usage.candidatesTokenCount } : {}),

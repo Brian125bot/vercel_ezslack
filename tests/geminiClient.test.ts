@@ -29,10 +29,16 @@ vi.mock('@google/genai', () => {
       // the SDK getters (text/functionCalls/usageMetadata) resolve correctly.
       generateContent: async (params: any) =>
         new GenerateContentResponse(await mockGenerateContent(params)),
-      // Streaming: yield one GenerateContentResponse per chunk the test provides.
-      generateContentStream: async function* (params: any) {
+      // Streaming: return a GenerateContentResponse that is also async iterable,
+      // so the caller can iterate chunks AND access the aggregated response.
+      generateContentStream: async (params: any) => {
         const chunks = await mockGenerateContentStream(params);
-        for (const c of chunks || []) yield new GenerateContentResponse(c);
+        const aggregated = chunks?.[chunks.length - 1] || {};
+        const response = new GenerateContentResponse(aggregated);
+        response[Symbol.asyncIterator] = async function* () {
+          for (const c of chunks || []) yield new GenerateContentResponse(c);
+        };
+        return response;
       },
     };
   }
@@ -48,13 +54,17 @@ import { geminiCall, geminiCallStructured, geminiAgentStep, GeminiCallError } fr
 function buildResponse(opts: {
   text?: string;
   functionCalls?: Array<{ name?: string; args?: any; id?: string }>;
+  parts?: any[];
   finishReason?: string;
   usage?: any;
 }) {
   return {
     _text: opts.text,
     _functionCalls: opts.functionCalls,
-    _candidates: opts.finishReason ? [{ finishReason: opts.finishReason }] : undefined,
+    _candidates: [{
+      ...(opts.finishReason ? { finishReason: opts.finishReason } : {}),
+      ...(opts.parts ? { content: { parts: opts.parts } } : {})
+    }],
     _usageMetadata: opts.usage,
   };
 }
@@ -105,6 +115,9 @@ describe('geminiClient', () => {
           functionCalls: [
             { name: 'search.query', args: { query: 'gemini sdk', maxResults: 3 } },
           ],
+          parts: [
+            { functionCall: { name: 'search.query', args: { query: 'gemini sdk', maxResults: 3 } }, thoughtSignature: 'test-sig' },
+          ],
           finishReason: 'STOP',
           usage: { promptTokenCount: 12, candidatesTokenCount: 8, totalTokenCount: 20 },
         })
@@ -118,6 +131,8 @@ describe('geminiClient', () => {
 
       expect(out.functionCalls).toHaveLength(1);
       expect(out.functionCalls![0]).toMatchObject({ name: 'search.query', args: { query: 'gemini sdk', maxResults: 3 } });
+      expect(out.parts).toBeDefined();
+      expect(out.parts![0].thoughtSignature).toBe('test-sig');
       expect(out.text).toBeUndefined();
       expect(out.finishReason).toBe('STOP');
       expect(out.totalTokenCount).toBe(20);
@@ -195,6 +210,13 @@ describe('geminiClient', () => {
       mockGenerateContentStream.mockResolvedValue([
         {
           _functionCalls: [{ name: 'task.record', args: { title: 'x' } }],
+          _candidates: [{
+            content: {
+              parts: [
+                { functionCall: { name: 'task.record', args: { title: 'x' } }, thoughtSignature: 'stream-sig' },
+              ],
+            },
+          }],
           _usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 8, totalTokenCount: 20 },
         },
       ]);
@@ -210,6 +232,9 @@ describe('geminiClient', () => {
       // AUTO function-calling mode is requested when tools are supplied.
       const arg = mockGenerateContentStream.mock.calls[0][0];
       expect(arg.config.toolConfig.functionCallingConfig.mode).toBe('AUTO');
+      // Raw parts preserve thoughtSignature
+      expect(out.parts).toBeDefined();
+      expect(out.parts![0].thoughtSignature).toBe('stream-sig');
     });
 
     it('fails fast on an already-aborted signal', async () => {

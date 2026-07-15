@@ -144,9 +144,11 @@ export async function runAgentLoop(
     // 4) Tool calls → execute each, persist, append functionResponse, continue.
     if (response.functionCalls && response.functionCalls.length > 0) {
       // Record the model's tool-request turn so the next generateContent sees it.
+      // Use raw `parts` from the API response to preserve Part-level fields
+      // such as thoughtSignature, which the API now requires on functionCall parts.
       contents.push({
         role: 'model',
-        parts: response.functionCalls.map((fc) => ({ functionCall: { name: fc.name, args: fc.args } }))
+        parts: response.parts || response.functionCalls.map((fc) => ({ functionCall: { name: fc.name, args: fc.args } }))
       });
 
       const responseParts: any[] = [];
