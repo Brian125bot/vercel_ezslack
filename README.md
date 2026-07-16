@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-8%20files%20%7C%2079%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-21%20files%20%7C%20244%20tests-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -40,8 +40,6 @@ utilize more capacity for conversation history while maintaining safety and
 efficiency. Override with `THREAD_HISTORY_BUDGET_PERCENT` (default `0.05`).
 Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 
-
-
 ## Table of Contents
 
 - [Architecture Overview](#-architecture-overview)
@@ -74,56 +72,69 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
           └──────────────────┴───────────────────────┘
                              │ HTTPS POST
                              ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│  Vercel Serverless Functions / Express                                 │
-│                                                                        │
-│  POST /api/slack/events ───► Verify Signature (HMAC-SHA256)            │
-│       │                      Dedup (event_id + client_msg_id)          │
-│       │                      ACK 200 OK (<15ms)                        │
-│       │                                                                │
-│       └─── triggerWorkflow() ──► Intent Classifier                     │
-│                               │                                        │
-│            ┌──────────────────┼──────────────────────────────┐         │
-│            │                  │                              │         │
-│            ▼                  ▼                              ▼         │
-│       direct_reply    durable_task              cancel_or_update       │
-│       status_query    approval_response         unsafe_or_unsupported  │
-│            │                  │                              │         │
-│            │                  ▼                              │         │
-│            │          ┌──────────────┐                       │         │
-│            │          │ Deferral     │                       │         │
-│            │          │ Detection    │                       │         │
-│            │          └──┬───────┬───┘                       │         │
-│            │         now │       │ later                     │         │
-│            │             ▼       ▼                           │         │
-│            │        Vercel Workflows / agentRun                      │
-│            │             │                                   │         │
-│            │             ▼ Webhooks                          │         │
-│            │     ┌──────────────────────────────────┐        │         │
-│            │     │ CLOSED LOOP (max 3 iterations)   │        │         │
-│            │     │                                  │        │         │
-│            │     │  Plan ──► Execute ──► Verify ──┐ │        │         │
-│            │     │   ▲                            │ │        │         │
-│            │     │   └──── Replan (if failed) ◄───┘ │        │         │
-│            │     │                                  │        │         │
-│            │     │  Policy Gate ──► Approval (if    │        │         │
-│            │     │                   external_write)│        │         │
-│            │     └──────────────────────────────────┘        │         │
-│            │                  │                              │         │
-│            └──────────────────┼──────────────────────────────┘         │
-│                               ▼                                        │
-│                      Finalize + Report                                 │
-│                               │                                        │
-│  POST /api/slack/interactivity ◄── Block Kit buttons (Approve/Reject)  │
-│  GET  /api/health              ◄── Uptime probe                        │
-│                                                                        │
-│  ┌────────────────────────────────────────────┐                        │
-│  │ Vercel Postgres (Neon)                     │                        │
-│  │ goals → plans → runs → steps → tool_calls  │                        │
-│  │ approval_requests, memory_records           │                        │
-│  │ audit_events, scheduled_triggers            │                        │
-│  └────────────────────────────────────────────┘                        │
-└────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Vercel Serverless Functions / Express                                   │
+│                                                                          │
+│  POST /api/slack/events ────► Verify Signature (HMAC-SHA256)             │
+│       │                        Dedup (event_id + client_msg_id + intent)│
+│       │                        ACK 200 OK (<15ms)                        │
+│       │                                                                  │
+│       └─── triggerWorkflow() ────► Intent Classifier                     │
+│                                   │                                      │
+│               ┌──────────────────┼────────────────────────┐              │
+│               │                  │                          │             │
+│               ▼                  ▼                          ▼             │
+│          direct_reply     durable_task          cancel_or_update          │
+│          status_query     approval_response    unsafe_or_unsupported      │
+│               │                  │                          │             │
+│               │           ┌──────┴──────┐                   │             │
+│               │           │  Deferral   │                   │             │
+│               │           │  Detection  │                   │             │
+│               │           └──┬──────┬───┘                   │             │
+│               │          now │      │ later                 │             │
+│               │              ▼      ▼                       │             │
+│               │         Vercel Workflows / agentRun                     │
+│               │              │                              │             │
+│               │       ┌──────┴─────────────────┐            │             │
+│               │       │                        │            │             │
+│               │       ▼                        ▼            │             │
+│               │  ┌──────────────────┐  ┌──────────────────┐ │             │
+│               │  │ CLOSED LOOP      │  │ ReAct LOOP       │ │             │
+│               │  │ (plan→exec→verify│  │ (stream + func   │ │             │
+│               │  │  →replan x3)     │  │  calling + turns)│ │             │
+│               │  │ ┌──────────────┐ │  │ ┌──────────────┐ │ │             │
+│               │  │ │Plan → Execute│ │  │ │Agent Step →  │ │ │             │
+│               │  │ │→ Verify →   │ │  │ │Stream Reply  │ │ │             │
+│               │  │ │Replan ↺     │ │  │ │→ Post to     │ │ │             │
+│               │  │ └──────────────┘ │  │ │  Slack (thr.)│ │ │             │
+│               │  │ Policy Gate →    │  │ └──────────────┘ │ │             │
+│               │  │ Approval (if     │  │ Cost tracking:   │ │             │
+│               │  │  external_write) │  │ total_tokens     │ │             │
+│               │  └──────────────────┘  └──────────────────┘ │             │
+│               │              │                              │             │
+│               └──────────────┼──────────────────────────────┘             │
+│                              ▼                                           │
+│                     Finalize + Report                                    │
+│                              │                                           │
+│  POST /api/slack/interactivity ◄── Block Kit buttons (Approve/Reject)    │
+│  GET  /api/health              ◄── Uptime probe                          │
+│  GET  /api/cron/poll           ◄── Vercel Cron (daily 9AM UTC)           │
+│                                                                          │
+│  ┌──────────────────────────────────────────────┐                        │
+│  │ Vercel Postgres (Neon)                       │                        │
+│  │ goals → plans → runs → steps → tool_calls    │                        │
+│  │ approval_requests, memory_records             │                        │
+│  │ audit_events, scheduled_triggers              │                        │
+│  │ agent_messages (ReAct loop turns)             │                        │
+│  │ slack_event_logs                              │                        │
+│  └──────────────────────────────────────────────┘                        │
+│                                                                          │
+│  ┌──────────────────────────────────────┐                               │
+│  │ Vercel KV / Upstash Redis            │                               │
+│  │ event dedup │ msg dedup │ intent lock │                               │
+│  │ thread cache │ rate limit counters    │                               │
+│  └──────────────────────────────────────┘                               │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Design Decisions
@@ -142,27 +153,33 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 | Thread history message/char bounds | Prevents unbounded DB growth and token window saturation |
 | `injectInto` field for generate-step output routing | Routes generated content into any downstream tool field |
 | Durable run attachments persisted in DB | Survives serverless HTTP hops without in-memory cache |
+| ReAct loop with streaming replies | `streamReplyToThread` delivers progressive answer text to Slack with throttled edits |
+| Intent-based dedup via SHA-256 + Redis NX | Prevents duplicate processing of the same user intent across concurrent invocations |
+| KV-backed rate limiting | Shared counter across all serverless instances prevents DoS in production |
+| Skills system | Reusable system-prompt fragments injected at plan time based on environment |
+| Bot mention stripping on `app_mention` events | Passes clean text to LLM (no `<@BOTID>` prefix confusion) |
+| Configurable date/timezone context | `AGENT_TIMEZONE` + `AGENT_INCLUDE_DATETIME` for time-aware agent behavior |
 
 ---
 
 ## 🔄 Agent Pipeline
 
-The full durable task lifecycle:
+### Durable Task Lifecycle (Closed Loop)
 
 ```
 User Message
   │
   ├─ classifyIntent()         # Heuristic rules → LLM fallback
   │
-  ├─ handleDurableTask()      # Create goal
+  ├─ handleDurableTask()      # Create goal, detect deferral, queue run
   │   ├─ detectDeferral()     # "remind me tomorrow" → scheduled_trigger
-  │   └─ createRun()          # Queue for worker
+  │   └─ createRun()          # Queue for worker (queued → claimed → running)
   │
-  ├─ Worker claims run        # FOR UPDATE SKIP LOCKED
-  │   └─ runLoop()            # Up to 3 iterations
+  ├─ Worker claims run        # Atomic claimQueuedRunById (prevents storm)
+  │   └─ runLoop()            # Up to 3 plan iterations
   │       │
-  │       ├─ assembleContext() # Thread history + memory + prior steps
-  │       ├─ createPlan()     # Gemini structured output → ordered steps
+  │       ├─ assembleContext()   # Thread history + memory + prior steps
+  │       ├─ createPlan()       # Gemini structured output → ordered steps
   │       │
   │       ├─ For each step:
   │       │   ├─ policyGate()          # Check risk level
@@ -173,17 +190,40 @@ User Message
   │       │   │   └─ kind: 'note'      # No-op (conceptual step)
   │       │   └─ sanitize()            # Redact secrets from output
   │       │
-  │       ├─ verifyRun()      # Rule-based verification
-  │       ├─ verifySemantically()  # LLM verification
+  │       ├─ verifyRun()             # Rule-based structural checks
+  │       ├─ verifySemantically()    # LLM-based semantic alignment
   │       │   ├─ Both pass → finalizeRun('succeeded')
-  │       │   └─ Semantic fail → clear plan, setImmediate(replan)
+  │       │   └─ Semantic fail → clear plan, replan (max 3 iterations)
   │       │
   │       └─ finalizeRun()
   │           ├─ updateRunStatus()
   │           ├─ updateGoalStatus()
   │           └─ reportRunResult()  # Action-aware Slack summary
   │
-  └─ Audit trail logged at every stage
+  └─ Audit trail logged at every stage (audit_events table)
+```
+
+### ReAct Loop (Streaming + Function Calling)
+
+For `direct_reply` intents and as an alternative execution path, the agent
+uses a **ReAct loop** with native Gemini function calling:
+
+```
+User Message
+  │
+  ├─ classifyIntent() → direct_reply (or durable task generate step)
+  │
+  ├─ geminiAgentStep()       # Stream + AUTO function calling
+  │   ├─ generateContentStream()  # Real-time token streaming
+  │   ├─ function calls dispatched to tool registry
+  │   └─ thoughtSignature preserved through streaming chunks
+  │
+  ├─ streamReplyToThread()   # Post initial message → incremental edits
+  │   └─ Throttled at 800ms intervals to avoid Slack rate limits
+  │
+  ├─ Agent turns persisted   # agent_messages table (survives requeue)
+  │
+  └─ Cost tracking           # total_tokens captured per run
 ```
 
 ---
@@ -237,10 +277,27 @@ Incoming Message
 | Adapter | Tool Name | Risk Level | Env Var Required |
 |---------|-----------|-----------|------------------|
 | `WebSearchAdapter` | `search.query` | `read` | `TAVILY_API_KEY` |
+| `WebFetchAdapter` | `web.fetch` | `read` | `ENABLE_WEB_FETCH` |
 | `GitHubIssueAdapter` | `github.createIssue` | `external_write` | `GITHUB_TOKEN` |
 | `EmailAdapter` | `email.send` | `external_write` | `EMAIL_WEBHOOK_URL` |
+| `SandboxAdapter` | `sandbox.*` | `internal_write` | `SANDBOX_API_KEY` |
 
-External adapters implement the `ExternalAdapter` interface from `src/server/tools/adapters/base.ts`. They self-register at startup only when their required environment variables are present. All external adapter tools automatically require user approval via Block Kit buttons.
+External adapters implement the `ExternalAdapter` interface from `src/server/tools/adapters/base.ts`. They self-register at startup only when their required environment variables are present. All `external_write` adapters automatically require user approval via Block Kit buttons. `read` and `internal_write` adapters execute without approval.
+
+### Skills System
+
+The agent loads **skills** — reusable system-prompt fragments — at plan assembly
+time. Built-in skills live in `skills/builtin/` and are injected into the
+planner's system instruction based on the active environment configuration:
+
+| Skill | Description |
+|-------|-------------|
+| `coding-standards.md` | Code style and naming conventions when writing code |
+| `research-methodology.md` | Structured research approach for web searches |
+| `slack-communication.md` | Slack message formatting and tone guidelines |
+
+Skills are loaded by `src/server/agent/skills.ts` and appended to the planner
+and ReAct loop system prompts.
 
 ### Adding a New Adapter
 
@@ -396,7 +453,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-8 test files, 79 test cases. Run with:
+21 test files, 244 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -404,16 +461,29 @@ npm run test:watch    # Watch mode
 npm run test:coverage # With coverage report
 ```
 
-| Suite | File | Cases | Tests |
-|-------|------|:-----:|-------|
+| Suite | File | Tests | Coverage |
+|-------|------|:-----:|----------|
+| Agent Handlers | `tests/handlers.test.ts` | 27 | direct reply, durable task, status query, approval response, cancel/update |
+| Agent Extras | `tests/agent-extra.test.ts` | 23 | Plan mutation, intent ensure, pipeline dispatch, semaphore |
+| State Management | `tests/state.test.ts` | 15 | Thread memory, dedup sets, intent hash, LRU eviction |
+| Context Assembly | `tests/context.test.ts` | 14 | Thread history compaction, memory formatting, date/time context |
+| Intent Classification | `tests/intent.test.ts` | 13 | Heuristic rules, LLM fallback, category dispatch |
 | Attachment Conversion | `tests/attachments.test.ts` | 13 | Slack file download, size/count limits, MIME types, inlineData parts |
 | Vercel Integration | `tests/vercel.test.ts` | 13 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard |
 | Secret Sanitization | `tests/sanitize.test.ts` | 11 | Token/password/key detection and redaction |
 | Gemini Client | `tests/geminiClient.test.ts` | 11 | mapStructured response parsing, thoughtSignature preservation |
 | Web Search | `tests/webSearch.test.ts` | 10 | Tavily adapter integration, result formatting, error handling |
-| Tool Registry | `tests/registry.test.ts` | 9 | Adapter registration completeness, tool catalog freshness |
-| Agent Loop | `tests/loop.test.ts` | 6 | Full closed-loop integration (plan→execute→verify→finalize) |
-| ReAct Agent Loop | `tests/agent-loop.test.ts` | 6 | runAgentLoop with tool calls, yields, wall-clock deadline, turn cap |
+| Deferral Detection | `tests/deferral.test.ts` | 10 | Time-deferred language patterns, unit normalization, negative cases |
+| Rate Limit Store | `tests/rateLimitStore.test.ts` | 10 | KV-backed store, sliding window, TTL expiry |
+| Scheduler | `tests/scheduler.test.ts` | 8 | Cron parsing, interval triggers, one-shot scheduling |
+| Planner | `tests/planner.test.ts` | 8 | Plan generation, date/time context injection |
+| Policy Gate | `tests/policy.test.ts` | 7 | Risk level evaluation, approval requirement, policy decisions |
+| Orchestrator + Planner | `tests/orchestrator-planner.test.ts` | 7 | Pipeline dispatch, plan mutation wiring |
+| Agent Loop (Closed) | `tests/loop.test.ts` | 6 | Full closed-loop: plan→execute→verify→finalize |
+| ReAct Agent Loop | `tests/agent-loop.test.ts` | 6 | runAgentLoop with tool calls, streaming yields, deadline, turn cap |
+| Finalize | `tests/finalize.test.ts` | 6 | Run/goal status finalization, Slack reporting |
+| Tool Registry | `tests/registry.test.ts` | 5 | Adapter registration, tool catalog freshness |
+| Debug Mock | `tests/debug-mock.test.ts` | 1 | Simulated environment smoke test |
 
 ### CI Gate
 
@@ -430,6 +500,8 @@ npm run test:coverage # With coverage report
 | `POST` | `/api/slack/events` | Slack Events API webhook (signature verified) |
 | `POST` | `/api/slack/interactivity` | Block Kit button callbacks (signature verified) |
 | `GET` | `/api/health` | Health check: `{ status: 'ok', uptime: N }` |
+| `POST` | `/api/workflows/agentRun` | Agent execution workflow (self-triggered) |
+| `POST` | `/api/cron/poll` | Scheduled trigger poller (Vercel Cron) |
 
 ### Dashboard Endpoints (password-protected)
 
@@ -468,6 +540,8 @@ npm run test:coverage # With coverage report
 │       ├── auth.ts                    # Dashboard password auth middleware
 │       ├── state.ts                   # In-memory logs, model selection, dedup sets
 │       ├── ai.ts                      # Gemini SDK wrapper
+│       ├── rateLimitStore.ts          # KV-backed express-rate-limit store
+│       ├── redis.ts                   # Vercel KV / Upstash Redis client
 │       ├── agent/
 │       │   ├── orchestrator.ts        # Pipeline entry point, resume logic
 │       │   ├── intent.ts              # Heuristic + LLM intent classifier
@@ -481,14 +555,19 @@ npm run test:coverage # With coverage report
 │       │   │   └── unsafeUnsupported.ts # Refusal handler
 │       │   ├── context.ts            # Thread history + memory assembly
 │       │   ├── planner.ts            # Gemini structured plan generation
+│       │   ├── planNormalize.ts      # Plan normalization (tool hallucination fix)
 │       │   ├── executor.ts           # Step execution (tool/generate/note)
 │       │   ├── verifier.ts           # Rule-based post-execution verification
 │       │   ├── semanticVerifier.ts   # LLM-based semantic verification
 │       │   ├── loop.ts               # Closed loop (plan→exec→verify→replan)
+│       │   ├── reactLoop.ts          # ReAct loop with streaming + function calling
 │       │   ├── finalize.ts           # Run/goal status finalization
 │       │   ├── reporter.ts           # Action-aware Slack run reports
 │       │   ├── policy.ts             # Risk-level policy gate
 │       │   ├── sanitize.ts           # Secret detection and redaction
+│       │   ├── skills.ts             # Skill system prompt loader
+│       │   ├── semaphore.ts          # Concurrency semaphore
+│       │   ├── attachments.ts        # Slack file download + multimodal conversion
 │       │   ├── worker.ts             # Webhook execution handler (formerly queue poller)
 │       │   ├── scheduler.ts          # Scheduled trigger processor (formerly trigger poller)
 │       │   ├── taskClient.ts         # Vercel Workflows/Cron client wrapper
@@ -511,24 +590,46 @@ npm run test:coverage # With coverage report
 │               ├── base.ts           # ExternalAdapter interface
 │               ├── index.ts          # Barrel export
 │               ├── githubIssue.ts    # GitHub Issues adapter
-│               └── email.ts          # Email webhook adapter
+│               ├── email.ts          # Email webhook adapter
+│               ├── webSearch.ts      # Tavily web search adapter
+│               ├── webFetch.ts       # Generic URL fetch adapter
+│               └── sandbox.ts        # Vercel Sandbox code execution adapter
 ├── tests/
-│   ├── sanitize.test.ts              # 11 secret redaction tests
-│   ├── loop.test.ts                  # 6 agent-loop integration tests
-│   ├── vercel.test.ts                # 13 Vercel integration tests
+│   ├── handlers.test.ts              # 27 handler dispatch tests
+│   ├── agent-extra.test.ts           # 23 plan mutation + pipeline tests
+│   ├── state.test.ts                 # 15 state management tests
+│   ├── context.test.ts               # 14 context assembly tests
+│   ├── intent.test.ts                # 13 heuristic + LLM intent tests
 │   ├── attachments.test.ts           # 13 attachment processing tests
-│   ├── webSearch.test.ts             # 10 web search adapter tests
-│   ├── registry.test.ts              # 9 tool registry tests
+│   ├── vercel.test.ts                # 13 Vercel integration tests
+│   ├── sanitize.test.ts              # 11 secret redaction tests
 │   ├── geminiClient.test.ts          # 11 Gemini client response parsing tests
-│   └── agent-loop.test.ts            # 6 ReAct loop orchestration tests
+│   ├── webSearch.test.ts             # 10 web search adapter tests
+│   ├── deferral.test.ts              # 10 time-deferred detection tests
+│   ├── rateLimitStore.test.ts        # 10 KV rate limit store tests
+│   ├── scheduler.test.ts             # 8 scheduled trigger tests
+│   ├── planner.test.ts               # 8 plan generation tests
+│   ├── policy.test.ts                # 7 policy gate tests
+│   ├── orchestrator-planner.test.ts  # 7 pipeline dispatch tests
+│   ├── loop.test.ts                  # 6 closed-loop integration tests
+│   ├── agent-loop.test.ts            # 6 ReAct loop orchestration tests
+│   ├── finalize.test.ts              # 6 run finalization tests
+│   ├── registry.test.ts              # 5 tool registry tests
+│   └── debug-mock.test.ts            # 1 simulated environment smoke test
+├── skills/
+│   └── builtin/
+│       ├── coding-standards.md       # Code style guidelines
+│       ├── research-methodology.md   # Research approach for web searches
+│       └── slack-communication.md    # Slack formatting and tone guidelines
 ├── docs/
-│   └── intent-routing.md             # Intent routing architecture spec
+│   ├── intent-routing.md             # Intent routing architecture spec
+│   └── QA_CHECKLIST.md               # QA verification checklist
 ├── slack-manifest.json               # Slack App Manifest (copy-paste ready)
 ├── cloudbuild.yaml                   # GCP Cloud Build CI/CD pipeline
 ├── Dockerfile                        # Multi-stage Node 22 Alpine build
 ├── vitest.config.ts                  # Vitest configuration
 ├── vite.config.ts                    # Vite build configuration
-├── CHANGELOG.md                      # Version history (v2.0.0 → v6.9.0)
+├── CHANGELOG.md                      # Version history (v2.0.0 → v6.15.0)
 ├── .env.example                      # Environment variable template
 └── package.json                      # Dependencies and scripts
 ```
@@ -544,6 +645,8 @@ npm run test:coverage # With coverage report
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `SLACK_BOT_TOKEN` | Slack Bot User OAuth Token (`xoxb-...`) |
 | `SLACK_SIGNING_SECRET` | Slack app signing secret (HMAC verification) |
+| `DASHBOARD_PASSWORD` | Password for the admin dashboard |
+| `APP_URL` | Base URL of your deployed application (used for trigger callbacks) |
 
 ### Database (one of these groups)
 
@@ -553,22 +656,73 @@ npm run test:coverage # With coverage report
 | `CLOUD_SQL_CONNECTION_NAME` | GCP Cloud SQL instance (e.g., `project:region:instance`) |
 | `SQL_HOST` + `SQL_USER` + `SQL_PASSWORD` + `SQL_DB_NAME` | Standard PostgreSQL params |
 
-### Optional
+### Agent Context
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENT_INCLUDE_DATETIME` | `true` | Inject current date/time into all LLM prompts |
+| `AGENT_TIMEZONE` | `UTC` | Timezone for date/time display (e.g. `America/Chicago`) |
+
+### Thread History
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_THREAD_HISTORY_MESSAGES` | `20` | Max messages retained in thread history |
+| `MAX_THREAD_HISTORY_CHARS` | auto | Cumulative char cap (model-aware budget if unset) |
+| `MAX_THREAD_MESSAGE_CHARS` | `4000` | Per-message truncation limit |
+| `THREAD_HISTORY_BUDGET_PERCENT` | `0.05` | % of model context window used for history budget |
+
+### Attachments
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_ATTACHMENT_BYTES` | `15728640` | Max file size per attachment (15 MB) |
+| `MAX_ATTACHMENTS_PER_MESSAGE` | `4` | Max files processed per message |
+| `ATTACHMENT_DOWNLOAD_TIMEOUT_MS` | `20000` | Slack file download timeout |
+
+### Model
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SELECTED_MODEL` | `gemini-3.1-flash-lite` | Override default Gemini model |
+
+### Vercel / Workflows
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CRON_SECRET` | — | Bearer token for Vercel Cron webhook authentication |
+| `RUN_TIMEOUT_MS` | `45000` | Soft wall-clock limit for `runLoop()` (graceful re-queue) |
+| `DIRECT_REPLY_CONCURRENCY` | `5` | Max concurrent direct-reply Gemini calls |
+| `GEMINI_TIMEOUT_MS` | `30000` | Per-call Gemini API timeout |
+| `WORKER_LEASE_SECONDS` | `300` | DB lease TTL for run claims |
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | — | Bypass Vercel deployment protection for preview testing |
+
+### Vercel KV / Redis
 
 | Variable | Description |
 |----------|-------------|
-| `DASHBOARD_PASSWORD` | Password for the admin dashboard |
-### Vercel / Workflows Configuration
+| `KV_REST_API_URL` | Vercel KV REST endpoint (event dedup, thread cache, rate limiting) |
+| `KV_REST_API_TOKEN` | Vercel KV REST API token |
+| `UPSTASH_REDIS_REST_URL` | Alternative: standalone Upstash Redis URL |
+| `UPSTASH_REDIS_REST_TOKEN` | Alternative: standalone Upstash Redis token |
 
-| Variable | Description |
-|----------|-------------|
-| `CRON_SECRET` | Secure Bearer token used to authenticate Vercel Cron webhook calls |
-| `DATABASE_URL` | Full PostgreSQL connection string (e.g. Vercel Postgres / Neon) |
-| `APP_URL` | Base URL of your deployed Vercel application (used for trigger callbacks) |
-| `RUN_TIMEOUT_MS` | Soft wall-clock limit for `runLoop()` (default `45000`). When exceeded, the run is gracefully re-queued instead of hard-killed by Vercel's serverless timeout |
-| `DIRECT_REPLY_CONCURRENCY` | Max concurrent direct-reply Gemini calls per invocation (default `5`) |
-| `GEMINI_TIMEOUT_MS` | Per-call Gemini API timeout in ms (default `30000`) |
-| `WORKER_LEASE_SECONDS` | DB lease TTL for run claims (default `300`) |
+### External Adapters
+
+| Variable | Enables | Risk Level |
+|----------|---------|:----------:|
+| `TAVILY_API_KEY` | `search.query` — Web search via Tavily | `read` |
+| `GITHUB_TOKEN` | `github.createIssue` — GitHub issue creation | `external_write` |
+| `EMAIL_WEBHOOK_URL` | `email.send` — Email via webhook relay | `external_write` |
+| `ENABLE_WEB_FETCH` | `web.fetch` — General URL fetching | `read` |
+| `SANDBOX_API_KEY` | `sandbox.*` — Vercel Sandbox code execution | `internal_write` |
+
+### Database Pool
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_SSL` | `false` | Enable SSL for database connections |
+| `DB_POOL_MAX` | `5` | Max pool connections |
+| `DB_CONNECTION_TIMEOUT` | `10000` | Connection timeout in ms |
 
 ---
 
@@ -622,7 +776,7 @@ The companion React dashboard provides:
 
 | Scope | Purpose |
 |-------|---------|
-| `app_mention` | Respond when @mentioned |
+| `app_mentions:read` | Receive @mention events |
 | `channels:history` | Read channel messages |
 | `groups:history` | Read private channel messages |
 | `im:history` | Read direct messages |
@@ -683,4 +837,10 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v6.7.0 | ✅ Done | Model-Aware Thread History Budget (context-window proportional budget) |
 | v6.8.0 | ✅ Done | Fix order_index overflow — migration v11 `bigint`, sequential counter, remove SSL override |
 | v6.9.1 | ✅ Done | Fix Gemini thoughtSignature to preserve raw parts through streaming response pipeline |
+| v6.10.0 | ✅ Done | ReAct Loop with native tool-calling, streaming Slack replies, token cost tracking |
+| v6.11.0 | ✅ Done | Configurable date/timezone context in all LLM prompt paths |
+| v6.12.0 | ✅ Done | Intent-based deduplication with SHA-256 hash + Redis NX lock; Vercel KV backends for dedup + thread cache |
+| v6.13.0 | ✅ Done | KV-backed express-rate-limit store for production rate limiting |
+| v6.14.0 | ✅ Done | Skills system, Sandbox code execution adapter, WebFetch adapter, WebSearch adapter |
+| v6.15.0 | ✅ Done | Bot mention stripping from `app_mention` events; thread history compaction for direct replies |
 

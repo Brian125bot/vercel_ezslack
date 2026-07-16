@@ -80,7 +80,11 @@ if (req.method !== 'POST') {
       throw new Error('GEMINI_API_KEY is not configured or set to default example value.');
     }
 
-    const promptText = (event.text || "").substring(0, 50000); 
+    let promptText = (event.text || "").substring(0, 50000);
+
+    if (event.type === 'app_mention') {
+      promptText = promptText.replace(/^<@[A-Z0-9]+>\s*/, '');
+    }
 
     const botToken = process.env.SLACK_BOT_TOKEN;
     const { attachments, skipped } = await processSlackFiles(event.files, botToken);
