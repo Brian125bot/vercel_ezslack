@@ -682,4 +682,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v6.6.0 | ✅ Done | Atomic Run Claiming & 508 Handling (prevent concurrent workers, 508 terminal state) |
 | v6.7.0 | ✅ Done | Model-Aware Thread History Budget (context-window proportional budget) |
 | v6.8.0 | ✅ Done | Fix order_index overflow — migration v11 `bigint`, sequential counter, remove SSL override |
-| v6.9.0 | ✅ Done | Fix Gemini thoughtSignature to preserve raw parts through streaming response pipeline |
+| v6.9.1 | ✅ Done | Fix Gemini thoughtSignature to preserve raw parts through streaming response pipeline |
