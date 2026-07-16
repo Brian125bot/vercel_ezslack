@@ -844,3 +844,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v6.14.0 | ✅ Done | Skills system, Sandbox code execution adapter, WebFetch adapter, WebSearch adapter |
 | v6.15.0 | ✅ Done | Bot mention stripping from `app_mention` events; thread history compaction for direct replies |
 
+#
