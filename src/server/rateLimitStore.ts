@@ -5,35 +5,66 @@ type Hit = { totalHits: number; resetTime: Date | undefined };
 
 export class KvRateLimitStore implements Store {
   prefix = 'rl:';
+  // Shared (non-local) store: tells express-rate-limit this counter is not
+  // per-process, which suppresses false double-count warnings.
+  localKeys = false;
   windowMs!: number;
 
-  async init(options: { windowMs: number }): Promise<void> {
+  init(options: { windowMs: number }): void {
     this.windowMs = options.windowMs;
   }
 
   async increment(key: string): Promise<Hit> {
     const client = await getRedisClient();
-    if (!client) throw new Error('KV rate-limit store unavailable');
+    if (!client) {
+      console.warn('[RateLimit] KV store unavailable, falling back to in-memory');
+      throw new Error('KV rate-limit store unavailable');
+    }
     const redisKey = this.prefix + key;
-    const ttlSec = Math.ceil(this.windowMs / 1000);
-    const total = await client.incr(redisKey);
-    if (total === 1) {
+    
+    // Atomically create key with TTL for first hit using SET with NX and PX
+    // This prevents race conditions between incr and pexpire
+    const setResult = await client.set(redisKey, '1', { px: this.windowMs, nx: true });
+    let total: number;
+    
+    if (setResult === 'OK') {
+      // First hit - key created atomically with TTL
+      total = 1;
+    } else {
+      // Key already exists, increment it
+      total = await client.incr(redisKey);
+    }
+    
+    // Get remaining TTL for resetTime calculation
+    const pttl = await client.pttl(redisKey);
+    
+    // Handle unexpected state: key exists but has no TTL
+    if (pttl === -1) {
+      console.warn(`[RateLimit] Key ${redisKey} has no TTL - this is unexpected, resetting`);
       await client.pexpire(redisKey, this.windowMs);
     }
-    const pttl = await client.pttl(redisKey);
+    
+    // Compute resetTime from actual TTL or fallback to windowMs
     const resetTime = new Date(Date.now() + (pttl > 0 ? pttl : this.windowMs));
+    
     return { totalHits: total, resetTime };
   }
 
   async decrement(key: string): Promise<void> {
     const client = await getRedisClient();
-    if (!client) return;
+    if (!client) {
+      console.warn('[RateLimit] KV store unavailable for decrement');
+      return;
+    }
     await client.decr(this.prefix + key);
   }
 
   async resetKey(key: string): Promise<void> {
     const client = await getRedisClient();
-    if (!client) return;
+    if (!client) {
+      console.warn('[RateLimit] KV store unavailable for resetKey');
+      return;
+    }
     await client.del(this.prefix + key);
   }
 }
