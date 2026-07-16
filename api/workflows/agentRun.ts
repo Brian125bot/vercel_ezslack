@@ -4,9 +4,9 @@ import { runAgentPipeline } from '../../src/server/agent/orchestrator.js';
 import { isDbAvailable } from '../../src/server/storage/db.js';
 import { agentStore } from '../../src/server/storage/agentStore.js';
 import { Semaphore } from '../../src/server/agent/semaphore.js';
-import { selectedModel, getSelectedModel, updateLog } from '../../src/server/state.js';
+import { createIntentHash, selectedModel, getSelectedModel, updateLog, setIntentDedup, markIntentComplete } from '../../src/server/state.js';
 import { processSlackFiles } from '../../src/server/agent/attachments.js';
-
+import crypto from 'crypto';
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
 
@@ -19,7 +19,7 @@ function confidenceToNumber(c: string): number {
 
 // Vercel Workflows endpoint for agent execution
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') {
+if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
   const startTime = Date.now();
@@ -37,10 +37,8 @@ export default async function handler(req: any, res: any) {
     const { event, eventId, signatureVerified, workspaceId, runId, logItemId } = body;
 
     // Handle deferred/subsequent runId triggers
-    // Handle deferred/subsequent runId triggers
     if (runId) {
       console.log(`[Vercel Workflow] Executing run ${runId}`);
-      const crypto = await import('crypto');
       const workerId = `vercel-workflow-${crypto.randomUUID()}`;
       const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
 
@@ -66,7 +64,14 @@ export default async function handler(req: any, res: any) {
     }
     // Otherwise, handle initial Slack event orchestration
     console.log(`[Vercel Workflow] Initiated background pipeline for ID: ${eventId}`);
-    
+
+    // Intent-based deduplication — atomic lock via setRedisValueNX
+    const intentHash = createIntentHash(event.text, event.channel, event.user, event.thread_ts || event.ts);
+    if (!(await setIntentDedup(intentHash))) {
+      console.log(`[Vercel Workflow] Skipping intent due to deduplication: ${intentHash.substring(0, 16)}...`);
+      return res.status(200).json({ message: 'Similar intent already being processed, skipping duplicate execution' });
+    }
+
     const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
     if (!geminiApiKey || geminiApiKey === 'MY_GEMINI_API_KEY') {
       throw new Error('GEMINI_API_KEY is not configured or set to default example value.');
@@ -141,9 +146,16 @@ export default async function handler(req: any, res: any) {
         runId: result?.runId,
         error: (!dbAvailable && result?.intent === 'durable_task') ? 'Database unavailable, skipped durable run' : result?.message
       });
-    }
 
-    return res.status(200).json({ success: true, result });
+      // Mark intent as completed to allow similar intents to be processed
+      try {
+        await markIntentComplete(intentHash);
+      } catch (e) {
+        console.warn(`[Vercel Workflow] Failed to clean up intent dedup for ${intentHash}:`, e);
+      }
+
+      return res.status(200).json({ success: true, result });
+    }
   } catch (error: any) {
     console.error(`[Vercel Workflow] execution error: ${error.message}`);
     const errLogId = req.body?.logItemId;

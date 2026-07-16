@@ -29,6 +29,9 @@ vi.mock('../src/server/state.js', () => ({
   setSelectedModel: vi.fn(),
   getThreadHistory: vi.fn().mockResolvedValue([]),
   saveThreadHistory: vi.fn().mockResolvedValue(undefined),
+  createIntentHash: vi.fn().mockReturnValue('mock-intent-hash'),
+  setIntentDedup: vi.fn().mockResolvedValue(true),
+  markIntentComplete: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../src/server/agent/intent.js', () => ({

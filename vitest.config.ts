@@ -13,7 +13,11 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],
-      include: ['src/server/agent/**/*.ts']
+      include: [
+        'src/server/agent/**/*.ts',
+        'src/server/state.ts',
+        'src/server/redis.ts',
+      ]
     }
   },
   resolve: {

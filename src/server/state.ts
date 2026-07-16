@@ -1,7 +1,8 @@
 import { SlackEventLog, ThreadMessage } from '../types.js';
 import { sanitizeString } from './agent/sanitize.js';
 import { resolveModel, DEFAULT_MODEL, getContextWindowTokens } from './agent/models.js';
-import { setRedisValueNX, getRedisJson, setRedisJson } from './redis.js';
+import { setRedisValueNX, getRedisJson, setRedisJson, getRedisValue, del } from './redis.js';
+import crypto from 'crypto';
 
 // ── Limits ──
 const get_MAX_THREAD_HISTORY_MESSAGES = () => parseInt(process.env.MAX_THREAD_HISTORY_MESSAGES || '20');
@@ -402,6 +403,56 @@ export const processedEventIds = memoryProcessedEvents;
 export const processedMessageKeys = memoryProcessedMessages;
 export const eventTimestamps = memoryEventTimestamps;
 export const threadMemory = memoryThreads;
+
+// ── Intent-Based Deduplication ──
+
+/**
+ * Create a hash of user intent from the message text and context
+ * This groups similar or related intents to prevent processing duplicates
+ */
+export function createIntentHash(messageText: string, channelId: string, userId: string, threadTs?: string): string {
+  const normalizedText = messageText.trim().toLowerCase();
+  const input = `${channelId}:${userId}:${threadTs || ''}:${normalizedText.substring(0, 200)}`;
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
+
+/**
+ * Check if an intent is currently being processed
+ * Returns true if already processing, false if it can proceed
+ */
+export async function isIntentProcessing(intentHash: string, windowSeconds = 300): Promise<boolean> {
+  const redisKey = `dedup:intent:${intentHash}`;
+  const value = await getRedisValue(redisKey);
+  
+  // Check if key exists and is within processing window
+  if (value) {
+    // Could check TTL if available, but simpler:
+    // Fresh intent hash means it's being processed
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Set an intent as currently processing
+ * Returns true if set successfully (wasn't processing), false if already processing
+ */
+export async function setIntentDedup(intentHash: string, windowSeconds = 300): Promise<boolean> {
+  const redisKey = `dedup:intent:${intentHash}`;
+  return await setRedisValueNX(redisKey, '1', windowSeconds);
+}
+
+/**
+ * Mark an intent as completed and clean up
+ */
+export async function markIntentComplete(intentHash: string, windowSeconds = 120): Promise<void> {
+  const redisKey = `dedup:intent:${intentHash}`;
+  await del(redisKey);
+
+  // Set a short-lived marker to prevent immediate reprocessing
+  const markerKey = `dedup:intent:completed:${intentHash}`;
+  await setRedisValueNX(markerKey, '1', windowSeconds);
+}
 
 // On traditional servers, periodically clean up stale in-memory and DB state.
 // On Vercel serverless, setInterval is unreliable after the response is sent,
