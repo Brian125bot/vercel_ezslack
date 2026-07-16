@@ -8,6 +8,7 @@ import rateLimit from "express-rate-limit";
 import { router as apiRoutes } from "./src/server/routes.js";
 import { runMigrations } from "./src/server/storage/migrations.js";
 import { closeDb } from "./src/server/storage/db.js";
+import { KvRateLimitStore } from "./src/server/rateLimitStore.js";
 
 dotenv.config();
 
@@ -29,10 +30,22 @@ app.use(cors({
   methods: ["GET", "POST"]
 }));
 
-// Security: Global API Rate Limiting to prevent DoS attacks
+// Security: Global API Rate Limiting to prevent DoS attacks.
+// Uses Vercel KV (Upstash Redis) when configured so the counter is shared
+// across all serverless instances; falls back to per-process memory otherwise.
+let apiLimiterStore: import('express-rate-limit').Store | undefined;
+if (process.env.NODE_ENV === 'production' && (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)) {
+  try {
+    apiLimiterStore = new KvRateLimitStore();
+  } catch (err) {
+    console.warn('[RateLimit] Falling back to in-memory store:', err);
+  }
+}
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 2000, 
+  max: 2000,
+  store: apiLimiterStore, // undefined => default MemoryStore (dev / in-memory)
   message: "Too many requests from this IP, please try again after 15 minutes",
   standardHeaders: true,
   legacyHeaders: false,
