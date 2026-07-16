@@ -20,17 +20,19 @@ export class Semaphore {
     }
     return new Promise<boolean>(resolve => {
       if (timeoutMs) {
+        let wrapper: () => void;
         const timer = setTimeout(() => {
-          const idx = this.waitQueue.indexOf(resolve as any);
+          const idx = this.waitQueue.indexOf(wrapper);
           if (idx !== -1) {
             this.waitQueue.splice(idx, 1);
           }
           resolve(false);
         }, timeoutMs);
-        this.waitQueue.push(() => {
+        wrapper = () => {
           clearTimeout(timer);
           resolve(true);
-        });
+        };
+        this.waitQueue.push(wrapper);
       } else {
         this.waitQueue.push(() => resolve(true));
       }

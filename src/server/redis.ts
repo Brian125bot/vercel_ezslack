@@ -38,7 +38,7 @@ export async function getRedisValue(key: string): Promise<string | null> {
   
   try {
     const result = await client.get(key);
-    return result;
+    return result as string | null;
   } catch (error) {
     console.warn('[Redis] Failed to get value:', error);
     return null;
