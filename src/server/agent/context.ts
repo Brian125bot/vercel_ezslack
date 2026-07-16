@@ -51,7 +51,7 @@ export async function assembleContext(goal: AgentGoal, run: AgentRun): Promise<P
   };
 }
 
-function compactThreadHistory(messages: any[]): any[] {
+export function compactThreadHistory(messages: any[]): any[] {
   if (messages.length === 0) return messages;
 
   // Estimate token count

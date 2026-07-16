@@ -1,3 +1,4 @@
+import { compactThreadHistory } from '../context.js';
 import { generateSimpleResponse } from '../../ai.js';
 import { getThreadHistory, saveThreadHistory } from '../../state.js';
 import { slackReplyInThreadTool } from '../../tools/slack.js';
@@ -9,7 +10,8 @@ export async function handleDirectReply(
 ): Promise<AgentPipelineResult> {
   const intent = 'direct_reply';
   const threadKeyStr = input.threadTs ? `chan-${input.channelId}-thread-${input.threadTs}` : `chan-${input.channelId}-single`;
-  const history = await getThreadHistory(threadKeyStr);
+  const rawHistory = await getThreadHistory(threadKeyStr);
+  const history = compactThreadHistory(rawHistory);
   
   try {
     const replyText = await generateSimpleResponse(input.messageText, input.selectedModel, history, input.attachments || []);
