@@ -6,6 +6,7 @@ import { agentStore } from '../../src/server/storage/agentStore.js';
 import { Semaphore } from '../../src/server/agent/semaphore.js';
 import { createIntentHash, selectedModel, getSelectedModel, updateLog, setIntentDedup, markIntentComplete } from '../../src/server/state.js';
 import { processSlackFiles } from '../../src/server/agent/attachments.js';
+import { isRedisConfigured } from '../../src/server/redis.js';
 import crypto from 'crypto';
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
@@ -65,9 +66,11 @@ if (req.method !== 'POST') {
     // Otherwise, handle initial Slack event orchestration
     console.log(`[Vercel Workflow] Initiated background pipeline for ID: ${eventId}`);
 
-    // Intent-based deduplication — atomic lock via setRedisValueNX
-    const intentHash = createIntentHash(event.text, event.channel, event.user, event.thread_ts || event.ts);
-    if (!(await setIntentDedup(intentHash))) {
+    // Intent-based deduplication — only when Redis is available
+    const intentHash = isRedisConfigured()
+      ? createIntentHash(event.text, event.channel, event.user, event.thread_ts || event.ts)
+      : undefined;
+    if (intentHash && !(await setIntentDedup(intentHash))) {
       console.log(`[Vercel Workflow] Skipping intent due to deduplication: ${intentHash.substring(0, 16)}...`);
       return res.status(200).json({ message: 'Similar intent already being processed, skipping duplicate execution' });
     }
@@ -148,10 +151,12 @@ if (req.method !== 'POST') {
       });
 
       // Mark intent as completed to allow similar intents to be processed
-      try {
-        await markIntentComplete(intentHash);
-      } catch (e) {
-        console.warn(`[Vercel Workflow] Failed to clean up intent dedup for ${intentHash}:`, e);
+      if (intentHash) {
+        try {
+          await markIntentComplete(intentHash);
+        } catch (e) {
+          console.warn(`[Vercel Workflow] Failed to clean up intent dedup for ${intentHash}:`, e);
+        }
       }
 
       return res.status(200).json({ success: true, result });

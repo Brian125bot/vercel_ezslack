@@ -106,3 +106,13 @@ export async function setRedisJson(key: string, value: unknown, ttlSeconds?: num
     return false;
   }
 }
+
+export async function del(key: string): Promise<void> {
+  const client = await getRedisClient();
+  if (!client) return;
+  try {
+    await client.del(key);
+  } catch (error) {
+    console.warn('[Redis] Failed to delete key:', error);
+  }
+}
