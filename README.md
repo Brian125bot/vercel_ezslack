@@ -683,4 +683,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v6.7.0 | ✅ Done | Model-Aware Thread History Budget (context-window proportional budget) |
 | v6.8.0 | ✅ Done | Fix order_index overflow — migration v11 `bigint`, sequential counter, remove SSL override |
 | v6.9.1 | ✅ Done | Fix Gemini thoughtSignature to preserve raw parts through streaming response pipeline |
-*
+**
