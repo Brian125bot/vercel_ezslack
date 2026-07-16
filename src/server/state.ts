@@ -1,6 +1,7 @@
 import { SlackEventLog, ThreadMessage } from '../types.js';
 import { sanitizeString } from './agent/sanitize.js';
 import { resolveModel, DEFAULT_MODEL, getContextWindowTokens } from './agent/models.js';
+import { setRedisValueNX, getRedisJson, setRedisJson } from './redis.js';
 
 // ── Limits ──
 const get_MAX_THREAD_HISTORY_MESSAGES = () => parseInt(process.env.MAX_THREAD_HISTORY_MESSAGES || '20');
@@ -249,12 +250,18 @@ export async function setSelectedModel(model: string) {
 
 // ── Thread Memory ──
 export async function getThreadHistory(threadKey: string): Promise<ThreadMessage[]> {
+  const redisKey = `thread:${threadKey}`;
+
+  const cached = await getRedisJson<ThreadMessage[]>(redisKey);
+  if (cached) return cached;
+
   const q = await getQuery();
   if (q) {
     try {
       const rows = await q(`SELECT messages FROM thread_memories WHERE thread_key = $1`, [threadKey]);
       if (rows.length) {
         const messages = typeof rows[0].messages === 'string' ? JSON.parse(rows[0].messages) : rows[0].messages;
+        setRedisJson(redisKey, messages, 3600).catch(() => {});
         return messages;
       }
     } catch { /* fall through */ }
@@ -302,6 +309,8 @@ export async function saveThreadHistory(threadKey: string, messages: ThreadMessa
   }
 
   memoryThreads.set(threadKey, trimmed);
+  setRedisJson(`thread:${threadKey}`, trimmed, 3600).catch(() => {});
+
   const q = await getQuery();
   if (q) {
     try {
@@ -332,6 +341,12 @@ function capDedupSet(set: Set<string>, map: Map<string, number>, key: string) {
 }
 
 export async function isEventDuplicate(eventKey: string): Promise<boolean> {
+  const dedupKey = `dedup:event:${eventKey}`;
+  const redisNew = await setRedisValueNX(dedupKey, '1', 600);
+  if (redisNew) {
+    capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventKey);
+    return false;
+  }
   if (memoryProcessedEvents.has(eventKey)) return true;
 
   const q = await getQuery();
@@ -354,6 +369,12 @@ export async function isEventDuplicate(eventKey: string): Promise<boolean> {
 }
 
 export async function isMessageDuplicate(msgKey: string): Promise<boolean> {
+  const dedupKey = `dedup:msg:${msgKey}`;
+  const redisNew = await setRedisValueNX(dedupKey, '1', 600);
+  if (redisNew) {
+    capDedupSet(memoryProcessedMessages, memoryEventTimestamps, msgKey);
+    return false;
+  }
   if (memoryProcessedMessages.has(msgKey)) return true;
 
   const q = await getQuery();
