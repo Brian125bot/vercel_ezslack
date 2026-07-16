@@ -60,8 +60,6 @@ Instruction: ${originalInstruction}
     prompt += `\n${contextBlock}\n`;
   }
 
-  prompt += `\nCurrent date and time (UTC): ${new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z/, '')}\n`;
-
   prompt += `
 Available tools (these are the ONLY tools that exist):
 ${toolDescriptions}

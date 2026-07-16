@@ -1,6 +1,7 @@
 import { geminiCall } from './agent/geminiClient.js';
 import { resolveModel } from './agent/models.js';
 import { attachmentsToGeminiParts } from './agent/attachments.js';
+import { formatDateForContext } from './agent/context.js';
 import type { AgentAttachment } from './agent/types.js';
 
 export async function generateSimpleResponse(
@@ -29,11 +30,15 @@ export async function generateSimpleResponse(
     { role: 'user', parts: userParts }
   ];
 
+  const dateLine = process.env.AGENT_INCLUDE_DATETIME !== 'false'
+    ? `Current date and time: ${formatDateForContext(new Date())}\n\n`
+    : '';
+
   const responseText = await geminiCall({
     model: resolveModel(modelName),
     contents,
     config: {
-      systemInstruction: "You are a helpful Slack AI Agent backend. Keep responses concise and use standard Slack markdown. When an image or PDF is attached, describe or analyze it directly as part of your answer rather than saying you cannot view attachments."
+      systemInstruction: `${dateLine}You are a helpful Slack AI Agent backend. Keep responses concise and use standard Slack markdown. When an image or PDF is attached, describe or analyze it directly as part of your answer rather than saying you cannot view attachments.`
     },
     label: 'directReply'
   });

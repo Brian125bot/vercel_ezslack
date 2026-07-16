@@ -96,8 +96,26 @@ function summarizeMessages(messages: any[]): string {
   return `${userCount} user + ${assistantCount} assistant messages. Topics: ${topicList || 'general discussion'}`;
 }
 
+export function formatDateForContext(date: Date, timezone?: string): string {
+  const tz = timezone || process.env.AGENT_TIMEZONE || 'UTC';
+  const formatter = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: tz,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  return `${formatter.format(date)} ${tz}`;
+}
+
 export function renderContextForPrompt(ctx: PlanningContext): string {
   let dump = `<context>\n`;
+
+  // Current date/time context (can be disabled via AGENT_INCLUDE_DATETIME)
+  if (process.env.AGENT_INCLUDE_DATETIME !== 'false') {
+    const now = new Date();
+    dump += `Current date and time: ${formatDateForContext(now)}\n`;
+  }
+
   dump += `Goal: ${ctx.goal}\n`;
   if (ctx.attachments && ctx.attachments.length > 0) {
     dump += `Attached files: ${ctx.attachments.map(a => `${a.filename} (${a.mimeType})`).join(', ')}\n`;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mockAgentStore, mockGetThreadHistory } = vi.hoisted(() => ({
   mockAgentStore: {
@@ -17,7 +17,9 @@ vi.mock('../src/server/state.js', () => ({
   saveThreadHistory: vi.fn()
 }));
 
-import { assembleContext, renderContextForPrompt } from '../src/server/agent/context.js';
+import { assembleContext, renderContextForPrompt, formatDateForContext } from '../src/server/agent/context.js';
+
+const ORIGINAL_ENV = { ...process.env };
 
 describe('context.ts', () => {
   beforeEach(() => {
@@ -25,6 +27,13 @@ describe('context.ts', () => {
     mockAgentStore.searchMemory.mockResolvedValue([]);
     mockAgentStore.getStepsForRun.mockResolvedValue([]);
     mockGetThreadHistory.mockResolvedValue([]);
+    process.env = { ...ORIGINAL_ENV };
+    delete process.env.AGENT_INCLUDE_DATETIME;
+    delete process.env.AGENT_TIMEZONE;
+  });
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
   });
 
   it('assembles context when channelId and userId are missing', async () => {
@@ -181,5 +190,71 @@ describe('context.ts', () => {
     expect(dump).toContain('Chat History:\nuser: hello\n[SUMMARY] [Thread summary: test]');
     expect(dump).toContain('Prior Steps Execution:\n- [succeeded] Step A\n  Output: {"success":true}\n- [failed] Step B\n  Error: Network error');
     expect(dump).toContain('</context>');
+  });
+
+  describe('formatDateForContext', () => {
+    it('outputs ISO-like YYYY-MM-DD HH:mm:ss UTC format by default', () => {
+      const date = new Date('2026-07-16T10:30:00Z');
+      const result = formatDateForContext(date);
+      expect(result).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC$/);
+    });
+
+    it('outputs correct time for a non-UTC timezone', () => {
+      const date = new Date('2026-07-16T10:30:00Z');
+      const result = formatDateForContext(date, 'America/Chicago');
+      expect(result).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} America\/Chicago$/);
+      // 10:30 UTC = 05:30 Central
+      expect(result).toContain('05:30:00');
+    });
+
+    it('outputs consistent format regardless of timezone (no comma, 24h)', () => {
+      const date = new Date('2026-07-16T10:30:00Z');
+      const utc = formatDateForContext(date, 'UTC');
+      const cst = formatDateForContext(date, 'America/Chicago');
+      const ist = formatDateForContext(date, 'Asia/Kolkata');
+      // All should match YYYY-MM-DD HH:mm:ss TZ (no commas, 24h)
+      [utc, cst, ist].forEach(s => {
+        expect(s).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} /);
+        expect(s).not.toContain(',');
+        expect(s).not.toContain('AM');
+        expect(s).not.toContain('PM');
+      });
+    });
+  });
+
+  describe('renderContextForPrompt date/time line', () => {
+    const baseCtx: any = {
+      goal: 'Goal',
+      threadHistory: [],
+      memoryRecords: [],
+      priorSteps: []
+    };
+
+    it('includes date/time line by default', () => {
+      const dump = renderContextForPrompt(baseCtx);
+      expect(dump).toContain('Current date and time:');
+      expect(dump).toMatch(/Current date and time: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC/);
+    });
+
+    it('includes date/time line after <context> and before Goal', () => {
+      const dump = renderContextForPrompt(baseCtx);
+      const contextIdx = dump.indexOf('<context>');
+      const dateIdx = dump.indexOf('Current date and time:');
+      const goalIdx = dump.indexOf('Goal:');
+      expect(dateIdx).toBeGreaterThan(contextIdx);
+      expect(goalIdx).toBeGreaterThan(dateIdx);
+    });
+
+    it('omits date/time line when AGENT_INCLUDE_DATETIME=false', () => {
+      process.env.AGENT_INCLUDE_DATETIME = 'false';
+      const dump = renderContextForPrompt(baseCtx);
+      expect(dump).not.toContain('Current date and time:');
+    });
+
+    it('respects AGENT_TIMEZONE env var for non-UTC rendering', () => {
+      process.env.AGENT_TIMEZONE = 'America/New_York';
+      const dump = renderContextForPrompt(baseCtx);
+      expect(dump).toMatch(/Current date and time: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} America\/New_York/);
+    });
   });
 });

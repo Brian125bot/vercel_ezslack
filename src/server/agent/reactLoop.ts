@@ -224,8 +224,6 @@ export async function runAgentLoop(
 function buildSystemPrompt(goal: AgentGoal, contextBlock: string, skills: LoadedSkill[]): string {
   const skillsBlock = formatSkillsForPrompt(skills);
 
-  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z/, '');
-
   return [
     'You are a Slack AI agent solving a task by calling tools step by step.',
     'Observe each tool result before deciding the next action.',
@@ -234,8 +232,6 @@ function buildSystemPrompt(goal: AgentGoal, contextBlock: string, skills: Loaded
     '',
     `Goal: ${goal.title}`,
     goal.original_instruction,
-    '',
-    `Current date and time (UTC): ${now}`,
     '',
     contextBlock,
     skillsBlock
