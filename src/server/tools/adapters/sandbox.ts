@@ -98,6 +98,28 @@ function getSandboxProvider() {
   return sandboxProvider;
 }
 
+async function getOrCreateSandboxSession(sessionKey: string) {
+  const provider = getSandboxProvider();
+  let sandboxId = await getSessionSandboxId(sessionKey);
+  let session: any;
+
+  if (sandboxId) {
+    try {
+      session = await provider.resumeSession({ sessionId: sandboxId });
+    } catch {
+      sandboxId = null;
+    }
+  }
+
+  if (!sandboxId) {
+    session = await provider.createSession();
+    sandboxId = session.id;
+    await setSessionSandboxId(sessionKey, sandboxId);
+  }
+
+  return session;
+}
+
 export class SandboxAdapter implements ExternalAdapter {
   name = 'Sandbox';
   description = 'Code execution sandbox with file system access';
@@ -120,28 +142,6 @@ export class SandboxAdapter implements ExternalAdapter {
     ];
   }
 
-  private async getSandbox(sessionKey: string) {
-    const provider = getSandboxProvider();
-    let sandboxId = await getSessionSandboxId(sessionKey);
-    let session: any;
-
-    if (sandboxId) {
-      try {
-        session = await provider.resumeSession({ sessionId: sandboxId });
-      } catch {
-        sandboxId = null;
-      }
-    }
-
-    if (!sandboxId) {
-      session = await provider.createSession();
-      sandboxId = session.id;
-      await setSessionSandboxId(sessionKey, sandboxId);
-    }
-
-    return session;
-  }
-
   private execTool: AgentTool<ExecInput, ExecOutput> = {
     name: 'sandbox.exec',
     description: 'Execute a shell command in the sandbox. Use for running scripts, build commands, tests, etc. Risk: external_write (modifies sandbox state).',
@@ -160,7 +160,7 @@ export class SandboxAdapter implements ExternalAdapter {
 
     async execute(input: ExecInput, context: ToolExecutionContext): Promise<ExecOutput> {
       const sessionKey = generateSessionKey(context.workspaceId, context.channelId, context.threadTs);
-      const sandbox = await this.getSandbox(sessionKey);
+      const sandbox = await getOrCreateSandboxSession(sessionKey);
 
       const cwd = input.cwd || '/home/user';
       const timeoutMs = input.timeoutMs || TOOL_TIMEOUT_MS;
@@ -195,7 +195,7 @@ export class SandboxAdapter implements ExternalAdapter {
 
     async execute(input: ReadInput, context: ToolExecutionContext): Promise<ReadOutput> {
       const sessionKey = generateSessionKey(context.workspaceId, context.channelId, context.threadTs);
-      const sandbox = await this.getSandbox(sessionKey);
+      const sandbox = await getOrCreateSandboxSession(sessionKey);
 
       const content = await sandbox.readFile(input.path);
       return { content };
@@ -218,7 +218,7 @@ export class SandboxAdapter implements ExternalAdapter {
 
     async execute(input: WriteInput, context: ToolExecutionContext): Promise<WriteOutput> {
       const sessionKey = generateSessionKey(context.workspaceId, context.channelId, context.threadTs);
-      const sandbox = await this.getSandbox(sessionKey);
+      const sandbox = await getOrCreateSandboxSession(sessionKey);
 
       await sandbox.writeFile(input.path, input.content);
       return { success: true, path: input.path };
@@ -243,7 +243,7 @@ export class SandboxAdapter implements ExternalAdapter {
 
     async execute(input: EditInput, context: ToolExecutionContext): Promise<EditOutput> {
       const sessionKey = generateSessionKey(context.workspaceId, context.channelId, context.threadTs);
-      const sandbox = await this.getSandbox(sessionKey);
+      const sandbox = await getOrCreateSandboxSession(sessionKey);
 
       const content = await sandbox.readFile(input.path);
       const oldStr = input.oldString;
@@ -286,7 +286,7 @@ export class SandboxAdapter implements ExternalAdapter {
 
     async execute(input: LsInput, context: ToolExecutionContext): Promise<LsOutput> {
       const sessionKey = generateSessionKey(context.workspaceId, context.channelId, context.threadTs);
-      const sandbox = await this.getSandbox(sessionKey);
+      const sandbox = await getOrCreateSandboxSession(sessionKey);
 
       const entries = await sandbox.listFiles(input.path);
       return {
@@ -314,7 +314,7 @@ export class SandboxAdapter implements ExternalAdapter {
 
     async execute(input: GlobInput, context: ToolExecutionContext): Promise<GlobOutput> {
       const sessionKey = generateSessionKey(context.workspaceId, context.channelId, context.threadTs);
-      const sandbox = await this.getSandbox(sessionKey);
+      const sandbox = await getOrCreateSandboxSession(sessionKey);
 
       const cwd = input.cwd || '/home/user';
       const matches = await sandbox.glob(input.pattern, { cwd });
@@ -339,7 +339,7 @@ export class SandboxAdapter implements ExternalAdapter {
 
     async execute(input: GrepInput, context: ToolExecutionContext): Promise<GrepOutput> {
       const sessionKey = generateSessionKey(context.workspaceId, context.channelId, context.threadTs);
-      const sandbox = await this.getSandbox(sessionKey);
+      const sandbox = await getOrCreateSandboxSession(sessionKey);
 
       const searchPath = input.path || '/home/user';
       const matches = await sandbox.grep(input.pattern, { path: searchPath, include: input.include });
@@ -369,7 +369,7 @@ export class SandboxAdapter implements ExternalAdapter {
 
     async execute(input: PythonInput, context: ToolExecutionContext): Promise<PythonOutput> {
       const sessionKey = generateSessionKey(context.workspaceId, context.channelId, context.threadTs);
-      const sandbox = await this.getSandbox(sessionKey);
+      const sandbox = await getOrCreateSandboxSession(sessionKey);
 
       const timeoutMs = input.timeoutMs || TOOL_TIMEOUT_MS;
       const result = await sandbox.exec({
@@ -403,7 +403,7 @@ export class SandboxAdapter implements ExternalAdapter {
 
     async execute(input: NodeInput, context: ToolExecutionContext): Promise<NodeOutput> {
       const sessionKey = generateSessionKey(context.workspaceId, context.channelId, context.threadTs);
-      const sandbox = await this.getSandbox(sessionKey);
+      const sandbox = await getOrCreateSandboxSession(sessionKey);
 
       const timeoutMs = input.timeoutMs || TOOL_TIMEOUT_MS;
       const result = await sandbox.exec({
