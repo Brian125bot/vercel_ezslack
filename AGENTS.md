@@ -23,11 +23,11 @@ Use TypeScript with ES modules and React JSX. Vite aliases `@/` to the repositor
 
 ## Testing Guidelines
 
-Tests use Vitest with 313 test cases across 25 test files. Run `npm run test` before committing. `npm run test:watch` for development. Coverage reports available via `npm run test:coverage`. No specific coverage threshold is defined, but ensure existing tests pass and the `tsc --noEmit` lint gate is clean.
+Tests use Vitest with 338 test cases across 27 test files. Run `npm run test` before committing. `npm run test:watch` for development. Coverage reports available via `npm run test:coverage`. No specific coverage threshold is defined, but ensure existing tests pass and the `tsc --noEmit` lint gate is clean.
 
 ## Commit & Pull Request Guidelines
 
-Recent history uses plain messages and Conventional Commit-style prefixes, for example `feat(auth): add password protection to admin endpoints`, `chore: update application title to agt-db`, and `Initial commit`. Prefer concise imperative messages, using `feat(...)`, `fix(...)`, or `chore` when a scope is clear. Pull requests should describe backend/API changes, dashboard UI changes, required environment variables, and any Slack manifest or Cloud Run deployment impact. Include screenshots for visible dashboard changes.
+Recent history uses plain messages and Conventional Commit-style prefixes, for example `feat(auth): add password protection to admin endpoints`, `chore: update application title to agt-db`, `feat(auth): move dashboard brute-force lockout to Redis for serverless consistency`, and `fix(agent): make plan approval single-use and plan-version scoped to stop scope-creep`. Prefer concise imperative messages, using `feat(...)`, `fix(...)`, or `chore` when a scope is clear. Pull requests should describe backend/API changes, dashboard UI changes, required environment variables, and any Slack manifest or Cloud Run deployment impact. Include screenshots for visible dashboard changes.
 
 ## Security & Configuration Tips
 

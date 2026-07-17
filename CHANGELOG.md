@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [7.3.0] - Redis Distributed Auth Lockout, Approval Scope Creep Hardening, Vercel Analytics - 2026-07-17
+
+### Security
+
+* **Distributed brute-force lockout via Redis.** Moved dashboard `requireDashboardAuth` IP lockout from an in-memory `Map` (per-instance, reset on cold start) to Redis — the failure counter and lockout state is now shared across all serverless instances. When Redis is configured, `recordAuthFailure()` atomically creates/INCRs a counter with a 15-minute TTL anchored to the first failure. `lockoutAuth()` sets a separate lockout key. On every request, `isAuthLockedOut()` checks the Redis TTL. The in-memory `Map` is retained as a development fallback when Redis is unavailable.
+* **Stale local counter cannot re-lock after shared window resets.** When Redis is available, the code trusts the Redis fail count (which decays with its 15-minute TTL) as the source of truth. If the shared window has expired, the in-memory `Map` (which does not decay) can no longer re-lock a legitimate admin. Only when `recordAuthFailure` returns 0 (Redis unavailable) does the local count take over.
+* **Vercel Web Analytics enabled.** Added `@vercel/analytics` (`v2.0.1`) and `<Analytics />` to the React dashboard, enabling page-view tracking on Vercel deployments.
+
+### Added
+
+* `src/server/redis.ts` — `recordAuthFailure()`, `isAuthLockedOut()`, `lockoutAuth()`, `resetAuthFailures()` helpers for distributed auth lockout with automatic TTL management.
+* `src/server/storage/agentStore.ts` — `bumpPlanVersion()` bumps `agent_plans.version` when plan mutation introduces new `external_write` steps, invalidating stale plan-level approvals from a previous version.
+* `src/server/agent/types.ts` — `ToolExecutionContext.planApprovalId` field populated by the loop so `executor.ts` can consume the correct plan-level approval.
+* `tests/auth.test.ts` — 11 tests covering Redis-based lockout (threshold, lockout, short-circuit, distributed cross-instance, stale-local-counter test, Redis-down fallback, audit logging safety).
+* `tests/approval-scope-creep.test.ts` — 4 tests covering single-use consumption, already-consumed re-gate, plan-version scoping, and mutation bump.
+
+### Changed
+
+* **Approval consumption moved from `loop.ts` to `executor.ts`.** Previously the loop consumed the plan approval *after* executing an `external_write` step. Now `executor.ts` atomically checks `consumeApproval()` at step-execution time — if the approval was already consumed (e.g. by a prior step, prior resume, or concurrent path), the step falls through to requiring a fresh approval request instead of silently proceeding. Migration v12's `consumed_at` guard is now the sole enforcement point.
+* **Plan mutation bumps plan version when adding external_write steps.** `mutatePlan()` in `planMutation.ts` now counts new `external_write` steps and calls `bumpPlanVersion()` if any exist. An audit event `plan.mutation.new_approval_required` is logged. This invalidates any prior plan-level approval so the new version requires explicit re-approval.
+* `tests/redis.test.ts` expanded from 20 to 40 tests covering `recordAuthFailure`, `isAuthLockedOut`, `lockoutAuth`, and `resetAuthFailures`.
+
+### Fixed
+
+* **Plan-level approval now truly single-use.** The original post-execution consumption in `loop.ts` allowed a brief window where a concurrent invocation or re-execution of the same step could use the same approval. Moving consumption into `executor.ts` with an atomic `UPDATE ... WHERE consumed_at IS NULL RETURNING id` closes this gap — the SQL itself rejects a second consume.
+* **Migration v13: `plan_version_id` cast to `text`.** The column was originally `uuid`, but the code stores composite `<planId>:<version>` strings. Migration v13 alters the column type to `text` via `USING plan_version_id::text`.
+
+### 🧪 Test Results
+
+* 338 tests across 27 files — all passing.
+* `tsc --noEmit` — clean.
+
 ## [7.2.0] - Env Validation on Vercel, Approval Scope Creep Fix - 2026-07-17
 
 ### Security

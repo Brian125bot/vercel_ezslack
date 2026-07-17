@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-25%20files%20%7C%20313%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-27%20files%20%7C%20338%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -446,6 +446,15 @@ Environment variables are validated at boot in `src/server/env.ts`. The check ru
 - **`VERCEL=1`**: validation is enforced on all platforms including Vercel (bypass removed)
 - **External adapter vars** (`TAVILY_API_KEY`, `GITHUB_TOKEN`, `EMAIL_WEBHOOK_URL`, `SANDBOX_API_KEY`): warned but never block boot
 
+### Distributed Brute-Force Lockout
+
+Dashboard authentication is protected by an IP-based brute-force lockout that is shared across all serverless instances via Redis:
+
+- **Redis as source of truth**: On each failed login, `recordAuthFailure()` atomically creates or increments a counter with a 15-minute TTL anchored to the first failure. When the counter reaches 5, `lockoutAuth()` sets a lockout key.
+- **Stale-local-counter immunity**: When Redis is available, the middleware trusts the Redis count as authoritative. If the shared 15-minute TTL window expires, the in-memory `Map` (which does not decay) cannot re-lock a legitimate admin. The local counter is only used as a fallback when Redis is unavailable.
+- **Cross-instance consistency**: A warm serverless instance with a stale local counter cannot re-lock an IP after the shared Redis window has reset. Subsequent requests check `isAuthLockedOut()` against the Redis key before inspecting the local map.
+- **Graceful fallback**: When Redis is not configured, the in-memory `Map` from earlier versions provides the same lockout guarantees (but per-instance only).
+
 ### HTTPS Redirect
 
 In production, a middleware checks `x-forwarded-proto` (set by Cloud Run / Vercel edge) and issues an HTTP 301 redirect to `https://` when the header value is `http`. Disable with `DISABLE_HTTPS_REDIRECT=1`.
@@ -506,7 +515,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-25 test files, 313 test cases. Run with:
+27 test files, 338 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -525,6 +534,8 @@ npm run test:coverage # With coverage report
 | Intent Classification | `tests/intent.test.ts` | 13 | Heuristic rules, LLM fallback, category dispatch |
 | Attachment Conversion | `tests/attachments.test.ts` | 13 | Slack file download, size/count limits, MIME types, inlineData parts |
 | Vercel Integration | `tests/vercel.test.ts` | 14 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard |
+| Auth Lockout | `tests/auth.test.ts` | 11 | Redis distributed lockout, in-memory fallback, audit safety |
+| Approval Scope Creep | `tests/approval-scope-creep.test.ts` | 4 | Single-use consumption, plan-version scoping, mutation bump |
 | System Maintenance | `tests/maintenance.test.ts` | 5 | Centralized maintenance: stale claims, approval expiry, dedup cleanup, trigger polling |
 | Secret Sanitization | `tests/sanitize.test.ts` | 11 | Token/password/key detection and redaction |
 | Gemini Client | `tests/geminiClient.test.ts` | 11 | mapStructured response parsing, thoughtSignature preservation |
@@ -690,7 +701,7 @@ npm run test:coverage # With coverage report
 ├── Dockerfile                        # Multi-stage Node 22 Alpine build
 ├── vitest.config.ts                  # Vitest configuration
 ├── vite.config.ts                    # Vite build configuration
-├── CHANGELOG.md                      # Version history (v2.0.0 → v6.15.0)
+├── CHANGELOG.md                      # Version history (v2.0.0 → v7.3.0)
 ├── .env.example                      # Environment variable template
 └── package.json                      # Dependencies and scripts
 ```
@@ -912,3 +923,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v7.0.0 | ✅ Done | Startup env validation & security hardening (CSP, HSTS, HTTPS redirect, X-Frame-Options, nosniff) |
 | v7.1.0 | ✅ Done | Centralized system maintenance (shared runSystemMaintenance, cron/workflow dedup) |
 | v7.2.0 | ✅ Done | Env validation on Vercel, approval scope creep fix (plan_version_id, consumption) |
+| v7.3.0 | ✅ Done | Redis distributed auth lockout, approval scope creep hardening, Vercel Analytics |
