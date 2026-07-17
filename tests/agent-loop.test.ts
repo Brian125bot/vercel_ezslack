@@ -117,6 +117,43 @@ describe('runAgentLoop (ReAct loop)', () => {
     expect(toolExecute).not.toHaveBeenCalled();
   });
 
+  it('persists the final answer as a succeeded step so the verifier can see the delivered result', async () => {
+    // Regression: when the model answers directly (no slack.replyInThread tool
+    // call), the answer must land in the run ledger. Otherwise the trace shows
+    // only intermediate tool calls, the semantic verifier reports "not
+    // satisfied", and the run replans forever — burning durable re-enqueues.
+    geminiAgentStep.mockResolvedValueOnce({ text: 'here is the summary' });
+
+    await runAgentLoop(makeRun(), goal, {
+      deadlineMs: Date.now() + 60_000,
+      signal: new AbortController().signal,
+      execContext,
+    });
+
+    expect(agentStore.createStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Final answer',
+        status: 'succeeded',
+        output: { generated: 'here is the summary' },
+      })
+    );
+    expect(agentStore.appendAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'agent_loop.final_answer' })
+    );
+  });
+
+  it('does not persist a final-answer step when the model returns empty text', async () => {
+    geminiAgentStep.mockResolvedValueOnce({ text: '   ' });
+
+    await runAgentLoop(makeRun(), goal, {
+      deadlineMs: Date.now() + 60_000,
+      signal: new AbortController().signal,
+      execContext,
+    });
+
+    expect(agentStore.createStep).not.toHaveBeenCalled();
+  });
+
   it('executes a tool call, observes its result, then produces a final answer', async () => {
     geminiAgentStep
       .mockResolvedValueOnce({
