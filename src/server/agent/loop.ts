@@ -8,7 +8,6 @@ import { verifyRun } from './verifier.js';
 import { verifySemantically } from './semanticVerifier.js';
 import { runAgentLoop } from './reactLoop.js';
 import { slog } from './log.js';
-import { toolsRegistry } from '../tools/registry.js';
 
 const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
 const MAX_ITERATIONS = 3;
@@ -93,8 +92,6 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
 let planId = run.plan_id;
     // Determine if the plan was approved wholesale (plan-level approval, not step-level)
     let isPlanPreApproved = false;
-    // Track if we've consumed the plan approval already (single-use per plan version)
-    let planApprovalConsumed = false;
     let planApprovalId: string | null = null;
 
     if (planId) {
@@ -290,9 +287,6 @@ let planId = run.plan_id;
 
     const currentSteps = await agentStore.getStepsForPlan(planId);
 
-    // Import toolsRegistry for risk level checking
-    const { toolsRegistry } = await import('../tools/registry.js');
-
     for (const step of currentSteps) {
       if (step.status !== 'pending') continue;
 
@@ -329,34 +323,11 @@ let planId = run.plan_id;
         userId: goal.created_by_user_id,
         messageTs: goal.source_message_ts || '',
         threadTs: goal.source_thread_ts || '',
-        preApproved: isPlanPreApproved || !!stepApproval
+        preApproved: isPlanPreApproved || !!stepApproval,
+        planApprovalId: isPlanPreApproved ? planApprovalId : null
       };
 
       await executeStep(run, step, context);
-
-      // Consume plan approval after first use on an external_write tool step
-      if (isPlanPreApproved && planApprovalId && !planApprovalConsumed) {
-        const stepKind = (step.input as any)?.kind || 'tool';
-        const toolName = (step.input as any)?.toolName;
-        if (stepKind === 'tool' && toolName) {
-          const tool = toolsRegistry.get(toolName);
-          if (tool && tool.riskLevel === 'external_write') {
-            await agentStore.consumeApproval(planApprovalId);
-            await agentStore.appendAuditEvent({
-              workspace_id: goal.workspace_id,
-              goal_id: goal.id,
-              run_id: run.id,
-              step_id: step.id,
-              type: 'plan.approval.consumed',
-              actor: 'system',
-              summary: `Plan approval consumed for external_write step: ${step.title}`,
-              payload: { approvalId: planApprovalId, tool: toolName }
-            });
-            isPlanPreApproved = false;
-            planApprovalConsumed = true;
-          }
-        }
-      }
 
       const updatedStep = await agentStore.getStep(step.id);
       if (updatedStep.status === 'blocked') {

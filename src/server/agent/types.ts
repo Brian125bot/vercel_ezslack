@@ -73,6 +73,7 @@ export interface ToolExecutionContext {
   messageTs: string;
   threadTs?: string;
   preApproved?: boolean;
+  planApprovalId?: string | null;
 }
 
 export interface PlanningContext {
@@ -167,4 +168,3 @@ export interface IntentResult {
   confidence: 'high' | 'medium' | 'low';
   source: 'heuristic' | 'llm' | 'fallback';
 }
-

@@ -345,5 +345,13 @@ export const migrations = [
       -- Index for consumed approval tracking
       CREATE INDEX IF NOT EXISTS idx_approvals_consumed ON approval_requests(run_id, consumed_at) WHERE step_id IS NULL;
     `
+  },
+  {
+    version: 13,
+    name: 'approval_plan_version_id_to_text',
+    sql: `
+      -- plan_version_id stores a composite "<planId>:<version>" string, not a uuid.
+      ALTER TABLE approval_requests ALTER COLUMN plan_version_id TYPE text USING plan_version_id::text;
+    `
   }
 ];
