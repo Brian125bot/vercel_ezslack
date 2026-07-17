@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [7.1.0] - Centralized System Maintenance - 2026-07-16
+
+### Added
+* **Centralized system maintenance (`runSystemMaintenance`).** Extracted maintenance logic (stale claim recovery, approval expiry, dedup cleanup, scheduled trigger polling) into `src/server/agent/maintenance.ts` for reuse by both the daily Vercel Cron endpoint and on-demand workflow bootstrap. This reduces code duplication and ensures low MTTR for stale claims across all invocation paths.
+* `src/server/agent/maintenance.ts` — new shared module exporting `runSystemMaintenance()` with configurable log prefix and structured return type `SystemMaintenanceResult`.
+* `tests/maintenance.test.ts` — 5 test cases covering maintenance step execution order and graceful continuation when individual steps fail.
+
+### Changed
+* `api/cron/poll.ts` — refactored to delegate to `runSystemMaintenance()` instead of inlining maintenance calls. Extracted `isCronAuthorized()` helper with explicit `VERCEL=1` bypass logic.
+* `api/workflows/agentRun.ts` — now calls `runSystemMaintenance()` on handler bootstrap for on-demand maintenance (stale claims, approvals, dedup, trigger polling).
+* `tests/vercel.test.ts` — added test for missing `CRON_SECRET` on Vercel (rejects access when secret is not configured).
+
+### Documentation
+* Updated README.md: test badge (25 files, 311 cases), project structure (added `maintenance.ts`), test suite table (added `maintenance.test.ts`, updated Vercel test count).
+* Updated `.env.example` CRON_SECRET comment to clarify it's set in Vercel Project Settings, not `vercel.json`.
+
+### 🧪 Tests
+* 311 tests across 25 files — all passing.
+* `tsc --noEmit` — clean.
+
 ## [7.0.0] - Startup Env Validation & Security Hardening (CSP, HSTS) - 2026-07-16
 
 ### Security
