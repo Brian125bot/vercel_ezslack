@@ -149,8 +149,6 @@ describe('Vercel Migration Integration Tests', () => {
       
       const { default: cronHandler } = await import('../api/cron/poll.js');
 
-      // Need fresh mock to verify pollScheduledTriggers didn't get called through the chain
-      const { agentStore } = await import('../src/server/storage/agentStore.js');
       vi.clearAllMocks();
 
       const mockReq = {
@@ -159,6 +157,32 @@ describe('Vercel Migration Integration Tests', () => {
         }
       };
       
+      const mockRes = {
+        status: vi.fn().mockReturnThis(),
+        json: vi.fn()
+      };
+
+      await cronHandler(mockReq as any, mockRes as any);
+
+      expect(mockRes.status).toHaveBeenCalledWith(401);
+      expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Unauthorized cron request' }));
+      expect(pollScheduledTriggers).not.toHaveBeenCalled();
+    });
+
+    it('rejects access on Vercel when CRON_SECRET is not configured', async () => {
+      delete process.env.CRON_SECRET;
+      process.env.VERCEL = '1';
+
+      const { default: cronHandler } = await import('../api/cron/poll.js');
+
+      vi.clearAllMocks();
+
+      const mockReq = {
+        headers: {
+          authorization: 'Bearer any-token'
+        }
+      };
+
       const mockRes = {
         status: vi.fn().mockReturnThis(),
         json: vi.fn()

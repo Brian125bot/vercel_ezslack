@@ -392,14 +392,14 @@ Supported patterns:
 
 ### Scheduled Triggers Poller
 
-- Triggered on-demand via the scheduler poll webhook endpoint (`/api/cron/poll`).
+- Triggered on-demand via the scheduler poll webhook endpoint (`/api/cron/poll`) and on every workflow bootstrap (`/api/workflows/agentRun`).
 - Atomic `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *` prevents double-firing.
 - Recurring triggers (cron/interval): re-inserted with next run time after claim.
 - One-shot triggers: not re-inserted after firing.
 - `cron-parser` (v5) for full cron expression support.
 - Scheduled runs inherit the model from the goal's most recent run.
 - Lifecycle is handled on-demand via HTTP webhooks, replacing persistent `setInterval` polling loops.
-- Cron handler also runs `recoverStaleClaims()` and `reapExpiredApprovals()` at startup.
+- Maintenance (`recoverStaleClaims`, `reapExpiredApprovals`, dedup cleanup, trigger polling) runs on every workflow invocation for low MTTR; daily Vercel Cron (`0 9 * * *`) is the idle-period safety net. On Vercel Pro, change `vercel.json` to `*/15 * * * *` for 15-minute idle coverage.
 
 ---
 
@@ -495,8 +495,8 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 | **Trigger Retry** | Exponential backoff retry (3 attempts: 1s → 2s → 4s) on transient fetch failures (5xx, network errors). Client errors (4xx) are not retried. |
 | **HTTP 508 Handling** | Treats HTTP 508 Loop Detected as terminal — prevents useless retries when Vercel identifies a recursive function-invocation chain. |
 | **Atomic Run Claiming** | `claimQueuedRunById` atomically transitions a run from `queued` to `running`. Duplicate concurrent invocations for the same `runId` receive `null` and exit immediately, preventing the "concurrent-worker storm" bug. |
-| **Scheduling** | Vercel Cron triggers the polling webhook (`/api/cron/poll`) daily at 9 AM UTC |
-| **Stale Recovery** | `recoverStaleClaims()` + `reapExpiredApprovals()` run at cron start and workflow bootstrap |
+| **Scheduling** | Daily Vercel Cron (`0 9 * * *`) plus on-demand maintenance on every workflow bootstrap; upgrade to Pro and set `*/15 * * * *` in `vercel.json` for 15-minute idle coverage |
+| **Stale Recovery** | `runSystemMaintenance()` (recoverStaleClaims + reapExpiredApprovals + dedup + trigger poll) on workflow bootstrap and daily cron |
 | **Timeout Guard** | Cooperative wall-clock check (configurable `RUN_TIMEOUT_MS`, default 45s) before plan creation, each step, and verification — gracefully re-queues instead of hard-terminating on Vercel's serverless timeout |
 | **Security** | Workflow endpoint secured via Vercel Automation Bypass secret for preview deployments; cron endpoint secured via `CRON_SECRET` |
 
@@ -753,7 +753,7 @@ Three are required in all environments; `DASHBOARD_PASSWORD` is production-only 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CRON_SECRET` | — | Bearer token for Vercel Cron webhook authentication |
+| `CRON_SECRET` | — | **Required on Vercel.** Bearer token for `/api/cron/poll` authentication (set in Vercel Project Settings) |
 | `RUN_TIMEOUT_MS` | `45000` | Soft wall-clock limit for `runLoop()` (graceful re-queue) |
 | `DIRECT_REPLY_CONCURRENCY` | `5` | Max concurrent direct-reply Gemini calls |
 | `GEMINI_TIMEOUT_MS` | `30000` | Per-call Gemini API timeout |

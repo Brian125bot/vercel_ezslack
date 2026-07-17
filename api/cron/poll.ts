@@ -1,51 +1,33 @@
-import { pollScheduledTriggers } from '../../src/server/agent/scheduler.js';
-import { agentStore } from '../../src/server/storage/agentStore.js';
-import { query } from '../../src/server/storage/db.js';
+import { runSystemMaintenance } from '../../src/server/agent/maintenance.js';
+
+function isCronAuthorized(authHeader: string | undefined): boolean {
+  const cronSecret = process.env.CRON_SECRET;
+
+  if (process.env.VERCEL === '1') {
+    return !!cronSecret && authHeader === `Bearer ${cronSecret}`;
+  }
+
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    return false;
+  }
+
+  return true;
+}
 
 export default async function handler(req: any, res: any) {
-  // Optional: check Authorization header if we only want Vercel Cron to hit this.
-  // Vercel Cron sets the Authorization header to `Bearer ${process.env.CRON_SECRET}` 
-  // if CRON_SECRET is configured in Vercel.
   const authHeader = req.headers.authorization;
-  const cronSecret = process.env.CRON_SECRET;
-  
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+
+  if (!isCronAuthorized(authHeader)) {
     return res.status(401).json({ error: 'Unauthorized cron request' });
   }
 
-  console.log(`[Vercel Cron] Starting maintenance cycle...`);
+  console.log('[Vercel Cron] Starting maintenance cycle...');
 
-  // Reclaim stale run claims before polling triggers
   try {
-    const recovered = await agentStore.recoverStaleClaims();
-    if (recovered > 0) {
-      console.log(`[Vercel Cron] Recovered ${recovered} stale run(s)`);
-    }
-  } catch (err: any) {
-    console.error(`[Vercel Cron] recoverStaleClaims error: ${err.message}`);
-  }
-
-  // Expire stale pending approvals
-  try {
-    const expired = await agentStore.reapExpiredApprovals();
-    if (expired.length > 0) {
-      console.log(`[Vercel Cron] Expired ${expired.length} stale approval(s)`);
-    }
-  } catch (err: any) {
-    console.error(`[Vercel Cron] reapExpiredApprovals error: ${err.message}`);
-  }
-
-  // Clean up old processed_events (replaces setInterval in state.ts for Vercel)
-  try {
-    await query(`DELETE FROM processed_events WHERE created_at < now() - interval '10 minutes'`);
-  } catch { /* ignore */ }
-
-  console.log(`[Vercel Cron] Polling for due triggers...`);
-  try {
-    await pollScheduledTriggers();
+    await runSystemMaintenance('[Vercel Cron]');
     res.status(200).json({ success: true });
   } catch (error: any) {
-    console.error(`[Vercel Cron] poll error: ${error.message}`);
+    console.error(`[Vercel Cron] maintenance error: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 }

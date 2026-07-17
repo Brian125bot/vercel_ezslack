@@ -1,5 +1,6 @@
 
 import { classifyIntent } from '../../src/server/agent/intent.js';
+import { runSystemMaintenance } from '../../src/server/agent/maintenance.js';
 import { runAgentPipeline } from '../../src/server/agent/orchestrator.js';
 import { isDbAvailable } from '../../src/server/storage/db.js';
 import { agentStore } from '../../src/server/storage/agentStore.js';
@@ -26,12 +27,9 @@ if (req.method !== 'POST') {
   const startTime = Date.now();
   // Resolve the user's selected model from DB so cold starts use the correct model
   await getSelectedModel();
-  // On-demand stale claim recovery (catches runs abandoned by terminated invocations)
+  // On-demand maintenance (stale claims, approvals, dedup, scheduled triggers)
   try {
-    const recovered = await agentStore.recoverStaleClaims();
-    if (recovered > 0) {
-      console.log(`[Vercel Workflow] Recovered ${recovered} stale run(s) on startup`);
-    }
+    await runSystemMaintenance('[Vercel Workflow]');
   } catch { /* non-blocking */ }
   try {
     const body = req.body || {};
