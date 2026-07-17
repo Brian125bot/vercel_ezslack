@@ -30,8 +30,9 @@ All notable changes to this project will be documented in this file.
 * **MIME-sniffing prevention (L-3 fix).** `X-Content-Type-Options: nosniff` is now applied globally (helmet default, previously disabled alongside CSP).
 * **HTTPS enforcement.** Added an HTTP→HTTPS redirect middleware (active in production when `x-forwarded-proto` is `http`, gated by `DISABLE_HTTPS_REDIRECT` env var) and `Strict-Transport-Security` header (`max-age=31536000; includeSubDomains; preload`) in production only.
 * **Fail-fast startup validation.** New `src/server/env.ts` checks all critical env vars (`GEMINI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DASHBOARD_PASSWORD`, database connection config, `APP_URL`) at boot with clear error messages and calls `process.exit(1)` before `app.listen()` in all environments. Placeholder detection (case-insensitive match against `MY_GEMINI_API_KEY`, `xoxb-myslackbottoken`, `my_slack_signing_secret`, `MY_SIGNING_SECRET`, `my_dashboard_password`, `changeme`, `placeholder`) prevents accidental deployment with example values.
-* **Database config only required in production.** In development, missing database env vars produce a warning and the server continues with in-memory state. In production, missing database config is a hard failure.
-* **`VERCEL=1` short-circuits validation entirely**, preserving zero-config serverless deployments.
+* **Database config required everywhere.** Missing database env vars are a hard failure on all platforms (including Vercel), not just production. In-memory dev fallback removed — at least one of `DATABASE_URL`, `CLOUD_SQL_CONNECTION_NAME`, or `SQL_HOST` is required.
+* **`DASHBOARD_PASSWORD` is warn-only everywhere.** Missing or placeholder values log a security warning but never block startup. Dashboard runs open-access when unset.
+* **`VERCEL=1` no longer bypasses validation.** Vercel deployments are now subject to the same env validation as all other platforms.
 * **Secret values are never logged.** Only variable names and reason strings appear in console output.
 
 ### Added

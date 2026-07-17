@@ -52,10 +52,6 @@ const OPTIONAL_WARN_VARS: Array<{ key: string; desc: string }> = [
 ];
 
 export function validateEnv(): void {
-  if (process.env.VERCEL === '1') {
-    return;
-  }
-
   const vars = readCriticalVars();
   const isProduction = process.env.NODE_ENV === 'production';
   const missing: MissingVar[] = [];
@@ -65,34 +61,31 @@ export function validateEnv(): void {
     if (result) missing.push(result);
   };
 
+  // CRITICAL vars: hard-fail on ALL platforms including Vercel, regardless of
+  // NODE_ENV. This prevents silent security failures (open signature
+  // verification / open dashboard access) if an operator forgets to set them.
   check('GEMINI_API_KEY', vars.GEMINI_API_KEY);
   check('SLACK_BOT_TOKEN', vars.SLACK_BOT_TOKEN);
   check('SLACK_SIGNING_SECRET', vars.SLACK_SIGNING_SECRET);
 
+  // DASHBOARD_PASSWORD: warn-only everywhere. Open-access dev mode is allowed,
+  // but we surface a security warning so operators are not caught off guard.
   const checkDashboard = (value: string) => {
     const result = checkVar('DASHBOARD_PASSWORD', value);
     if (!result) return;
-    if (isProduction) {
-      missing.push(result);
-    } else {
-      const msg = result.reason === 'placeholder'
-        ? `DASHBOARD_PASSWORD is set to a placeholder value — dashboard will be unprotected`
-        : `DASHBOARD_PASSWORD not set — dashboard authentication is disabled (open access)`;
-      console.warn(`[ENV] ⚠️ ${msg}`);
-    }
+    const msg = result.reason === 'placeholder'
+      ? `DASHBOARD_PASSWORD is set to a placeholder value — dashboard will be unprotected`
+      : `DASHBOARD_PASSWORD not set — dashboard authentication is disabled (open access)`;
+    console.warn(`[ENV] ⚠️ ${msg}. See .env.example.`);
   };
   checkDashboard(vars.DASHBOARD_PASSWORD);
 
+  // Database durable state: require at least one connection source on all
+  // platforms (including Vercel) so approval/goal/run state is not silently lost.
   const dbConfigured = !!(vars.DATABASE_URL || vars.CLOUD_SQL_CONNECTION_NAME || vars.SQL_HOST);
   if (!dbConfigured) {
-    if (isProduction) {
-      missing.push({ name: 'DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST', reason: 'missing' });
-    } else {
-      console.warn('[ENV] ⚠️ No database configuration found — server will start with in-memory state only');
-    }
-  }
-
-  if (isProduction) {
+    missing.push({ name: 'DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST', reason: 'missing' });
+  } else if (isProduction) {
     for (const { name, val } of [
       { name: 'DATABASE_URL', val: vars.DATABASE_URL },
       { name: 'CLOUD_SQL_CONNECTION_NAME', val: vars.CLOUD_SQL_CONNECTION_NAME },
@@ -113,11 +106,26 @@ export function validateEnv(): void {
   }
 
   if (missing.length > 0) {
+    const varDescriptions: Record<string, string> = {
+      'GEMINI_API_KEY': 'AI agent backend (required for agent logic)',
+      'SLACK_BOT_TOKEN': 'Slack bot authentication (required for Slack integration)',
+      'SLACK_SIGNING_SECRET': 'Slack request verification (required for request security)',
+      'DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST': 'Database connection (required for durable state)',
+      'APP_URL': 'Application URL (required for webhook callbacks)',
+    };
+
     for (const { name, reason } of missing) {
-      const msg = reason === 'placeholder'
-        ? `${name} is set to a placeholder value (e.g., "changeme", "placeholder")`
-        : `${name} is not set`;
-      console.error(`[ENV] ❌ ${msg}`);
+      const desc = varDescriptions[name] || '';
+      let reasonText: string;
+      if (name === 'SLACK_SIGNING_SECRET') {
+        reasonText = `${name} is missing or a placeholder. Signature verification is disabled`;
+      } else {
+        reasonText = reason === 'placeholder'
+          ? `${name} is missing or a placeholder`
+          : `${name} is missing`;
+      }
+      const descSuffix = desc ? ` — ${desc}` : '';
+      console.error(`[ENV] ❌ [FATAL] ${reasonText}${descSuffix}. See .env.example.`);
     }
     console.error('\n[FATAL] Server startup blocked: required environment variables are missing or invalid.');
     process.exit(1);

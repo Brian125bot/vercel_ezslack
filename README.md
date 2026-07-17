@@ -439,8 +439,8 @@ A restrictive CSP is applied via `helmet` at server startup. All directives use 
 Environment variables are validated at boot in `src/server/env.ts`. The check runs before `app.listen()` and covers:
 
 - **Critical vars** (all environments): `GEMINI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
-- **Dashboard password** (production only): `DASHBOARD_PASSWORD` — missing in dev produces a warning and dashboard runs without auth (open access); missing in production is a hard failure. Placeholder values are production-fatal, dev-warned.
-- **Database** (production only): `DATABASE_URL`, `CLOUD_SQL_CONNECTION_NAME`, or `SQL_HOST` — missing DB vars in dev produce a warning and the server starts with in-memory state
+- **Dashboard password** (all environments): `DASHBOARD_PASSWORD` — always warns if unset or placeholder; never hard-fails. Dashboard runs without auth (open access) when unset. Placeholder values are also warned, not fatal.
+- **Database** (all environments): `DATABASE_URL`, `CLOUD_SQL_CONNECTION_NAME`, or `SQL_HOST` — at least one is required on all platforms (including Vercel). Missing/unconfigured database vars prevent startup.
 - **`APP_URL`** (production only, required): webhook callbacks use localhost fallback in dev
 - **Placeholder detection**: case-insensitive match against a blocklist (`MY_GEMINI_API_KEY`, `xoxb-myslackbottoken`, `my_slack_signing_secret`, `changeme`, `placeholder`, etc.) prevents accidental deployment with example values
 - **`VERCEL=1`** bypass: validation is skipped entirely when running on Vercel

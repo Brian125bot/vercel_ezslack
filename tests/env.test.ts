@@ -29,6 +29,7 @@ describe('validateEnv', () => {
     process.env.SLACK_SIGNING_SECRET = 'real-signing-secret';
     process.env.DASHBOARD_PASSWORD = 'strong-password';
     process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
+    process.env.APP_URL = 'https://example.com';
   }
 
   // ── Critical: missing vars ──────────────────────────────────────────────
@@ -65,13 +66,14 @@ describe('validateEnv', () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('SLACK_SIGNING_SECRET'));
   });
 
-  it('rejects missing DASHBOARD_PASSWORD in production', async () => {
+  it('warns (does not exit) when DASHBOARD_PASSWORD is missing in production', async () => {
     setAllVars();
     process.env.NODE_ENV = 'production';
     delete process.env.DASHBOARD_PASSWORD;
     const { validateEnv } = await import('../src/server/env.js');
-    expect(() => validateEnv()).toThrow('process.exit(1)');
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('DASHBOARD_PASSWORD'));
+    expect(() => validateEnv()).not.toThrow();
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('DASHBOARD_PASSWORD'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('DASHBOARD_PASSWORD'));
   });
 
   it('warns (does not exit) when DASHBOARD_PASSWORD is missing in dev', async () => {
@@ -117,13 +119,36 @@ describe('validateEnv', () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
   });
 
-  it('rejects placeholder DASHBOARD_PASSWORD in production', async () => {
+  it('warns (does not exit) on placeholder DASHBOARD_PASSWORD in production', async () => {
     setAllVars();
     process.env.NODE_ENV = 'production';
     process.env.DASHBOARD_PASSWORD = 'my_dashboard_password';
     const { validateEnv } = await import('../src/server/env.js');
+    expect(() => validateEnv()).not.toThrow();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
+  });
+
+  // ── Critical vars hard-fail outside production (Vercel non-prod) ─────────
+
+  it('rejects missing SLACK_SIGNING_SECRET in non-production', async () => {
+    setAllVars();
+    process.env.NODE_ENV = 'development';
+    delete process.env.SLACK_SIGNING_SECRET;
+    const { validateEnv } = await import('../src/server/env.js');
     expect(() => validateEnv()).toThrow('process.exit(1)');
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('SLACK_SIGNING_SECRET'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Signature verification is disabled'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('.env.example'));
+  });
+
+  it('rejects missing GEMINI_API_KEY in non-production', async () => {
+    setAllVars();
+    process.env.NODE_ENV = 'development';
+    delete process.env.GEMINI_API_KEY;
+    const { validateEnv } = await import('../src/server/env.js');
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('GEMINI_API_KEY'));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('.env.example'));
   });
 
   it('warns (does not exit) on placeholder DASHBOARD_PASSWORD in dev', async () => {
@@ -135,13 +160,13 @@ describe('validateEnv', () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
   });
 
-  it('rejects generic placeholder "changeme" in production', async () => {
+  it('warns (does not exit) on generic placeholder "changeme" in production', async () => {
     setAllVars();
     process.env.NODE_ENV = 'production';
     process.env.DASHBOARD_PASSWORD = 'changeme';
     const { validateEnv } = await import('../src/server/env.js');
-    expect(() => validateEnv()).toThrow('process.exit(1)');
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
+    expect(() => validateEnv()).not.toThrow();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
   });
 
   // ── Critical: database ──────────────────────────────────────────────────
@@ -157,15 +182,15 @@ describe('validateEnv', () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('DATABASE_URL'));
   });
 
-  it('warns (does not exit) when database is unconfigured in dev', async () => {
+  it('rejects missing all database configs in non-production (Vercel dev mode)', async () => {
     setAllVars();
     process.env.NODE_ENV = 'development';
     delete process.env.DATABASE_URL;
     delete process.env.CLOUD_SQL_CONNECTION_NAME;
     delete process.env.SQL_HOST;
     const { validateEnv } = await import('../src/server/env.js');
-    expect(() => validateEnv()).not.toThrow();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('in-memory'));
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('DATABASE_URL'));
   });
 
   it('accepts DATABASE_URL as sole DB config', async () => {
@@ -265,7 +290,7 @@ describe('validateEnv', () => {
 
   // ── Vercel guard ────────────────────────────────────────────────────────
 
-  it('skips validation entirely when VERCEL=1', async () => {
+  it('enforces validation on Vercel deployments (VERCEL=1)', async () => {
     process.env.VERCEL = '1';
     delete process.env.GEMINI_API_KEY;
     delete process.env.SLACK_BOT_TOKEN;
@@ -273,8 +298,8 @@ describe('validateEnv', () => {
     delete process.env.DASHBOARD_PASSWORD;
     delete process.env.DATABASE_URL;
     const { validateEnv } = await import('../src/server/env.js');
-    expect(() => validateEnv()).not.toThrow();
-    expect(exitSpy).not.toHaveBeenCalled();
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   // ── External adapter warnings ───────────────────────────────────────────
