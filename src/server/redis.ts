@@ -116,3 +116,68 @@ export async function del(key: string): Promise<void> {
     console.warn('[Redis] Failed to delete key:', error);
   }
 }
+
+const AUTH_FAILURE_TTL_SECONDS = 15 * 60;
+
+function authFailuresKey(ip: string): string {
+  return `auth:failures:${ip}`;
+}
+
+function authLockoutKey(ip: string): string {
+  return `auth:lockout:${ip}`;
+}
+
+export async function recordAuthFailure(ip: string): Promise<number> {
+  const client = await getRedisClient();
+  if (!client) return 0;
+
+  const key = authFailuresKey(ip);
+  try {
+    // Atomically create the counter with a TTL on the first failure so the
+    // 15-minute window is anchored to when failures began (not reset on each
+    // failure). Subsequent failures within the window increment the counter.
+    const setResult = await client.set(key, '1', { ex: AUTH_FAILURE_TTL_SECONDS, nx: true });
+    if (setResult === 'OK') {
+      return 1;
+    }
+    return await client.incr(key);
+  } catch (error) {
+    console.warn('[Redis] Failed to record auth failure:', error);
+    return 0;
+  }
+}
+
+export async function isAuthLockedOut(ip: string): Promise<boolean> {
+  const client = await getRedisClient();
+  if (!client) return false;
+
+  try {
+    const ttl = await client.ttl(authLockoutKey(ip));
+    return ttl > 0;
+  } catch (error) {
+    console.warn('[Redis] Failed to check auth lockout:', error);
+    return false;
+  }
+}
+
+export async function lockoutAuth(ip: string, durationMs: number = 15 * 60 * 1000): Promise<void> {
+  const client = await getRedisClient();
+  if (!client) return;
+
+  try {
+    await client.set(authLockoutKey(ip), '1', { px: durationMs });
+  } catch (error) {
+    console.warn('[Redis] Failed to set auth lockout:', error);
+  }
+}
+
+export async function resetAuthFailures(ip: string): Promise<void> {
+  const client = await getRedisClient();
+  if (!client) return;
+
+  try {
+    await client.del(authFailuresKey(ip), authLockoutKey(ip));
+  } catch (error) {
+    console.warn('[Redis] Failed to reset auth failures:', error);
+  }
+}

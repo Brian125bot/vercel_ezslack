@@ -1,12 +1,25 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { addLog } from './state.js';
+import {
+  isRedisConfigured,
+  recordAuthFailure,
+  isAuthLockedOut,
+  lockoutAuth,
+  resetAuthFailures,
+} from './redis.js';
 
 interface AuthAttempt {
   count: number;
   lockUntil: number;
 }
 
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000;
+const MAX_FAILED_ATTEMPTS = 5;
+
+// Local in-memory cache used as a dev fallback when Redis is unavailable. When
+// Redis is configured, lockout state lives in Redis so it is consistent across
+// serverless instances; the Map is still updated to keep a warm local view.
 const failedAttempts = new Map<string, AuthAttempt>();
 
 function getClientIp(req: Request): string {
@@ -44,13 +57,27 @@ export const requireDashboardAuth = async (req: Request, res: Response, next: Ne
 
   const ip = getClientIp(req);
   const now = Date.now();
-  const attempt = failedAttempts.get(ip);
+  const redisAvailable = isRedisConfigured();
 
-  // 1. IP Lockout / Cooldown check
-  if (attempt && attempt.lockUntil > now) {
-    const remainingSeconds = Math.ceil((attempt.lockUntil - now) / 1000);
+  if (!redisAvailable) {
+    console.warn('[Auth] Distributed lockout unavailable (Redis down), using in-memory fallback');
+  }
+
+  // 1. IP Lockout / Cooldown check.
+  // With Redis, lockout state is shared across serverless instances; otherwise
+  // fall back to the local in-memory Map.
+  const memoryAttempt = failedAttempts.get(ip);
+  const memoryLocked = !!(memoryAttempt && memoryAttempt.lockUntil > now);
+  const redisLocked = redisAvailable ? await isAuthLockedOut(ip) : false;
+
+  if (redisLocked || memoryLocked) {
+    const message = memoryLocked
+      ? `Too many failed login attempts. Access temporarily locked for your IP address. Please wait ${Math.ceil(
+          (memoryAttempt!.lockUntil - now) / 1000
+        )} seconds.`
+      : 'Too many failed login attempts. Access temporarily locked for your IP address. Please try again later.';
     return res.status(429).json({
-      error: `Too many failed login attempts. Access temporarily locked for your IP address. Please wait ${remainingSeconds} seconds.`,
+      error: message,
       dashboardPasswordRequired: true
     });
   }
@@ -77,20 +104,37 @@ export const requireDashboardAuth = async (req: Request, res: Response, next: Ne
   }
 
   if (authenticated) {
-    // Reset failed counter on successful auth
+    // Reset failed counter on successful auth (both shared and local caches).
     failedAttempts.delete(ip);
+    if (redisAvailable) {
+      await resetAuthFailures(ip);
+    }
     return next();
   }
 
-  // 2. Auth Failure: Increment IP-based failure count and enforce lockout if exceeded 5 attempts
+  // 2. Auth Failure: Increment IP-based failure count and enforce lockout if
+  // more than the allowed number of attempts is exceeded. When Redis is
+  // available the count is shared across instances so distributed guessing is
+  // caught; the local Map is kept in sync as a fallback.
   const currentAttempt = failedAttempts.get(ip) || { count: 0, lockUntil: 0 };
   currentAttempt.count += 1;
-  
+
+  let failCount = currentAttempt.count;
+  if (redisAvailable) {
+    const redisCount = await recordAuthFailure(ip);
+    // Use the higher of the two so a transient Redis error can't lower the
+    // effective count below what this instance has already observed locally.
+    failCount = Math.max(redisCount, currentAttempt.count);
+  }
+
   let isLocked = false;
-  if (currentAttempt.count >= 5) {
+  if (failCount >= MAX_FAILED_ATTEMPTS) {
     // 15-minute cooldown locking window
-    currentAttempt.lockUntil = Date.now() + 15 * 60 * 1000;
+    currentAttempt.lockUntil = Date.now() + LOCKOUT_DURATION_MS;
     isLocked = true;
+    if (redisAvailable) {
+      await lockoutAuth(ip, LOCKOUT_DURATION_MS);
+    }
     console.warn(`[Security Alert] IP ${ip} has exceeded maximum login attempts and is locked.`);
   }
   failedAttempts.set(ip, currentAttempt);
@@ -105,7 +149,7 @@ export const requireDashboardAuth = async (req: Request, res: Response, next: Ne
       eventType: 'Security Alert (Auth Failure)',
       channel: 'Dashboard Web Admin Portal',
       user: `Node: ${maskedIpAddress}`,
-      text: `SECURITY WARNING: Unauthorized dashboard access attempt with incorrect password. Bad attempt count: ${currentAttempt.count}.${isLocked ? ' IP address temporarily locked out.' : ''}`,
+      text: `SECURITY WARNING: Unauthorized dashboard access attempt with incorrect password. Bad attempt count: ${failCount}.${isLocked ? ' IP address temporarily locked out.' : ''}`,
       status: 'error',
       signatureVerified: false
     });
@@ -114,7 +158,7 @@ export const requireDashboardAuth = async (req: Request, res: Response, next: Ne
   }
 
   // 4. Dynamic Timing Delay to deter active brute force engines
-  const penaltyDelayMs = Math.min(3000, 200 * currentAttempt.count);
+  const penaltyDelayMs = Math.min(3000, 200 * failCount);
   await new Promise((resolve) => setTimeout(resolve, penaltyDelayMs));
 
   return res.status(401).json({ 

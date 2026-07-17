@@ -4,6 +4,9 @@ const mockRedisInstance = vi.hoisted(() => ({
   get: vi.fn(),
   set: vi.fn(),
   setex: vi.fn(),
+  incr: vi.fn(),
+  ttl: vi.fn(),
+  del: vi.fn(),
 }));
 
 vi.mock('@upstash/redis', () => ({
@@ -258,6 +261,128 @@ describe('setRedisJson', () => {
     const { setRedisJson } = await import('../src/server/redis.js');
     const result = await setRedisJson('k', { x: 1 });
     expect(result).toBe(false);
+  });
+});
+
+const KV_ENV = () => {
+  process.env.KV_REST_API_URL = 'https://example.com';
+  process.env.KV_REST_API_TOKEN = 'token123';
+};
+
+describe('recordAuthFailure', () => {
+  it('creates the counter with a 15min TTL on the first failure and returns 1', async () => {
+    KV_ENV();
+    mockRedisInstance.set.mockResolvedValue('OK');
+    const { recordAuthFailure } = await import('../src/server/redis.js');
+    const count = await recordAuthFailure('1.2.3.4');
+    expect(count).toBe(1);
+    expect(mockRedisInstance.set).toHaveBeenCalledWith('auth:failures:1.2.3.4', '1', {
+      ex: 15 * 60,
+      nx: true,
+    });
+    expect(mockRedisInstance.incr).not.toHaveBeenCalled();
+  });
+
+  it('increments an existing counter and returns the new count', async () => {
+    KV_ENV();
+    mockRedisInstance.set.mockResolvedValue(null); // NX failed, key exists
+    mockRedisInstance.incr.mockResolvedValue(4);
+    const { recordAuthFailure } = await import('../src/server/redis.js');
+    const count = await recordAuthFailure('1.2.3.4');
+    expect(count).toBe(4);
+    expect(mockRedisInstance.incr).toHaveBeenCalledWith('auth:failures:1.2.3.4');
+  });
+
+  it('returns 0 when Redis is not configured', async () => {
+    const { recordAuthFailure } = await import('../src/server/redis.js');
+    expect(await recordAuthFailure('1.2.3.4')).toBe(0);
+  });
+
+  it('returns 0 and warns on error', async () => {
+    KV_ENV();
+    mockRedisInstance.set.mockRejectedValue(new Error('boom'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { recordAuthFailure } = await import('../src/server/redis.js');
+    expect(await recordAuthFailure('1.2.3.4')).toBe(0);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+});
+
+describe('isAuthLockedOut', () => {
+  it('returns true when the lockout key has a positive TTL', async () => {
+    KV_ENV();
+    mockRedisInstance.ttl.mockResolvedValue(600);
+    const { isAuthLockedOut } = await import('../src/server/redis.js');
+    expect(await isAuthLockedOut('1.2.3.4')).toBe(true);
+    expect(mockRedisInstance.ttl).toHaveBeenCalledWith('auth:lockout:1.2.3.4');
+  });
+
+  it('returns false when the key is missing (ttl -2)', async () => {
+    KV_ENV();
+    mockRedisInstance.ttl.mockResolvedValue(-2);
+    const { isAuthLockedOut } = await import('../src/server/redis.js');
+    expect(await isAuthLockedOut('1.2.3.4')).toBe(false);
+  });
+
+  it('returns false when Redis is not configured', async () => {
+    const { isAuthLockedOut } = await import('../src/server/redis.js');
+    expect(await isAuthLockedOut('1.2.3.4')).toBe(false);
+  });
+
+  it('returns false and warns on error', async () => {
+    KV_ENV();
+    mockRedisInstance.ttl.mockRejectedValue(new Error('boom'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { isAuthLockedOut } = await import('../src/server/redis.js');
+    expect(await isAuthLockedOut('1.2.3.4')).toBe(false);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+});
+
+describe('lockoutAuth', () => {
+  it('sets the lockout key with the default 15min PX TTL', async () => {
+    KV_ENV();
+    mockRedisInstance.set.mockResolvedValue('OK');
+    const { lockoutAuth } = await import('../src/server/redis.js');
+    await lockoutAuth('1.2.3.4');
+    expect(mockRedisInstance.set).toHaveBeenCalledWith('auth:lockout:1.2.3.4', '1', {
+      px: 15 * 60 * 1000,
+    });
+  });
+
+  it('honors a custom duration', async () => {
+    KV_ENV();
+    mockRedisInstance.set.mockResolvedValue('OK');
+    const { lockoutAuth } = await import('../src/server/redis.js');
+    await lockoutAuth('1.2.3.4', 1000);
+    expect(mockRedisInstance.set).toHaveBeenCalledWith('auth:lockout:1.2.3.4', '1', { px: 1000 });
+  });
+
+  it('no-ops when Redis is not configured', async () => {
+    const { lockoutAuth } = await import('../src/server/redis.js');
+    await lockoutAuth('1.2.3.4');
+    expect(mockRedisInstance.set).not.toHaveBeenCalled();
+  });
+});
+
+describe('resetAuthFailures', () => {
+  it('deletes both the failures and lockout keys', async () => {
+    KV_ENV();
+    mockRedisInstance.del.mockResolvedValue(2);
+    const { resetAuthFailures } = await import('../src/server/redis.js');
+    await resetAuthFailures('1.2.3.4');
+    expect(mockRedisInstance.del).toHaveBeenCalledWith(
+      'auth:failures:1.2.3.4',
+      'auth:lockout:1.2.3.4'
+    );
+  });
+
+  it('no-ops when Redis is not configured', async () => {
+    const { resetAuthFailures } = await import('../src/server/redis.js');
+    await resetAuthFailures('1.2.3.4');
+    expect(mockRedisInstance.del).not.toHaveBeenCalled();
   });
 });
 
