@@ -180,12 +180,12 @@ export const agentStore = {
     return rows[0];
   },
 
-  async createApprovalRequest(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
+async createApprovalRequest(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
     const id = crypto.randomUUID();
     const rows = await query<ApprovalRequest>(
-      `INSERT INTO approval_requests (id, goal_id, run_id, step_id, tool_call_id, requested_from_user_id, channel_id, message_ts, title, description, risk_level, proposed_action, status, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
-      [id, input.goal_id || null, input.run_id || null, input.step_id || null, input.tool_call_id || null, input.requested_from_user_id, input.channel_id || null, input.message_ts || null, input.title, input.description, input.risk_level, JSON.stringify(input.proposed_action || {}), input.status, input.expires_at]
+      `INSERT INTO approval_requests (id, goal_id, run_id, step_id, tool_call_id, requested_from_user_id, channel_id, message_ts, title, description, risk_level, proposed_action, status, expires_at, plan_version_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      [id, input.goal_id || null, input.run_id || null, input.step_id || null, input.tool_call_id || null, input.requested_from_user_id, input.channel_id || null, input.message_ts || null, input.title, input.description, input.risk_level, JSON.stringify(input.proposed_action || {}), input.status, input.expires_at, input.plan_version_id || null]
     );
     return rows[0];
   },
@@ -390,6 +390,21 @@ export const agentStore = {
       [runId, stepId]
     );
     return rows.length ? rows[0] : null;
+  },
+
+  async getApprovedPlanApprovalForVersion(runId: string, planVersionId: string): Promise<ApprovalRequest | null> {
+    const rows = await query<ApprovalRequest>(
+      `SELECT * FROM approval_requests WHERE run_id = $1 AND step_id IS NULL AND status = 'approved' AND plan_version_id = $2 AND consumed_at IS NULL LIMIT 1`,
+      [runId, planVersionId]
+    );
+    return rows.length ? rows[0] : null;
+  },
+
+  async consumeApproval(approvalId: string): Promise<void> {
+    await query(
+      `UPDATE approval_requests SET consumed_at = now(), consumed_step_count = consumed_step_count + 1 WHERE id = $1 AND consumed_at IS NULL`,
+      [approvalId]
+    );
   },
 
   async getAuditEventsForRun(runId: string): Promise<AuditEvent[]> {

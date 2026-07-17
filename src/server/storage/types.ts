@@ -111,6 +111,9 @@ export interface ApprovalRequest {
   expires_at: Date;
   created_at: Date;
   resolved_at?: Date | null;
+  consumed_at?: Date | null;
+  plan_version_id?: string | null;
+  consumed_step_count?: number;
 }
 
 export interface MemoryRecord {

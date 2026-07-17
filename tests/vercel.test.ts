@@ -75,7 +75,15 @@ describe('Vercel Migration Integration Tests', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    process.env = { ...originalEnv, VERCEL: '1' };
+    process.env = {
+      ...originalEnv, VERCEL: '1',
+      GEMINI_API_KEY: 'test-ai-key',
+      SLACK_BOT_TOKEN: 'xoxb-real-token',
+      SLACK_SIGNING_SECRET: 'real-signing-secret',
+      DASHBOARD_PASSWORD: 'strong-password',
+      DATABASE_URL: 'postgres://user:pass@host:5432/db',
+      APP_URL: 'https://example.com',
+    };
   });
 
   afterEach(() => {
@@ -97,9 +105,11 @@ describe('Vercel Migration Integration Tests', () => {
     }
 
     it('does not trigger migrations if DATABASE_URL is missing', async () => {
-      delete process.env.DATABASE_URL;
+      // DATABASE_URL is set in beforeEach so server.ts imports successfully;
+      // delete it before invoking the middleware to test the "not configured" path
       const middleware = await getMiddleware();
       expect(middleware).toBeTruthy();
+      delete process.env.DATABASE_URL;
 
       const mockReq = { ip: '127.0.0.1', headers: {}, get: vi.fn().mockReturnValue('') };
       const mockRes = {};

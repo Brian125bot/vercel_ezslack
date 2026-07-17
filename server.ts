@@ -12,6 +12,7 @@ import { KvRateLimitStore } from "./src/server/rateLimitStore.js";
 import { validateEnv } from "./src/server/env.js";
 
 dotenv.config();
+validateEnv();
 
 const app = express();
 app.set('trust proxy', 1);
@@ -123,6 +124,9 @@ let server: ReturnType<typeof app.listen> | null = null;
 
 // Configure Vite middleware or static paths based on environment
 async function initServer() {
+  // Validate critical environment variables first, before any async work.
+  // This ensures fail-hard behavior if required vars are missing/invalid on all platforms
+  // including Vercel, preventing silent security failures.
   validateEnv();
 
   try {

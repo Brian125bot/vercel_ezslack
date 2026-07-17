@@ -8,6 +8,7 @@ import { verifyRun } from './verifier.js';
 import { verifySemantically } from './semanticVerifier.js';
 import { runAgentLoop } from './reactLoop.js';
 import { slog } from './log.js';
+import { toolsRegistry } from '../tools/registry.js';
 
 const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
 const MAX_ITERATIONS = 3;
@@ -89,14 +90,23 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       return;
     }
 
-    let planId = run.plan_id;
+let planId = run.plan_id;
     // Determine if the plan was approved wholesale (plan-level approval, not step-level)
     let isPlanPreApproved = false;
+    // Track if we've consumed the plan approval already (single-use per plan version)
+    let planApprovalConsumed = false;
+    let planApprovalId: string | null = null;
 
     if (planId) {
-      // Resume path — check if there's a plan-level approval (step_id IS NULL)
-      const planApproval = await agentStore.getApprovedPlanApproval(run.id);
+      // Resume path — check if there's a plan-level approval (step_id IS NULL) for this plan version
+      const planObj = await agentStore.getRunTrace(run.id).then(t => t.plan);
+      const planVersionId = planObj ? `${planObj.id}:${planObj.version}` : null;
+      let planApproval = null;
+      if (planVersionId) {
+        planApproval = await agentStore.getApprovedPlanApprovalForVersion(run.id, planVersionId);
+      }
       isPlanPreApproved = !!planApproval;
+      planApprovalId = planApproval?.id || null;
 
       // Transition from queued to running if resuming a previously approved plan
       if (run.status === 'queued') {
@@ -210,6 +220,7 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       });
 
       if (planDraft.requiresApproval) {
+        const planVersionId = `${plan.id}:${plan.version}`;
         const approval = await agentStore.createApprovalRequest({
           goal_id: goal.id,
           run_id: run.id,
@@ -221,7 +232,8 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
           risk_level: planDraft.riskLevel,
           proposed_action: { plan: planDraft },
           status: 'pending',
-          expires_at: new Date(Date.now() + 30 * 60 * 1000)
+          expires_at: new Date(Date.now() + 30 * 60 * 1000),
+          plan_version_id: planVersionId
         });
 
         // Post Block Kit approval message to Slack (previously missing for plan-level)
@@ -251,7 +263,7 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       } // end planner fallback
     } // end no-plan path
 
-    // Execute plan steps
+// Execute plan steps
     const steps = await agentStore.getStepsForPlan(planId);
     let executionUnblocked = true;
 
@@ -259,7 +271,7 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
     if (steps.length === 0 && run.plan_id) { // Hack to hydrate if we just created
       const planObj = await agentStore.getRunTrace(run.id).then(t => 
          t.plan?.id === planId ? t.plan : null
-      );
+       );
       if (planObj && planObj.steps) {
         let order = 0;
         for (const stepDraft of planObj.steps) {
@@ -277,6 +289,9 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
     }
 
     const currentSteps = await agentStore.getStepsForPlan(planId);
+
+    // Import toolsRegistry for risk level checking
+    const { toolsRegistry } = await import('../tools/registry.js');
 
     for (const step of currentSteps) {
       if (step.status !== 'pending') continue;
@@ -318,6 +333,30 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       };
 
       await executeStep(run, step, context);
+
+      // Consume plan approval after first use on an external_write tool step
+      if (isPlanPreApproved && planApprovalId && !planApprovalConsumed) {
+        const stepKind = (step.input as any)?.kind || 'tool';
+        const toolName = (step.input as any)?.toolName;
+        if (stepKind === 'tool' && toolName) {
+          const tool = toolsRegistry.get(toolName);
+          if (tool && tool.riskLevel === 'external_write') {
+            await agentStore.consumeApproval(planApprovalId);
+            await agentStore.appendAuditEvent({
+              workspace_id: goal.workspace_id,
+              goal_id: goal.id,
+              run_id: run.id,
+              step_id: step.id,
+              type: 'plan.approval.consumed',
+              actor: 'system',
+              summary: `Plan approval consumed for external_write step: ${step.title}`,
+              payload: { approvalId: planApprovalId, tool: toolName }
+            });
+            isPlanPreApproved = false;
+            planApprovalConsumed = true;
+          }
+        }
+      }
 
       const updatedStep = await agentStore.getStep(step.id);
       if (updatedStep.status === 'blocked') {

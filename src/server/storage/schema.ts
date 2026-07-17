@@ -329,5 +329,21 @@ export const migrations = [
         END IF;
       END $$;
     `
+  },
+  {
+    version: 12,
+    name: 'approval_scope_creep_fix',
+    sql: `
+      -- Add consumption tracking and plan version scoping to approval_requests
+      ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS consumed_at timestamptz;
+      ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS plan_version_id uuid;
+      ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS consumed_step_count int DEFAULT 0;
+
+      -- Index for version-scoped plan approval queries
+      CREATE INDEX IF NOT EXISTS idx_approvals_run_version ON approval_requests(run_id, plan_version_id) WHERE step_id IS NULL;
+
+      -- Index for consumed approval tracking
+      CREATE INDEX IF NOT EXISTS idx_approvals_consumed ON approval_requests(run_id, consumed_at) WHERE step_id IS NULL;
+    `
   }
 ];

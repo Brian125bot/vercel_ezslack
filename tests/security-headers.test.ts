@@ -14,6 +14,13 @@ describe('default (development) security headers', () => {
   beforeAll(async () => {
     process.env.VERCEL = '1';
     process.env.DISABLE_HTTPS_REDIRECT = '1';
+    process.env.GEMINI_API_KEY = 'test-ai-key';
+    process.env.SLACK_BOT_TOKEN = 'xoxb-real-token';
+    process.env.SLACK_SIGNING_SECRET = 'real-signing-secret';
+    process.env.DASHBOARD_PASSWORD = 'strong-password';
+    process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
+    process.env.APP_URL = 'https://example.com';
+    vi.resetModules();
     const mod = await import('../server.js');
     const app: Express = mod.default;
     await new Promise<void>(resolve => {
@@ -76,10 +83,16 @@ describe('production security headers', () => {
   let server: http.Server;
 
   beforeAll(async () => {
-    vi.resetModules();
     process.env.VERCEL = '1';
     process.env.DISABLE_HTTPS_REDIRECT = '1';
     process.env.NODE_ENV = 'production';
+    process.env.GEMINI_API_KEY = 'test-ai-key';
+    process.env.SLACK_BOT_TOKEN = 'xoxb-real-token';
+    process.env.SLACK_SIGNING_SECRET = 'real-signing-secret';
+    process.env.DASHBOARD_PASSWORD = 'strong-password';
+    process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
+    process.env.APP_URL = 'https://example.com';
+    vi.resetModules();
     const mod = await import('../server.js');
     const app: Express = mod.default;
     await new Promise<void>(resolve => {
@@ -111,10 +124,16 @@ describe('HTTPS redirect (production)', () => {
   let server: http.Server;
 
   beforeAll(async () => {
-    vi.resetModules();
     process.env.VERCEL = '1';
     process.env.NODE_ENV = 'production';
+    process.env.GEMINI_API_KEY = 'test-ai-key';
+    process.env.SLACK_BOT_TOKEN = 'xoxb-real-token';
+    process.env.SLACK_SIGNING_SECRET = 'real-signing-secret';
+    process.env.DASHBOARD_PASSWORD = 'strong-password';
+    process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
+    process.env.APP_URL = 'https://example.com';
     delete process.env.DISABLE_HTTPS_REDIRECT;
+    vi.resetModules();
     const mod = await import('../server.js');
     const app: Express = mod.default;
     await new Promise<void>(resolve => {
