@@ -49,6 +49,8 @@ const OPTIONAL_WARN_VARS: Array<{ key: string; desc: string }> = [
   { key: 'GITHUB_TOKEN', desc: 'GitHub Issues adapter' },
   { key: 'EMAIL_WEBHOOK_URL', desc: 'Email adapter' },
   { key: 'SANDBOX_API_KEY', desc: 'Code sandbox adapter' },
+  { key: 'KV_REST_API_URL', desc: 'Upstash Redis for distributed rate limiting' },
+  { key: 'UPSTASH_REDIS_URL', desc: 'Alternative Upstash env var name' },
 ];
 
 export function validateEnv(): void {

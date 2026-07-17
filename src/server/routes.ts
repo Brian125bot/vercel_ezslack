@@ -292,8 +292,10 @@ router.post('/slack/test', requireDashboardAuth, async (req: any, res: any) => {
 });
 
 // ── W4-D: Health check endpoint (no auth) ──
-router.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', uptime: process.uptime() });
+router.get('/health', (req, res) => {
+  const store = req.app.get('rateLimiterStore') as import('./rateLimitStore.js').KvRateLimitStore | undefined;
+  const rateLimiter = store ? (store.degraded ? 'in-memory' : 'distributed') : 'in-memory';
+  res.status(200).json({ status: 'ok', rateLimiter, uptime: process.uptime() });
 });
 
 // ── W3-C: Slack interactivity endpoint (Block Kit button callbacks) ──

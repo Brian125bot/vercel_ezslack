@@ -128,8 +128,9 @@ describe('KvRateLimitStore', () => {
     expect(result.totalHits).toBe(1);
   });
 
-  // Task 12: KV unavailable test - increment must throw when getRedisClient() returns null (fail-closed)
-  it('increment should throw when KV client is unavailable', async () => {
+  // Task 12: KV unavailable test - increment should degrade to a per-instance
+  // in-memory counter (fail-open) rather than hard-failing the request.
+  it('increment should fall back to in-memory counter when KV client is unavailable', async () => {
     vi.resetModules();
     vi.doMock('../src/server/redis.js', () => ({
       getRedisClient: vi.fn().mockResolvedValue(null),
@@ -137,7 +138,45 @@ describe('KvRateLimitStore', () => {
     const { KvRateLimitStore: KvRateLimitStoreNull } = await import('../src/server/rateLimitStore.js');
     const nullStore = new KvRateLimitStoreNull();
     nullStore.init({ windowMs });
-    await expect(nullStore.increment('192.168.1.1')).rejects.toThrow('KV rate-limit store unavailable');
+
+    const first = await nullStore.increment('192.168.1.1');
+    expect(first.totalHits).toBe(1);
+    expect(nullStore.degraded).toBe(true);
+    const second = await nullStore.increment('192.168.1.1');
+    expect(second.totalHits).toBe(2);
+  });
+
+  it('fallback counter should clear after the window expires', async () => {
+    vi.resetModules();
+    vi.doMock('../src/server/redis.js', () => ({
+      getRedisClient: vi.fn().mockResolvedValue(null),
+    }));
+    const { KvRateLimitStore: KvRateLimitStoreNull } = await import('../src/server/rateLimitStore.js');
+    const nullStore = new KvRateLimitStoreNull();
+    nullStore.init({ windowMs: 10 });
+    await nullStore.increment('expiring-key');
+    await new Promise(r => setTimeout(r, 12));
+    const after = await nullStore.increment('expiring-key');
+    expect(after.totalHits).toBe(1);
+  });
+
+  it('decrement and resetKey should adjust the fallback counter when KV is unavailable', async () => {
+    vi.resetModules();
+    vi.doMock('../src/server/redis.js', () => ({
+      getRedisClient: vi.fn().mockResolvedValue(null),
+    }));
+    const { KvRateLimitStore: KvRateLimitStoreNull } = await import('../src/server/rateLimitStore.js');
+    const nullStore = new KvRateLimitStoreNull();
+    nullStore.init({ windowMs });
+
+    await nullStore.increment('decr-key');
+    await nullStore.increment('decr-key');
+    await nullStore.decrement('decr-key');
+    const afterDecrement = await nullStore.increment('decr-key');
+    expect(afterDecrement.totalHits).toBe(2);
+    await nullStore.resetKey('decr-key');
+    const afterReset = await nullStore.increment('decr-key');
+    expect(afterReset.totalHits).toBe(1);
   });
 
   // Task 14: Concurrency test
