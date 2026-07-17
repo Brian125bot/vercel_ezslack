@@ -4,6 +4,7 @@ import { agentStore } from '../storage/agentStore.js';
 import { slog } from './log.js';
 import { geminiCall } from './geminiClient.js';
 import { resolveModel } from './models.js';
+import { toolsRegistry } from '../tools/registry.js';
 
 interface MutationInstruction {
   action: 'add' | 'remove' | 'replace' | 'modify';
@@ -106,6 +107,7 @@ Generate the mutations as JSON.`,
 
     // Apply mutations
     let applied = 0;
+    let newExternalWriteSteps = 0;
     for (const mut of mutations) {
       const idx = mut.stepIndex;
       
@@ -142,6 +144,8 @@ Generate the mutations as JSON.`,
               ...mut.newInput
             }
           });
+          const tool = toolsRegistry.get(mut.newToolName);
+          if (tool?.riskLevel === 'external_write') newExternalWriteSteps++;
           applied++;
         }
       } else if (mut.action === 'add') {
@@ -158,8 +162,23 @@ Generate the mutations as JSON.`,
             ...mut.newInput
           }
         });
+        const tool = toolsRegistry.get(mut.newToolName);
+        if (tool?.riskLevel === 'external_write') newExternalWriteSteps++;
         applied++;
       }
+    }
+
+    if (newExternalWriteSteps > 0) {
+      await agentStore.bumpPlanVersion(planId);
+      await agentStore.appendAuditEvent({
+        workspace_id: goal.workspace_id,
+        goal_id: goal.id,
+        run_id: runId,
+        type: 'plan.mutation.new_approval_required',
+        actor: 'user',
+        summary: `${newExternalWriteSteps} new external_write step(s) require fresh approval; plan version was bumped`,
+        payload: { newExternalWriteSteps, planId }
+      });
     }
 
     await agentStore.appendAuditEvent({

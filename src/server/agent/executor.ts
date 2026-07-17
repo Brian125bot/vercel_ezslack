@@ -239,22 +239,56 @@ export async function executeStep(
   });
 
   let policy = checkPolicy(tool.riskLevel, tool.name);
-  
+
   if (context.preApproved && tool.riskLevel === 'external_write') {
-    policy = { allowed: true, requiresApproval: false, reason: 'Pre-approved from plan' };
-    await agentStore.appendAuditEvent({
-      workspace_id: context.workspaceId,
-      goal_id: run.goal_id,
-      run_id: run.id,
-      step_id: step.id,
-      type: 'policy.preapproved',
-      actor: 'system',
-      summary: `Pre-approved outer external_write policy for ${tool.name}`,
-      payload: {}
-    });
+    if (context.planApprovalId) {
+      // Plan-level approvals are single-use and plan-version scoped. Atomically
+      // consume the approval; if it was already consumed, re-gate this call so a
+      // fresh approval is required (prevents scope-creep across steps/resumes).
+      const consumed = await agentStore.consumeApproval(context.planApprovalId);
+      if (consumed) {
+        policy = { allowed: true, requiresApproval: false, reason: 'Pre-approved from plan (single-use approval consumed)' };
+        await agentStore.appendAuditEvent({
+          workspace_id: context.workspaceId,
+          goal_id: run.goal_id,
+          run_id: run.id,
+          step_id: step.id,
+          type: 'plan.approval.consumed',
+          actor: 'system',
+          summary: `Plan approval consumed for external_write tool ${tool.name}`,
+          payload: { approvalId: context.planApprovalId, tool: tool.name }
+        });
+      } else {
+        // Already consumed → leave `policy` as the default external_write policy
+        // (requiresApproval: true) so a new approval request is created below.
+        await agentStore.appendAuditEvent({
+          workspace_id: context.workspaceId,
+          goal_id: run.goal_id,
+          run_id: run.id,
+          step_id: step.id,
+          type: 'approval.reused.blocked',
+          actor: 'system',
+          summary: `Blocked reuse of already-consumed plan approval for ${tool.name}; requiring fresh approval`,
+          payload: { approvalId: context.planApprovalId, tool: tool.name }
+        });
+      }
+    } else {
+      // Step-level pre-approval — already scoped to this specific step.
+      policy = { allowed: true, requiresApproval: false, reason: 'Pre-approved' };
+      await agentStore.appendAuditEvent({
+        workspace_id: context.workspaceId,
+        goal_id: run.goal_id,
+        run_id: run.id,
+        step_id: step.id,
+        type: 'policy.preapproved',
+        actor: 'system',
+        summary: `Pre-approved external_write policy for ${tool.name}`,
+        payload: {}
+      });
+    }
   }
 
-  if (!policy.allowed) {
+  if (!policy.allowed || policy.requiresApproval) {
     if (policy.requiresApproval) {
       // W3-C: Post Block Kit approval message to Slack
       const { postApprovalBlockKit } = await import('../tools/slack.js');

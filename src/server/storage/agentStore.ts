@@ -376,14 +376,6 @@ async createApprovalRequest(input: CreateApprovalRequestInput): Promise<Approval
     return query<ApprovalRequest>(`SELECT * FROM approval_requests WHERE run_id = $1 ORDER BY created_at ASC`, [runId]);
   },
 
-  async getApprovedPlanApproval(runId: string): Promise<ApprovalRequest | null> {
-    const rows = await query<ApprovalRequest>(
-      `SELECT * FROM approval_requests WHERE run_id = $1 AND step_id IS NULL AND status = 'approved' LIMIT 1`,
-      [runId]
-    );
-    return rows.length ? rows[0] : null;
-  },
-
   async getApprovedStepApproval(runId: string, stepId: string): Promise<ApprovalRequest | null> {
     const rows = await query<ApprovalRequest>(
       `SELECT * FROM approval_requests WHERE run_id = $1 AND step_id = $2 AND status = 'approved' LIMIT 1`,
@@ -400,11 +392,21 @@ async createApprovalRequest(input: CreateApprovalRequestInput): Promise<Approval
     return rows.length ? rows[0] : null;
   },
 
-  async consumeApproval(approvalId: string): Promise<void> {
-    await query(
-      `UPDATE approval_requests SET consumed_at = now(), consumed_step_count = consumed_step_count + 1 WHERE id = $1 AND consumed_at IS NULL`,
+  async consumeApproval(approvalId: string): Promise<boolean> {
+    const rows = await query<{ id: string }>(
+      `UPDATE approval_requests SET consumed_at = now(), consumed_step_count = consumed_step_count + 1 WHERE id = $1 AND consumed_at IS NULL RETURNING id`,
       [approvalId]
     );
+    return rows.length > 0;
+  },
+
+  async bumpPlanVersion(planId: string): Promise<AgentPlan> {
+    const rows = await query<AgentPlan>(
+      `UPDATE agent_plans SET version = version + 1 WHERE id = $1 RETURNING *`,
+      [planId]
+    );
+    if (!rows.length) throw new Error(`Plan ${planId} not found`);
+    return rows[0];
   },
 
   async getAuditEventsForRun(runId: string): Promise<AuditEvent[]> {
