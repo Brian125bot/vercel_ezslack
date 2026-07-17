@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { 
   Terminal, 
   Send, 
@@ -1512,6 +1513,7 @@ export default function App() {
           </p>
         </div>
       </footer>
+      <Analytics />
     </div>
   );
 }
