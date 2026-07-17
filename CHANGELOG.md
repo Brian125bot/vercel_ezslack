@@ -15,8 +15,8 @@ All notable changes to this project will be documented in this file.
 * **Secret values are never logged.** Only variable names and reason strings appear in console output.
 
 ### Added
-* `src/server/env.ts` — `validateEnv()` module with helpers `isMissing()`, `isEmpty()`, `isPlaceholder()`, `warnOnce()`, and `fail()`.
-* `tests/env.test.ts` — 24 tests covering missing, empty, placeholder, database variants, VERCEL guard, APP_URL production/dev, adapter warnings, and no value leaks.
+* `src/server/env.ts` — `validateEnv()` module with helpers `isPlaceholder()`, `checkVar()`, `readCriticalVars()`, and `validateEnv()`.
+* `tests/env.test.ts` — 29 tests covering missing, empty, placeholder, database variants, VERCEL guard, APP_URL production/dev, adapter warnings, no value leaks, DB/APP_URL placeholder detection.
 * `tests/security-headers.test.ts` — 12 tests covering CSP directives, X-Content-Type-Options, X-Frame-Options, HSTS (present in production, absent in dev), upgrade-insecure-requests, and HTTPS redirect (301 on `x-forwarded-proto: http`, pass-through when missing).
 
 ### Changed
@@ -28,7 +28,7 @@ All notable changes to this project will be documented in this file.
 | `DISABLE_HTTPS_REDIRECT` | unset | Set to `1` to skip HTTP→HTTPS redirect in production |
 
 ### 🧪 Tests
-* 290 tests across 23 files — all passing.
+* 305 tests across 24 files — all passing.
 * `tsc --noEmit` — 0 errors in changed files.
 
 ## [6.9.0] - Fix Gemini thoughtSignature for streaming function calls - 2026-07-15

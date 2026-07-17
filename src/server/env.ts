@@ -22,7 +22,7 @@ interface CriticalVars {
 
 interface MissingVar {
   name: string;
-  reason: 'missing' | 'empty' | 'placeholder';
+  reason: 'missing' | 'placeholder';
 }
 
 function readCriticalVars(): CriticalVars {
@@ -92,14 +92,30 @@ export function validateEnv(): void {
     }
   }
 
-  if (isProduction && !vars.APP_URL) {
-    missing.push({ name: 'APP_URL', reason: 'missing' });
+  if (isProduction) {
+    for (const { name, val } of [
+      { name: 'DATABASE_URL', val: vars.DATABASE_URL },
+      { name: 'CLOUD_SQL_CONNECTION_NAME', val: vars.CLOUD_SQL_CONNECTION_NAME },
+      { name: 'SQL_HOST', val: vars.SQL_HOST },
+    ]) {
+      if (val && isPlaceholder(val)) {
+        missing.push({ name, reason: 'placeholder' });
+      }
+    }
+  }
+
+  if (isProduction) {
+    if (!vars.APP_URL) {
+      missing.push({ name: 'APP_URL', reason: 'missing' });
+    } else if (isPlaceholder(vars.APP_URL)) {
+      missing.push({ name: 'APP_URL', reason: 'placeholder' });
+    }
   }
 
   if (missing.length > 0) {
     for (const { name, reason } of missing) {
       const msg = reason === 'placeholder'
-        ? `${name} is set to a placeholder value (e.g., "MY_GEMINI_API_KEY")`
+        ? `${name} is set to a placeholder value (e.g., "changeme", "placeholder")`
         : `${name} is not set`;
       console.error(`[ENV] ❌ ${msg}`);
     }

@@ -17,9 +17,6 @@ const app = express();
 app.set('trust proxy', 1);
 const PORT = parseInt(process.env.PORT || '3000');
 
-// Security: Expose minimal server information
-app.disable('x-powered-by');
-
 // Security: Redirect HTTP to HTTPS in production (behind proxy)
 if (process.env.DISABLE_HTTPS_REDIRECT !== '1' && process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {

@@ -217,6 +217,34 @@ describe('validateEnv', () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('APP_URL'));
   });
 
+  it('rejects placeholder APP_URL in production', async () => {
+    setAllVars();
+    process.env.NODE_ENV = 'production';
+    process.env.APP_URL = 'changeme';
+    const { validateEnv } = await import('../src/server/env.js');
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
+  });
+
+  it('rejects placeholder DATABASE_URL in production', async () => {
+    setAllVars();
+    process.env.NODE_ENV = 'production';
+    process.env.DATABASE_URL = 'changeme';
+    const { validateEnv } = await import('../src/server/env.js');
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
+  });
+
+  it('rejects placeholder CLOUD_SQL_CONNECTION_NAME in production', async () => {
+    setAllVars();
+    process.env.NODE_ENV = 'production';
+    delete process.env.DATABASE_URL;
+    process.env.CLOUD_SQL_CONNECTION_NAME = 'placeholder';
+    const { validateEnv } = await import('../src/server/env.js');
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
+  });
+
   // ── Happy path ──────────────────────────────────────────────────────────
 
   it('passes when all critical vars are set', async () => {

@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-23%20files%20%7C%20290%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-24%20files%20%7C%20305%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -506,7 +506,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-23 test files, 292 test cases. Run with:
+24 test files, 305 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -516,7 +516,7 @@ npm run test:coverage # With coverage report
 
 | Suite | File | Tests | Coverage |
 |-------|------|:-----:|----------|
-| Env Validation | `tests/env.test.ts` | 26 | Missing/empty/placeholder vars, DB variants, VERCEL guard, APP_URL, adapter warnings, DASHBOARD_PASSWORD dev/prod split |
+| Env Validation | `tests/env.test.ts` | 29 | Missing/empty/placeholder vars, DB variants, VERCEL guard, APP_URL, adapter warnings, DASHBOARD_PASSWORD dev/prod split, DB/APP_URL placeholder detection |
 | Security Headers | `tests/security-headers.test.ts` | 12 | CSP directives, HSTS, X-Frame-Options, nosniff, HTTPS redirect |
 | Agent Handlers | `tests/handlers.test.ts` | 27 | direct reply, durable task, status query, approval response, cancel/update |
 | Agent Extras | `tests/agent-extra.test.ts` | 23 | Plan mutation, intent ensure, pipeline dispatch, semaphore |
@@ -656,7 +656,7 @@ npm run test:coverage # With coverage report
 │   ├── state.test.ts                 # 15 state management tests
 │   ├── context.test.ts               # 14 context assembly tests
 │   ├── intent.test.ts                # 13 heuristic + LLM intent tests
-│   ├── env.test.ts                   # 26 env validation tests
+│   ├── env.test.ts                   # 29 env validation tests
 │   ├── security-headers.test.ts      # 12 security header tests
 │   ├── sanitize.test.ts              # 11 secret redaction tests
 │   ├── loop.test.ts                  # 6 agent-loop integration tests
