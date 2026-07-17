@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [7.0.0] - Startup Env Validation & Security Hardening (CSP, HSTS) - 2026-07-16
+
+### Security
+* **Content Security Policy enabled (H-1 fix).** Replaced `contentSecurityPolicy: false` in `server.ts` with a comprehensive CSP covering `default-src 'self'`, `script-src 'self' 'unsafe-inline'`, `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`, `font-src 'self' https://fonts.gstatic.com`, `img-src 'self' data: https:`, `connect-src 'self' ws://localhost:3000 ws://0.0.0.0:3000`, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, and `upgrade-insecure-requests` — closing the gap where the React dashboard rendered untrusted Slack/AI content via `dangerouslySetInnerHTML` with no script-src protection.
+* **Clickjacking protection (L-1 fix).** Set `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'` so the dashboard cannot be embedded in malicious iframes; older browsers respect the header, modern ones use CSP.
+* **MIME-sniffing prevention (L-3 fix).** `X-Content-Type-Options: nosniff` is now applied globally (helmet default, previously disabled alongside CSP).
+* **HTTPS enforcement.** Added an HTTP→HTTPS redirect middleware (active in production when `x-forwarded-proto` is `http`, gated by `DISABLE_HTTPS_REDIRECT` env var) and `Strict-Transport-Security` header (`max-age=31536000; includeSubDomains; preload`) in production only.
+* **Fail-fast startup validation.** New `src/server/env.ts` checks all critical env vars (`GEMINI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DASHBOARD_PASSWORD`, database connection config, `APP_URL`) at boot with clear error messages and calls `process.exit(1)` before `app.listen()` in all environments. Placeholder detection (case-insensitive match against `MY_GEMINI_API_KEY`, `xoxb-myslackbottoken`, `my_slack_signing_secret`, `MY_SIGNING_SECRET`, `my_dashboard_password`, `changeme`, `placeholder`) prevents accidental deployment with example values.
+* **Database config only required in production.** In development, missing database env vars produce a warning and the server continues with in-memory state. In production, missing database config is a hard failure.
+* **`VERCEL=1` short-circuits validation entirely**, preserving zero-config serverless deployments.
+* **Secret values are never logged.** Only variable names and reason strings appear in console output.
+
+### Added
+* `src/server/env.ts` — `validateEnv()` module with helpers `isMissing()`, `isEmpty()`, `isPlaceholder()`, `warnOnce()`, and `fail()`.
+* `tests/env.test.ts` — 24 tests covering missing, empty, placeholder, database variants, VERCEL guard, APP_URL production/dev, adapter warnings, and no value leaks.
+* `tests/security-headers.test.ts` — 12 tests covering CSP directives, X-Content-Type-Options, X-Frame-Options, HSTS (present in production, absent in dev), upgrade-insecure-requests, and HTTPS redirect (301 on `x-forwarded-proto: http`, pass-through when missing).
+
+### Changed
+* `server.ts` — replaced old production-only validation block with single `validateEnv()` call inside `initServer()`. Replaced disabled CSP with full helmet configuration. Added HTTPS redirect middleware. Added conditional HSTS.
+
+### New Env Vars
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DISABLE_HTTPS_REDIRECT` | unset | Set to `1` to skip HTTP→HTTPS redirect in production |
+
+### 🧪 Tests
+* 290 tests across 23 files — all passing.
+* `tsc --noEmit` — 0 errors in changed files.
+
 ## [6.9.0] - Fix Gemini thoughtSignature for streaming function calls - 2026-07-15
 
 ### Fixed

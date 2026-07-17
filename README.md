@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-21%20files%20%7C%20244%20tests-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-23%20files%20%7C%20290%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -48,6 +48,7 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 - [Tool System & Adapters](#-tool-system--adapters)
 - [Approval Flow](#-approval-flow)
 - [Scheduler & Deferral](#-scheduler--deferral)
+- [Security](#-security)
 - [Database Schema](#-database-schema)
 - [Worker & Queue](#-worker--queue)
 - [Test Suite](#-test-suite)
@@ -159,6 +160,9 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 | Skills system | Reusable system-prompt fragments injected at plan time based on environment |
 | Bot mention stripping on `app_mention` events | Passes clean text to LLM (no `<@BOTID>` prefix confusion) |
 | Configurable date/timezone context | `AGENT_TIMEZONE` + `AGENT_INCLUDE_DATETIME` for time-aware agent behavior |
+| Fail-fast env validation at boot | Catches missing/placeholder secrets before `app.listen()`, not on first user request |
+| Content Security Policy (CSP) | `default-src 'self'` + restrictive directives prevent XSS via `dangerouslySetInnerHTML` rendering of Slack/AI content |
+| HTTPS redirect + HSTS | Production-only middleware redirects HTTP→HTTPS when `x-forwarded-proto` is `http`; `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` |
 
 ---
 
@@ -399,6 +403,55 @@ Supported patterns:
 
 ---
 
+## 🔒 Security
+
+### Content Security Policy (CSP)
+
+A restrictive CSP is applied via `helmet` at server startup. All directives use `'self'` as the baseline, with specific allowances for the React/Vite dev environment:
+
+| Directive | Value | Rationale |
+|-----------|-------|-----------|
+| `default-src` | `'self'` | Baseline — everything same-origin |
+| `script-src` | `'self'` `'unsafe-inline'` | Vite HMR injects inline module scripts in dev; React renders formatted content through `dangerouslySetInnerHTML` |
+| `style-src` | `'self'` `'unsafe-inline'` `https://fonts.googleapis.com` | Tailwind CSS inline styles + Google Fonts stylesheet |
+| `font-src` | `'self'` `https://fonts.gstatic.com` | Google Fonts woff2 delivery |
+| `img-src` | `'self'` `data:` `https:` | Slack-hosted images and inline data URIs |
+| `connect-src` | `'self'` `ws://localhost:3000` `ws://0.0.0.0:3000` | API calls + Vite HMR WebSocket |
+| `frame-ancestors` | `'none'` | Clickjacking prevention |
+| `object-src` | `'none'` | Block plugin execution |
+| `base-uri` | `'self'` | Prevent base tag injection |
+| `form-action` | `'self'` | Restrict form submission targets |
+
+`upgrade-insecure-requests` is also present (helmet default), auto-upgrading HTTP resources to HTTPS.
+
+### HTTP Security Headers
+
+| Header | Value | Applied | Purpose |
+|--------|-------|---------|---------|
+| `X-Content-Type-Options` | `nosniff` | All responses | Prevent MIME-type sniffing |
+| `X-Frame-Options` | `DENY` | All responses | Legacy clickjacking prevention |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains; preload` | Production only | Enforce HTTPS at browser level |
+| `X-Powered-By` | Removed | All responses | Hide server info |
+| `Referrer-Policy` | `no-referrer` | All responses | Prevent referrer leakage |
+
+### Startup Validation
+
+Environment variables are validated at boot in `src/server/env.ts`. The check runs before `app.listen()` and covers:
+
+- **Critical vars** (all environments): `GEMINI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
+- **Dashboard password** (production only): `DASHBOARD_PASSWORD` — missing in dev produces a warning and dashboard runs without auth (open access); missing in production is a hard failure. Placeholder values are production-fatal, dev-warned.
+- **Database** (production only): `DATABASE_URL`, `CLOUD_SQL_CONNECTION_NAME`, or `SQL_HOST` — missing DB vars in dev produce a warning and the server starts with in-memory state
+- **`APP_URL`** (production only, required): webhook callbacks use localhost fallback in dev
+- **Placeholder detection**: case-insensitive match against a blocklist (`MY_GEMINI_API_KEY`, `xoxb-myslackbottoken`, `my_slack_signing_secret`, `changeme`, `placeholder`, etc.) prevents accidental deployment with example values
+- **`VERCEL=1`** bypass: validation is skipped entirely when running on Vercel
+- **External adapter vars** (`TAVILY_API_KEY`, `GITHUB_TOKEN`, `EMAIL_WEBHOOK_URL`, `SANDBOX_API_KEY`): warned but never block boot
+
+### HTTPS Redirect
+
+In production, a middleware checks `x-forwarded-proto` (set by Cloud Run / Vercel edge) and issues an HTTP 301 redirect to `https://` when the header value is `http`. Disable with `DISABLE_HTTPS_REDIRECT=1`.
+
+---
+
 ## 🗄 Database Schema
 
 PostgreSQL with 11 idempotent migrations (v1–v11). All DDL uses `IF NOT EXISTS` / `IF EXISTS` guards.
@@ -453,7 +506,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-21 test files, 244 test cases. Run with:
+23 test files, 292 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -463,6 +516,8 @@ npm run test:coverage # With coverage report
 
 | Suite | File | Tests | Coverage |
 |-------|------|:-----:|----------|
+| Env Validation | `tests/env.test.ts` | 26 | Missing/empty/placeholder vars, DB variants, VERCEL guard, APP_URL, adapter warnings, DASHBOARD_PASSWORD dev/prod split |
+| Security Headers | `tests/security-headers.test.ts` | 12 | CSP directives, HSTS, X-Frame-Options, nosniff, HTTPS redirect |
 | Agent Handlers | `tests/handlers.test.ts` | 27 | direct reply, durable task, status query, approval response, cancel/update |
 | Agent Extras | `tests/agent-extra.test.ts` | 23 | Plan mutation, intent ensure, pipeline dispatch, semaphore |
 | State Management | `tests/state.test.ts` | 15 | Thread memory, dedup sets, intent hash, LRU eviction |
@@ -536,12 +591,13 @@ npm run test:coverage # With coverage report
 │   ├── index.css                      # Tailwind CSS
 │   ├── types.ts                       # Shared frontend/backend types
 │   └── server/
-│       ├── routes.ts                  # All API routes + Slack signature verify
-│       ├── auth.ts                    # Dashboard password auth middleware
-│       ├── state.ts                   # In-memory logs, model selection, dedup sets
-│       ├── ai.ts                      # Gemini SDK wrapper
-│       ├── rateLimitStore.ts          # KV-backed express-rate-limit store
-│       ├── redis.ts                   # Vercel KV / Upstash Redis client
+│   ├── routes.ts                  # All API routes + Slack signature verify
+│   ├── auth.ts                    # Dashboard password auth middleware
+│   ├── env.ts                     # Startup environment variable validation
+│   ├── state.ts                   # In-memory logs, model selection, dedup sets
+│   ├── ai.ts                      # Gemini SDK wrapper
+│   ├── rateLimitStore.ts          # KV-backed express-rate-limit store
+│   ├── redis.ts                   # Vercel KV / Upstash Redis client
 │       ├── agent/
 │       │   ├── orchestrator.ts        # Pipeline entry point, resume logic
 │       │   ├── intent.ts              # Heuristic + LLM intent classifier
@@ -600,6 +656,11 @@ npm run test:coverage # With coverage report
 │   ├── state.test.ts                 # 15 state management tests
 │   ├── context.test.ts               # 14 context assembly tests
 │   ├── intent.test.ts                # 13 heuristic + LLM intent tests
+│   ├── env.test.ts                   # 26 env validation tests
+│   ├── security-headers.test.ts      # 12 security header tests
+│   ├── sanitize.test.ts              # 11 secret redaction tests
+│   ├── loop.test.ts                  # 6 agent-loop integration tests
+│   ├── vercel.test.ts                # 13 Vercel integration tests
 │   ├── attachments.test.ts           # 13 attachment processing tests
 │   ├── vercel.test.ts                # 13 Vercel integration tests
 │   ├── sanitize.test.ts              # 11 secret redaction tests
@@ -638,17 +699,19 @@ npm run test:coverage # With coverage report
 
 ## 🔐 Environment Variables
 
-### Required
+### Required (validated at boot)
+
+Three are required in all environments; `DASHBOARD_PASSWORD` is production-only (dev warns and opens the dashboard without auth):
 
 | Variable | Description |
 |----------|-------------|
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `SLACK_BOT_TOKEN` | Slack Bot User OAuth Token (`xoxb-...`) |
 | `SLACK_SIGNING_SECRET` | Slack app signing secret (HMAC verification) |
-| `DASHBOARD_PASSWORD` | Password for the admin dashboard |
-| `APP_URL` | Base URL of your deployed application (used for trigger callbacks) |
+| `DASHBOARD_PASSWORD` | Password for the admin dashboard (production-required) |
+| `APP_URL` | Base URL of your deployed application (production-required for webhook callbacks) |
 
-### Database (one of these groups)
+### Database (one of these groups; production-required, dev-warned)
 
 | Variable | Description |
 |----------|-------------|
@@ -705,6 +768,9 @@ npm run test:coverage # With coverage report
 | `KV_REST_API_TOKEN` | Vercel KV REST API token |
 | `UPSTASH_REDIS_REST_URL` | Alternative: standalone Upstash Redis URL |
 | `UPSTASH_REDIS_REST_TOKEN` | Alternative: standalone Upstash Redis token |
+| `DISABLE_HTTPS_REDIRECT` | Set to `1` to skip automatic HTTP→HTTPS redirect in production |
+
+### Vercel / Workflows Configuration
 
 ### External Adapters
 
@@ -843,5 +909,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v6.13.0 | ✅ Done | KV-backed express-rate-limit store for production rate limiting |
 | v6.14.0 | ✅ Done | Skills system, Sandbox code execution adapter, WebFetch adapter, WebSearch adapter |
 | v6.15.0 | ✅ Done | Bot mention stripping from `app_mention` events; thread history compaction for direct replies |
-
-#
+| v7.0.0 | ✅ Done | Startup env validation & security hardening (CSP, HSTS, HTTPS redirect, X-Frame-Options, nosniff) |

@@ -9,6 +9,7 @@ import { router as apiRoutes } from "./src/server/routes.js";
 import { runMigrations } from "./src/server/storage/migrations.js";
 import { closeDb } from "./src/server/storage/db.js";
 import { KvRateLimitStore } from "./src/server/rateLimitStore.js";
+import { validateEnv } from "./src/server/env.js";
 
 dotenv.config();
 
@@ -19,9 +20,38 @@ const PORT = parseInt(process.env.PORT || '3000');
 // Security: Expose minimal server information
 app.disable('x-powered-by');
 
+// Security: Redirect HTTP to HTTPS in production (behind proxy)
+if (process.env.DISABLE_HTTPS_REDIRECT !== '1' && process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    if (req.headers['x-forwarded-proto'] === 'http') {
+      res.redirect(301, `https://${req.headers['host']}${req.originalUrl}`);
+    } else {
+      next();
+    }
+  });
+}
+
 // Security: Set HTTP Security Headers
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "ws://localhost:3000", "ws://0.0.0.0:3000"],
+      frameAncestors: ["'none'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      ...(process.env.NODE_ENV === 'production' && { upgradeInsecureRequests: [] }),
+    },
+  },
+  xFrameOptions: { action: 'deny' },
+  strictTransportSecurity: process.env.NODE_ENV === 'production'
+    ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+    : false,
 }));
 
 // Security: Cross-Origin Resource Sharing (CORS)
@@ -96,17 +126,7 @@ let server: ReturnType<typeof app.listen> | null = null;
 
 // Configure Vite middleware or static paths based on environment
 async function initServer() {
-  // Security: Refuse to start in production without required secrets
-  if (process.env.NODE_ENV === 'production') {
-    const missingSecrets: string[] = [];
-    if (!process.env.SLACK_SIGNING_SECRET?.trim()) missingSecrets.push('SLACK_SIGNING_SECRET');
-    if (!process.env.DASHBOARD_PASSWORD?.trim()) missingSecrets.push('DASHBOARD_PASSWORD');
-    if (missingSecrets.length > 0) {
-      console.error(`\n[FATAL] Production startup blocked: missing required secrets: ${missingSecrets.join(', ')}`);
-      console.error('[FATAL] Set these environment variables before deploying. Refusing to bind with permissive fallbacks.\n');
-      process.exit(1);
-    }
-  }
+  validateEnv();
 
   try {
     if (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) {
