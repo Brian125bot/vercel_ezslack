@@ -1,4 +1,4 @@
-# 🧠 Dynamic Gemini Slack AI Agent Backend 
+# 🧠 Dynamic Gemini Slack AI Agent Backend #
 
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
