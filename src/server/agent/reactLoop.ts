@@ -184,7 +184,38 @@ export async function runAgentLoop(
 
     // 5) No tool call → final natural-language answer.
     const finalText = response.text?.trim() || '';
+
+    // Record the model's final answer turn so a resume/audit sees the produced
+    // answer, then persist it as a terminal step. Without a step for the final
+    // answer, the run trace shows only the intermediate tool calls and never the
+    // synthesized result — so the semantic verifier concludes the goal was not
+    // satisfied and forces an endless replan, which burns durable re-enqueues.
+    if (finalText) {
+      contents.push({ role: 'model', parts: response.parts || [{ text: finalText }] });
+    }
     await agentStore.updateRunMessages(run.id, contents);
+
+    if (finalText) {
+      const answerStep = await agentStore.createStep({
+        run_id: run.id,
+        plan_id: planId!,
+        order_index: ++stepOrder,
+        title: 'Final answer',
+        status: 'succeeded',
+        input: { kind: 'generate' },
+        output: { generated: finalText }
+      });
+      await agentStore.appendAuditEvent({
+        workspace_id: goal.workspace_id,
+        goal_id: goal.id,
+        run_id: run.id,
+        step_id: answerStep.id,
+        type: 'agent_loop.final_answer',
+        actor: 'system',
+        summary: 'Agent loop produced final answer',
+        payload: { chars: finalText.length }
+      });
+    }
 
     // WS6: surface the answer to the user as it streams in (post + incremental
     // update). The reporter still posts the structured run report afterwards.
