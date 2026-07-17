@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-25%20files%20%7C%20311%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-25%20files%20%7C%20313%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -443,7 +443,7 @@ Environment variables are validated at boot in `src/server/env.ts`. The check ru
 - **Database** (all environments): `DATABASE_URL`, `CLOUD_SQL_CONNECTION_NAME`, or `SQL_HOST` — at least one is required on all platforms (including Vercel). Missing/unconfigured database vars prevent startup.
 - **`APP_URL`** (production only, required): webhook callbacks use localhost fallback in dev
 - **Placeholder detection**: case-insensitive match against a blocklist (`MY_GEMINI_API_KEY`, `xoxb-myslackbottoken`, `my_slack_signing_secret`, `changeme`, `placeholder`, etc.) prevents accidental deployment with example values
-- **`VERCEL=1`** bypass: validation is skipped entirely when running on Vercel
+- **`VERCEL=1`**: validation is enforced on all platforms including Vercel (bypass removed)
 - **External adapter vars** (`TAVILY_API_KEY`, `GITHUB_TOKEN`, `EMAIL_WEBHOOK_URL`, `SANDBOX_API_KEY`): warned but never block boot
 
 ### HTTPS Redirect
@@ -454,7 +454,7 @@ In production, a middleware checks `x-forwarded-proto` (set by Cloud Run / Verce
 
 ## 🗄 Database Schema
 
-PostgreSQL with 11 idempotent migrations (v1–v11). All DDL uses `IF NOT EXISTS` / `IF EXISTS` guards.
+PostgreSQL with 12 idempotent migrations (v1–v12). All DDL uses `IF NOT EXISTS` / `IF EXISTS` guards.
 
 ### Tables
 
@@ -465,7 +465,7 @@ PostgreSQL with 11 idempotent migrations (v1–v11). All DDL uses `IF NOT EXISTS
 | `agent_runs` | Individual execution attempts (queue claims, lease tracking) |
 | `agent_steps` | Ordered steps within a run (tool/generate/note) |
 | `tool_calls` | Detailed tool execution records |
-| `approval_requests` | Pending/resolved approval records with expiry |
+| `approval_requests` | Pending/resolved approval records with expiry, plan version scoping, and consumption tracking |
 | `memory_records` | Agent long-term memory (per-workspace, per-user) |
 | `audit_events` | Full replayable timeline of all agent actions |
 | `scheduled_triggers` | Cron/interval/one-shot triggers for deferred goals |
@@ -506,7 +506,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-25 test files, 311 test cases. Run with:
+25 test files, 313 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -516,7 +516,7 @@ npm run test:coverage # With coverage report
 
 | Suite | File | Tests | Coverage |
 |-------|------|:-----:|----------|
-| Env Validation | `tests/env.test.ts` | 29 | Missing/empty/placeholder vars, DB variants, VERCEL guard, APP_URL, adapter warnings, DASHBOARD_PASSWORD dev/prod split, DB/APP_URL placeholder detection |
+| Env Validation | `tests/env.test.ts` | 31 | Missing/empty/placeholder vars, DB variants, VERCEL guard, APP_URL, adapter warnings, DASHBOARD_PASSWORD dev/prod split, DB/APP_URL placeholder detection, no value leaks |
 | Security Headers | `tests/security-headers.test.ts` | 12 | CSP directives, HSTS, X-Frame-Options, nosniff, HTTPS redirect |
 | Agent Handlers | `tests/handlers.test.ts` | 27 | direct reply, durable task, status query, approval response, cancel/update |
 | Agent Extras | `tests/agent-extra.test.ts` | 23 | Plan mutation, intent ensure, pipeline dispatch, semaphore |
@@ -701,7 +701,7 @@ npm run test:coverage # With coverage report
 
 ### Required (validated at boot)
 
-Three are required in all environments; `DASHBOARD_PASSWORD` is production-only (dev warns and opens the dashboard without auth):
+Three are required in all environments; `DASHBOARD_PASSWORD` is warn-only everywhere (open access when unset):
 
 | Variable | Description |
 |----------|-------------|
@@ -711,7 +711,7 @@ Three are required in all environments; `DASHBOARD_PASSWORD` is production-only 
 | `DASHBOARD_PASSWORD` | Password for the admin dashboard (production-required) |
 | `APP_URL` | Base URL of your deployed application (production-required for webhook callbacks) |
 
-### Database (one of these groups; production-required, dev-warned)
+### Database (at least one required — all platforms including Vercel)
 
 | Variable | Description |
 |----------|-------------|
@@ -911,3 +911,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v6.15.0 | ✅ Done | Bot mention stripping from `app_mention` events; thread history compaction for direct replies |
 | v7.0.0 | ✅ Done | Startup env validation & security hardening (CSP, HSTS, HTTPS redirect, X-Frame-Options, nosniff) |
 | v7.1.0 | ✅ Done | Centralized system maintenance (shared runSystemMaintenance, cron/workflow dedup) |
+| v7.2.0 | ✅ Done | Env validation on Vercel, approval scope creep fix (plan_version_id, consumption) |

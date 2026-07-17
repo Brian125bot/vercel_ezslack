@@ -2,7 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
-## [7.1.0] - Centralized System Maintenance - 2026-07-16
+## [7.2.0] - Env Validation on Vercel, Approval Scope Creep Fix - 2026-07-17
+
+### Security
+
+* **Env validation now runs on Vercel deployments.** Removed `VERCEL=1` bypass from startup validation — `validateEnv()` now runs at module scope in `server.ts` so it fires on all platforms including Vercel serverless imports. Previously, if an operator deployed without setting `SLACK_SIGNING_SECRET` or `GEMINI_API_KEY`, the app started silently with open signature verification and disabled agent logic. Now the deployment fails with explicit `[FATAL]` messages mentioning `.env.example`. DASHBOARD_PASSWORD remains warn-only (open-access dev mode allowed).
+* **Module-level validation guard added.** `server.ts` calls `validateEnv()` at module scope (after `dotenv.config()`) so validation runs before any middleware or route setup, even on Vercel where `initServer()` is not called.
+
+### Fixed
+
+* **Approval scope creep fix.** Plan-level approvals are now scoped by `plan_version_id` — a stale approval from a previous plan version can no longer auto-approve a replanned set of steps. Approvals are also single-use: the first `external_write` tool step consumes the approval, preventing unbounded execution of subsequent steps under the same plan-level approval. Migration v12 adds `consumed_at`, `plan_version_id`, and `consumed_step_count` columns to `approval_requests` with supporting indexes.
+
+### Added
+
+* `src/server/storage/types.ts` — `ApprovalRequest` fields: `consumed_at`, `plan_version_id`, `consumed_step_count`
+* `src/server/storage/schema.ts` — migration v12 (`approval_scope_creep_fix`)
+* `src/server/storage/agentStore.ts` — `getApprovedPlanApprovalForVersion()` and `consumeApproval()` methods
+* `src/server/agent/loop.ts` — version-scoped approval checking and consumption logic
+
+### Tests
+
+* `tests/vercel.test.ts` — updated `beforeEach` to set critical env vars for module-level validation compatibility
+* `tests/security-headers.test.ts` — updated all 3 `beforeAll` blocks to set env vars before importing `server.js`
+
+### 🧪 Test Results
+
+* 313 tests across 25 files — all passing.
+* `tsc --noEmit` — clean.
 
 ### Added
 * **Centralized system maintenance (`runSystemMaintenance`).** Extracted maintenance logic (stale claim recovery, approval expiry, dedup cleanup, scheduled trigger polling) into `src/server/agent/maintenance.ts` for reuse by both the daily Vercel Cron endpoint and on-demand workflow bootstrap. This reduces code duplication and ensures low MTTR for stale claims across all invocation paths.
