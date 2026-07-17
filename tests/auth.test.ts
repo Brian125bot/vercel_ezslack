@@ -19,10 +19,10 @@ vi.mock('../src/server/state.js', () => ({ addLog: addLogMock }));
 const ORIGINAL_ENV = { ...process.env };
 const PASSWORD = 'correct-horse-battery-staple';
 
-type MockRes = Response & {
+interface MockRes {
   statusCode: number;
   body: unknown;
-};
+}
 
 function makeReq(password: string, ip = '203.0.113.7'): Request {
   return {
@@ -34,17 +34,20 @@ function makeReq(password: string, ip = '203.0.113.7'): Request {
   } as unknown as Request;
 }
 
-function makeRes(): MockRes {
-  const res = {} as MockRes;
-  res.status = vi.fn((code: number) => {
-    res.statusCode = code;
-    return res;
-  }) as unknown as Response['status'];
-  res.json = vi.fn((payload: unknown) => {
-    res.body = payload;
-    return res;
-  }) as unknown as Response['json'];
-  return res;
+function makeRes(): Response & MockRes {
+  const res = {
+    statusCode: 0,
+    body: undefined as unknown,
+    status(code: number) {
+      res.statusCode = code;
+      return res;
+    },
+    json(payload: unknown) {
+      res.body = payload;
+      return res;
+    },
+  };
+  return res as unknown as Response & MockRes;
 }
 
 async function loadAuth() {
@@ -67,6 +70,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = { ...ORIGINAL_ENV };
+  vi.useRealTimers();
 });
 
 describe('requireDashboardAuth - open access', () => {
@@ -180,6 +184,46 @@ describe('requireDashboardAuth - failed auth via Redis', () => {
     await modB.requireDashboardAuth(makeReq('wrong', ip), blockedRes, next);
     expect(blockedRes.statusCode).toBe(429);
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it('does not re-lock via a stale local counter after the shared window resets', async () => {
+    // Fake only Date so setTimeout penalty delays still resolve in real time.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = new Date('2025-01-01T00:00:00Z').getTime();
+    vi.setSystemTime(t0);
+
+    // Shared Redis state anchored to the first failure with a 15-min TTL.
+    let failures = 0;
+    let lockedOut = false;
+    redisMock.isRedisConfigured.mockReturnValue(true);
+    redisMock.recordAuthFailure.mockImplementation(async () => ++failures);
+    redisMock.isAuthLockedOut.mockImplementation(async () => lockedOut);
+    redisMock.lockoutAuth.mockImplementation(async () => {
+      lockedOut = true;
+    });
+
+    const ip = '203.0.113.200';
+    const { requireDashboardAuth } = await loadAuth();
+
+    // 5 wrong attempts on this warm instance => Redis lockout, local count = 5.
+    for (let i = 0; i < 5; i++) {
+      await requireDashboardAuth(makeReq('wrong', ip), makeRes(), vi.fn() as NextFunction);
+    }
+    expect(lockedOut).toBe(true);
+
+    // 15+ minutes pass: Redis lockout + failures keys expire (TTL), and the
+    // local lockUntil window also elapses. The local Map still holds count = 5.
+    vi.setSystemTime(t0 + 16 * 60 * 1000);
+    failures = 0;
+    lockedOut = false;
+
+    // One wrong attempt: shared counter restarts at 1, so this must NOT re-lock.
+    const res = makeRes();
+    const next = vi.fn() as NextFunction;
+    await requireDashboardAuth(makeReq('wrong', ip), res, next);
+    expect(res.statusCode).toBe(401);
+    expect(lockedOut).toBe(false);
+    expect(redisMock.lockoutAuth).toHaveBeenCalledTimes(1); // only the original lockout
   });
 });
 

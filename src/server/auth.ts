@@ -122,9 +122,11 @@ export const requireDashboardAuth = async (req: Request, res: Response, next: Ne
   let failCount = currentAttempt.count;
   if (redisAvailable) {
     const redisCount = await recordAuthFailure(ip);
-    // Use the higher of the two so a transient Redis error can't lower the
-    // effective count below what this instance has already observed locally.
-    failCount = Math.max(redisCount, currentAttempt.count);
+    // Trust the shared Redis count as the source of truth (it decays with the
+    // 15-min TTL). Only fall back to the local, non-decaying count when Redis
+    // is unavailable (recordAuthFailure returns 0), so a stale warm-instance
+    // counter can't re-lock a legitimate admin after the shared window resets.
+    failCount = redisCount > 0 ? redisCount : currentAttempt.count;
   }
 
   let isLocked = false;
