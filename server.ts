@@ -61,24 +61,12 @@ app.use(cors({
 // Security: Global API Rate Limiting to prevent DoS attacks.
 // Uses Vercel KV (Upstash Redis) when configured so the counter is shared
 // across all serverless instances; falls back to per-process memory otherwise.
-let apiLimiterStore: KvRateLimitStore | undefined;
+let apiLimiterStore: import('express-rate-limit').Store | undefined;
 if (process.env.NODE_ENV === 'production' && (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)) {
   try {
     apiLimiterStore = new KvRateLimitStore();
   } catch (err) {
     console.warn('[RateLimit] Falling back to in-memory store:', err);
-  }
-}
-
-// Fail-visible config check: on Vercel (multi-instance serverless), the global
-// 2000/15min limit only works with a shared KV store. If KV is not configured in
-// production, surface an explicit warning so operators are not silently degraded.
-if (process.env.NODE_ENV === 'production') {
-  const hasKv = !!(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL);
-  if (!hasKv) {
-    console.warn('[WARN] KV_REST_API_URL not configured. Rate limiting will NOT be shared across instances.');
-    console.warn('[WARN] Each serverless instance will have its own 2000req/15min limit (not global).');
-    console.warn('[WARN] For distributed rate limiting, set KV_REST_API_URL in production env.');
   }
 }
 
@@ -92,11 +80,6 @@ const apiLimiter = rateLimit({
   validate: { xForwardedForHeader: false, default: true }
 });
 app.use("/api", apiLimiter);
-
-// Expose the rate-limiter store instance for the /api/health endpoint so
-// operators can detect when distributed rate limiting is degraded to
-// per-instance memory at runtime (not just at config time).
-app.set('rateLimiterStore', apiLimiterStore);
 
 // Preserve raw buffer body for Slack signature verify
 app.use(express.json({

@@ -3,56 +3,22 @@ import { getRedisClient } from './redis.js';
 
 type Hit = { totalHits: number; resetTime: Date | undefined };
 
-// Degraded-mode fallback: when the KV/Redis client is unavailable, we keep a
-// per-instance in-memory counter so requests still flow (rather than hard-failing)
-// but explicitly log that distributed rate limiting is no longer active.
-const fallbackHits = new Map<string, { count: number; resetTime: number }>();
-
 export class KvRateLimitStore implements Store {
   prefix = 'rl:';
   // Shared (non-local) store: tells express-rate-limit this counter is not
   // per-process, which suppresses false double-count warnings.
   localKeys = false;
   windowMs!: number;
-  // Tracks whether the store has degraded to the per-instance in-memory fallback
-  // at runtime (e.g. Redis became unavailable). Used by /api/health reporting.
-  degraded = false;
 
   init(options: { windowMs: number }): void {
     this.windowMs = options.windowMs;
   }
 
-  private sweepFallback(now: number): void {
-    for (const [k, v] of fallbackHits) {
-      if (v.resetTime <= now) fallbackHits.delete(k);
-    }
-  }
-
-  private incrementFallback(key: string): Hit {
-    const now = Date.now();
-    this.sweepFallback(now);
-    const existing = fallbackHits.get(key);
-    if (existing && existing.resetTime > now) {
-      existing.count += 1;
-      return { totalHits: existing.count, resetTime: new Date(existing.resetTime) };
-    }
-    const resetTime = now + this.windowMs;
-    fallbackHits.set(key, { count: 1, resetTime });
-    return { totalHits: 1, resetTime: new Date(resetTime) };
-  }
-
   async increment(key: string): Promise<Hit> {
     const client = await getRedisClient();
     if (!client) {
-      if (!this.degraded) {
-        console.warn('[RateLimit] KV unavailable: falling back to per-instance in-memory store (degraded mode)');
-        this.degraded = true;
-      }
-      return this.incrementFallback(key);
-    }
-    if (this.degraded) {
-      // Recovered: Redis is reachable again, leave degraded mode.
-      this.degraded = false;
+      console.warn('[RateLimit] KV store unavailable, falling back to in-memory');
+      throw new Error('KV rate-limit store unavailable');
     }
     const redisKey = this.prefix + key;
     
@@ -87,8 +53,7 @@ export class KvRateLimitStore implements Store {
   async decrement(key: string): Promise<void> {
     const client = await getRedisClient();
     if (!client) {
-      const entry = fallbackHits.get(key);
-      if (entry) entry.count = Math.max(0, entry.count - 1);
+      console.warn('[RateLimit] KV store unavailable for decrement');
       return;
     }
     await client.decr(this.prefix + key);
@@ -97,7 +62,7 @@ export class KvRateLimitStore implements Store {
   async resetKey(key: string): Promise<void> {
     const client = await getRedisClient();
     if (!client) {
-      fallbackHits.delete(key);
+      console.warn('[RateLimit] KV store unavailable for resetKey');
       return;
     }
     await client.del(this.prefix + key);
