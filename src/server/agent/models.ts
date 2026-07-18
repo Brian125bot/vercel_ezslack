@@ -11,9 +11,8 @@
 export const ALLOWED_MODELS = [
   'gemini-3.5-flash',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash'
+  'gemini-3.0-flash',
+  'gemini-2.5-flash'
 ] as const;
 
 export type AllowedModel = typeof ALLOWED_MODELS[number];
@@ -42,9 +41,8 @@ export const CONTEXT_WINDOW_TOKENS: Record<AllowedModel, number> = {
   'gemini-3.5-flash': 1_000_000,
   // Flash-lite is a smaller, cheaper tier with a narrower context window.
   'gemini-3.1-flash-lite': 128_000,
+  'gemini-3.0-flash': 1_000_000,
   'gemini-2.5-flash': 1_000_000,
-  'gemini-2.0-flash': 1_000_000,
-  'gemini-1.5-flash': 1_000_000,
 };
 
 export function getContextWindowTokens(model: string | null | undefined): number {
@@ -65,9 +63,8 @@ export function getMaxOutputTokens(model: string | null | undefined): number {
   const modelConfig = {
     'gemini-3.5-flash': 8192,
     'gemini-3.1-flash-lite': 4096,
+    'gemini-3.0-flash': 8192,
     'gemini-2.5-flash': 8192,
-    'gemini-2.0-flash': 8192,
-    'gemini-1.5-flash': 4096,
   };
   
   return modelConfig[resolved] || 4096;
