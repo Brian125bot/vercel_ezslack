@@ -83,7 +83,9 @@ router.get('/status', requireDashboardAuth, async (req, res) => {
     selectedModel: currentModel,
     availableModels: [
       { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', description: 'Default. Extra fast, low latency, perfect for messaging workflows.' },
+      { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', description: 'Next-generation model. Superior multimodal reasoning and advanced agentic capabilities.' },
       { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Ultimate intelligence/speed ratio. Incredible logic capabilities.' },
+      { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite', description: 'Lightweight intelligence. Highly optimized for high-throughput messaging workflows.' },
       { id: 'gemini-3.0-flash', name: 'Gemini 3.0 Flash', description: 'Next-gen experimental agentic and search capabilities.' },
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Stable and responsive general-purpose logic automations.' }
     ]

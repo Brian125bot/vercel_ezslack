@@ -7,7 +7,9 @@ beforeEach(() => {
 describe('isAllowedModel', () => {
   it('returns true for valid allowed models', async () => {
     const { isAllowedModel } = await import('../src/server/agent/models.js');
+    expect(isAllowedModel('gemini-3.6-flash')).toBe(true);
     expect(isAllowedModel('gemini-3.5-flash')).toBe(true);
+    expect(isAllowedModel('gemini-3.5-flash-lite')).toBe(true);
     expect(isAllowedModel('gemini-3.1-flash-lite')).toBe(true);
     expect(isAllowedModel('gemini-3.0-flash')).toBe(true);
     expect(isAllowedModel('gemini-2.5-flash')).toBe(true);
@@ -25,7 +27,9 @@ describe('isAllowedModel', () => {
 describe('resolveModel', () => {
   it('passes through a valid allowed model', async () => {
     const { resolveModel } = await import('../src/server/agent/models.js');
+    expect(resolveModel('gemini-3.6-flash')).toBe('gemini-3.6-flash');
     expect(resolveModel('gemini-3.5-flash')).toBe('gemini-3.5-flash');
+    expect(resolveModel('gemini-3.5-flash-lite')).toBe('gemini-3.5-flash-lite');
     expect(resolveModel('gemini-3.0-flash')).toBe('gemini-3.0-flash');
     expect(resolveModel('gemini-2.5-flash')).toBe('gemini-2.5-flash');
   });
@@ -57,7 +61,9 @@ describe('getMaxOutputTokens', () => {
   it('returns correct max output tokens for each allowed model', async () => {
     const { getMaxOutputTokens, ALLOWED_MODELS } = await import('../src/server/agent/models.js');
     const expected: Record<string, number> = {
+      'gemini-3.6-flash': 8192,
       'gemini-3.5-flash': 8192,
+      'gemini-3.5-flash-lite': 8192,
       'gemini-3.1-flash-lite': 4096,
       'gemini-3.0-flash': 8192,
       'gemini-2.5-flash': 8192,
@@ -83,7 +89,9 @@ describe('constants', () => {
 
   it('ALLOWED_MODELS includes all expected models', async () => {
     const { ALLOWED_MODELS } = await import('../src/server/agent/models.js');
+    expect(ALLOWED_MODELS).toContain('gemini-3.6-flash');
     expect(ALLOWED_MODELS).toContain('gemini-3.5-flash');
+    expect(ALLOWED_MODELS).toContain('gemini-3.5-flash-lite');
     expect(ALLOWED_MODELS).toContain('gemini-3.1-flash-lite');
     expect(ALLOWED_MODELS).toContain('gemini-3.0-flash');
     expect(ALLOWED_MODELS).toContain('gemini-2.5-flash');
