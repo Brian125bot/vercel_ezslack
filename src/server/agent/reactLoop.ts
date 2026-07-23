@@ -108,6 +108,7 @@ export async function runAgentLoop(
   let toolCallsMade = await countExistingToolCalls(run.id);
   let stepOrder = 0;
   let outcome: AgentLoopOutcome | null = null;
+  let slackReplyPosted = false;
 
   for (let turn = 0; turn < MAX_AGENT_LOOP_TURNS; turn++) {
     if (nearDeadline(ctx.deadlineMs)) {
@@ -169,6 +170,7 @@ export async function runAgentLoop(
           outcome = { status: 'yield', reason: 'approval', messages: contents };
           break;
         }
+        if (fc.name === 'slack.replyInThread') slackReplyPosted = true;
         toolCallsMade++;
         responseParts.push({
           functionResponse: { name: fc.name, response: toolResult.response }
@@ -218,8 +220,9 @@ export async function runAgentLoop(
     }
 
     // WS6: surface the answer to the user as it streams in (post + incremental
-    // update). The reporter still posts the structured run report afterwards.
-    if (finalText && response.streaming) {
+    // update), unless the answer was already posted via slack.replyInThread.
+    // The reporter still posts the structured run report afterwards.
+    if (finalText && response.streaming && !slackReplyPosted) {
       const { streamReplyToThread } = await import('../tools/slack.js');
       await streamReplyToThread(ctx.execContext, response.streaming).catch((err) =>
         slog('agent_loop', 'stream_reply.error', { run_id: run.id, error: err.message })
@@ -258,8 +261,8 @@ function buildSystemPrompt(goal: AgentGoal, contextBlock: string, skills: Loaded
   return [
     'You are a Slack AI agent solving a task by calling tools step by step.',
     'Observe each tool result before deciding the next action.',
-    'When you have enough information to fully answer the user, respond with a final message and no tool call.',
-    'To deliver your final answer to the user, call the `slack.replyInThread` tool with the reply text.',
+    'To deliver your final answer to the user, call the `slack.replyInThread` tool with the reply text. After doing so, do NOT emit additional text — end your response. Any extra text after the tool call is wasted.',
+    'If you have enough information to fully answer the user without any prior tool calls, you may respond with a final text message instead.',
     '',
     `Goal: ${goal.title}`,
     goal.original_instruction,

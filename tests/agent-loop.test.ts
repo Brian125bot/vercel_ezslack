@@ -11,6 +11,7 @@ const {
   toolsRegistry,
   checkPolicy,
   postApprovalBlockKit,
+  streamReplyToThread,
 } = vi.hoisted(() => {
   const geminiAgentStep = vi.fn();
   const toolExecute = vi.fn();
@@ -38,15 +39,16 @@ const {
 
   const checkPolicy = vi.fn();
   const postApprovalBlockKit = vi.fn().mockResolvedValue(undefined);
+  const streamReplyToThread = vi.fn().mockResolvedValue(undefined);
 
-  return { geminiAgentStep, toolExecute, agentStore, toolsRegistry, checkPolicy, postApprovalBlockKit };
+  return { geminiAgentStep, toolExecute, agentStore, toolsRegistry, checkPolicy, postApprovalBlockKit, streamReplyToThread };
 });
 
 vi.mock('../src/server/agent/geminiClient.js', () => ({ geminiAgentStep }));
 vi.mock('../src/server/storage/agentStore.js', () => ({ agentStore }));
 vi.mock('../src/server/tools/registry.js', () => ({ toolsRegistry }));
 vi.mock('../src/server/agent/policy.js', () => ({ checkPolicy }));
-vi.mock('../src/server/tools/slack.js', () => ({ postApprovalBlockKit }));
+vi.mock('../src/server/tools/slack.js', () => ({ postApprovalBlockKit, streamReplyToThread }));
 
 import { runAgentLoop } from '../src/server/agent/reactLoop.js';
 import type { AgentRun, AgentGoal } from '../src/server/storage/types.js';
@@ -174,6 +176,44 @@ describe('runAgentLoop (ReAct loop)', () => {
     expect(agentStore.updateToolCallStatus).toHaveBeenCalledWith('tc-1', 'succeeded', expect.anything());
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') expect(outcome.finalText).toBe('done after tool');
+  });
+
+  it('does not stream the final text when slack.replyInThread was already called', async () => {
+    // Regression: the loop must not call streamReplyToThread for a final text
+    // answer when the model already posted via slack.replyInThread — otherwise
+    // Slack gets two near-duplicate replies for the same run.
+    geminiAgentStep
+      .mockResolvedValueOnce({
+        functionCalls: [{ name: 'slack.replyInThread', args: { text: 'the answer' } }],
+        parts: [{ functionCall: { name: 'slack.replyInThread', args: { text: 'the answer' } }, thoughtSignature: 'sig' }],
+      })
+      .mockResolvedValueOnce({
+        text: 'slightly different answer text',
+        streaming: (async function* () { yield 'slightly different answer text'; })()
+      });
+
+    toolsRegistry.get.mockImplementation((name: string) => {
+      if (name === 'slack.replyInThread') {
+        return { name: 'slack.replyInThread', riskLevel: 'internal_write', requiresApproval: false, execute: toolExecute };
+      }
+      return tool(name);
+    });
+    toolExecute.mockResolvedValue({ status: 'success', message: 'Posted to Slack' });
+
+    const outcome = await runAgentLoop(makeRun(), goal, {
+      deadlineMs: Date.now() + 60_000,
+      signal: new AbortController().signal,
+      execContext,
+    });
+
+    expect(outcome.status).toBe('completed');
+    if (outcome.status === 'completed') expect(outcome.finalText).toBe('slightly different answer text');
+    expect(toolExecute).toHaveBeenCalledWith({ text: 'the answer' }, expect.anything());
+    expect(streamReplyToThread).not.toHaveBeenCalled();
+    // The Final answer step is still persisted for the trace/verifier.
+    expect(agentStore.createStep).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Final answer', status: 'succeeded' })
+    );
   });
 
   it('yields (wall_clock) when the deadline is already near on entry', async () => {
