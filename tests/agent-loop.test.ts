@@ -216,6 +216,47 @@ describe('runAgentLoop (ReAct loop)', () => {
     );
   });
 
+  it('suppresses near-duplicate slack.replyInThread calls in the same thread', async () => {
+    // First call: posts normally
+    geminiAgentStep.mockResolvedValueOnce({
+      functionCalls: [{ name: 'slack.replyInThread', args: { text: 'The 2026 World Cup was won by Spain after defeating Argentina.' } }],
+      parts: [{ functionCall: { name: 'slack.replyInThread', args: { text: 'The 2026 World Cup was won by Spain after defeating Argentina.' } }, thoughtSignature: 'sig' }],
+    });
+
+    toolsRegistry.get.mockImplementation((name: string) => {
+      if (name === 'slack.replyInThread') {
+        return { name: 'slack.replyInThread', riskLevel: 'internal_write', requiresApproval: false, execute: toolExecute };
+      }
+      return tool(name);
+    });
+
+    // First post succeeds
+    toolExecute.mockResolvedValueOnce({ status: 'success', message: 'Posted to Slack' });
+
+    // Second turn: model emits near-duplicate
+    geminiAgentStep.mockResolvedValueOnce({
+      functionCalls: [{ name: 'slack.replyInThread', args: { text: '2026 World Cup was won by Spain after defeating Argentina.' } }],
+      parts: [{ functionCall: { name: 'slack.replyInThread', args: { text: '2026 World Cup was won by Spain after defeating Argentina.' } }, thoughtSignature: 'sig' }],
+    });
+
+    // Third turn: final text answer to complete the loop
+    geminiAgentStep.mockResolvedValueOnce({ text: 'All done.' });
+
+    // Second post should be suppressed by dedup
+    toolExecute.mockResolvedValueOnce({ status: 'suppressed', message: 'Near-duplicate suppressed' });
+
+    const outcome = await runAgentLoop(makeRun(), goal, {
+      deadlineMs: Date.now() + 60_000,
+      signal: new AbortController().signal,
+      execContext,
+    });
+
+    // Both tool calls executed but second returned suppressed status
+    expect(toolExecute).toHaveBeenCalledTimes(2);
+    // The loop continues because the suppressed response is not an error
+    expect(outcome.status).not.toBe('failed');
+  });
+
   it('yields (wall_clock) when the deadline is already near on entry', async () => {
     const outcome = await runAgentLoop(makeRun(), goal, {
       deadlineMs: Date.now() - 10_000, // past

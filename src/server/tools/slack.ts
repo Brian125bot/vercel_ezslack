@@ -4,6 +4,7 @@ import { agentStore } from '../storage/agentStore.js';
 import { geminiCall } from '../agent/geminiClient.js';
 import { resolveModel } from '../agent/models.js';
 import { selectedModel } from '../state.js';
+import { slog } from '../agent/log.js';
 
 const SLACK_MAX_TEXT = 39000;
 const SLACK_MAX_SECTION_TEXT = 2800;
@@ -66,6 +67,20 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
        }
      }
 
+    // ── Semantic dedup: suppress near-duplicate posts in the same thread ──
+    if (context.channelId && (context.threadTs || context.messageTs)) {
+      const threadKey = context.threadTs || context.messageTs;
+      try {
+        const { isNearDuplicate } = await import('../agent/dedup.js');
+        if (await isNearDuplicate(replyText, context.channelId, threadKey)) {
+          return { status: 'suppressed', message: 'Near-duplicate suppressed' };
+        }
+      } catch (error) {
+        // Fail open: dedup errors must never block a Slack post.
+        slog('dedup', 'error', { operation: 'isNearDuplicateCheck', error: error?.message || error });
+      }
+    }
+
      // Truncate to Slack limit to prevent API errors
      if (replyText.length > SLACK_MAX_TEXT) {
        replyText = replyText.substring(0, SLACK_MAX_TEXT) + '\n\n_...truncated (exceeded 40K characters)_';
@@ -73,6 +88,15 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
 
      const token = process.env.SLACK_BOT_TOKEN;
     if (!token || token.startsWith('xoxb-mock') || token.startsWith('mock:')) {
+      // Store fingerprint even in simulated mode (for test coverage + consistency)
+      if (context.channelId && (context.threadTs || context.messageTs)) {
+        try {
+          const { storeMessageFingerprint } = await import('../agent/dedup.js');
+          await storeMessageFingerprint(replyText, context.channelId, context.threadTs || context.messageTs);
+        } catch {
+          // Fail open
+        }
+      }
       return { status: 'simulated_dispatch', message: replyText };
     }
     
@@ -84,6 +108,17 @@ export const slackReplyInThreadTool: AgentTool<{ text: string }> = {
         thread_ts: context.threadTs || context.messageTs,
         text: replyText,
       });
+
+      // Store fingerprint for future semantic dedup
+      if (context.channelId && (context.threadTs || context.messageTs)) {
+        try {
+          const { storeMessageFingerprint } = await import('../agent/dedup.js');
+          await storeMessageFingerprint(replyText, context.channelId, context.threadTs || context.messageTs);
+        } catch {
+          // Fail open
+        }
+      }
+
       return { status: 'success', message: 'Posted to Slack' };
     } catch (err: any) {
       if (context.channelId?.includes('SIMULATED') || err.message?.includes('channel_not_found')) {

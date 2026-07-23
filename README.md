@@ -781,6 +781,14 @@ Three are required in all environments; `DASHBOARD_PASSWORD` is warn-only everyw
 | `UPSTASH_REDIS_REST_TOKEN` | Alternative: standalone Upstash Redis token |
 | `DISABLE_HTTPS_REDIRECT` | Set to `1` to skip automatic HTTP→HTTPS redirect in production |
 
+### Semantic Message Deduplication
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SLACK_DEDUP_SIMILARITY_THRESHOLD` | `0.75` | Jaccard similarity above which a message is suppressed (0.0–1.0) |
+| `SLACK_DEDUP_WINDOW_SIZE` | `5` | Number of recent messages per thread to compare against |
+| `SLACK_DEDUP_TTL_SECONDS` | `300` | TTL for stored fingerprints (5 minutes) |
+
 ### Vercel / Workflows Configuration
 
 ### External Adapters
