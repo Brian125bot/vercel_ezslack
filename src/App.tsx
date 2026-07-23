@@ -102,7 +102,7 @@ export default function App() {
 
   // Authenticated gateway states
   const [dashboardPassword, setDashboardPassword] = useState<string>(() => localStorage.getItem('dashboard_password') || '');
-  const [authRequired, setAuthRequired] = useState<boolean>(false);
+  const [authRequired, setAuthRequired] = useState<boolean>(() => !localStorage.getItem('dashboard_password'));
   const [passwordInput, setPasswordInput] = useState<string>('');
   const [authError, setAuthError] = useState<string>('');
 
@@ -369,28 +369,34 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'runs') {
+      if (authRequired || !dashboardPassword) return;
       fetchRuns();
       const interval = setInterval(fetchRuns, 5000);
       return () => clearInterval(interval);
     }
-  }, [activeTab, dashboardPassword]);
+  }, [activeTab, dashboardPassword, authRequired]);
 
   useEffect(() => {
     if (selectedRunId) {
+      if (authRequired || !dashboardPassword) return;
       fetchRunTrace(selectedRunId);
     } else {
       setRunTrace(null);
     }
-  }, [selectedRunId, dashboardPassword]);
+  }, [selectedRunId, dashboardPassword, authRequired]);
 
   // Fetch initial status to check authentication
   useEffect(() => {
+    if (!dashboardPassword) {
+      setAuthRequired(true);
+      return;
+    }
     fetchStatus();
   }, [dashboardPassword]);
 
   // Poll status and logs only if authenticated
   useEffect(() => {
-    if (authRequired) return;
+    if (authRequired || !dashboardPassword) return;
 
     fetchLogs();
 

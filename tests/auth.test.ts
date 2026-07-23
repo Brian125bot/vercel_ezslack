@@ -279,3 +279,42 @@ describe('requireDashboardAuth - audit logging safety', () => {
     expect(logged).toContain('203.0.xx.xx');
   });
 });
+
+describe('requireDashboardAuth - missing or empty authorization attempts', () => {
+  it('returns 401 without recording failure or audit logging if Authorization is empty', async () => {
+    const { requireDashboardAuth } = await loadAuth();
+    // makeReq('') creates request with empty Authorization header
+    const req = makeReq('');
+    const res = makeRes();
+    const next = vi.fn() as NextFunction;
+    await requireDashboardAuth(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toEqual({
+      error: 'Dashboard administrative password required.',
+      dashboardPasswordRequired: true
+    });
+
+    // Check that Redis/Memory counts and audit logging were not touched
+    expect(redisMock.recordAuthFailure).not.toHaveBeenCalled();
+    expect(addLogMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 without recording failure or audit logging if Authorization header is completely missing', async () => {
+    const { requireDashboardAuth } = await loadAuth();
+    const req = {
+      headers: {},
+      socket: { remoteAddress: '203.0.113.7' },
+    } as unknown as any;
+    const res = makeRes();
+    const next = vi.fn() as NextFunction;
+    await requireDashboardAuth(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(401);
+
+    expect(redisMock.recordAuthFailure).not.toHaveBeenCalled();
+    expect(addLogMock).not.toHaveBeenCalled();
+  });
+});
