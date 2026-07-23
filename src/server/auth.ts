@@ -84,14 +84,28 @@ export const requireDashboardAuth = async (req: Request, res: Response, next: Ne
 
   const authHeader = req.headers['authorization'];
   let receivedPassword = '';
+  let hasAttempt = false;
   
   if (authHeader && authHeader.startsWith('Bearer ')) {
     receivedPassword = authHeader.substring(7).trim();
+    if (receivedPassword) {
+      hasAttempt = true;
+    }
   } else {
     const headerPass = req.headers['x-dashboard-password'];
     if (headerPass) {
        receivedPassword = (Array.isArray(headerPass) ? headerPass[0] : headerPass).trim();
+       if (receivedPassword) {
+         hasAttempt = true;
+       }
     }
+  }
+
+  if (!hasAttempt) {
+    return res.status(401).json({
+      error: 'Dashboard administrative password required.',
+      dashboardPasswordRequired: true
+    });
   }
 
   let authenticated = false;
