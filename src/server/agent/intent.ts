@@ -1,6 +1,16 @@
 import { geminiCall } from './geminiClient.js';
 import { resolveModel } from './models.js';
 
+// Matches a single word on word boundaries (so "track" doesn't match inside
+// "trackable"), or a multi-word phrase as a plain substring (phrases are
+// narrow enough that substring matching is already safe there).
+function matchesWordOrPhrase(haystack: string, needle: string): boolean {
+  if (needle.includes(' ')) {
+    return haystack.includes(needle);
+  }
+  return new RegExp(`\\b${needle}\\b`).test(haystack);
+}
+
 export type IntentCategory = 
   | 'direct_reply'
   | 'durable_task'
@@ -98,12 +108,23 @@ export async function classifyIntent(
   }
 
   // 5. Durable task triggers
+  // Ambiguous single words that collide with ordinary conversation
+  // ('create', 'watch', 'monitor', 'draft', 'track', 'alert') are
+  // intentionally NOT bare-matched: they are only trusted as durable-task
+  // signals when paired with task-oriented phrasing below, so ordinary chat
+  // ("what should I watch tonight?") correctly falls through to the LLM
+  // instead of skipping straight to a heuristic high-confidence match.
+  // Remaining single words are still whole-word matched (not substring) via
+  // matchesWordOrPhrase, so "trackable" no longer false-matches "track".
   const durableWords = [
-    'remind', 'schedule', 'create', 'track', 'watch', 'follow up', 'summarize', 'draft',
-    'investigate', 'open a task', 'notify me', 'add issue', 'create ticket', 'alert', 'run task',
-    'execute command', 'monitor', 'backup', 'restore'
+    'remind', 'schedule', 'follow up', 'summarize', 'investigate',
+    'open a task', 'notify me', 'add issue', 'create ticket', 'create a task',
+    'create a reminder', 'track this', 'track progress', 'watch for',
+    'draft a message', 'draft an email', 'draft a reply', 'set an alert',
+    'send an alert', 'run task', 'execute command', 'monitor this',
+    'monitor the', 'backup', 'restore'
   ];
-  if (durableWords.some(w => lowercase.includes(w))) {
+  if (durableWords.some(w => matchesWordOrPhrase(lowercase, w))) {
     return {
       intent: 'durable_task',
       confidence: 'high',

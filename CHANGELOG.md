@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+* **`classifyCancelVsUpdate` false-positive on hyphenated compounds.** Excluded hyphen-adjacent matches (e.g. "front-end", "back-end", "non-stop") from cancel word boundaries to prevent false cancellations.
+* **`durable_task` heuristic precision improvements.** Ambiguous bare-word matching is now restricted to task-oriented phrases or explicit word boundaries to prevent false matches inside words like "trackable" or on common verbs like "watch" and "create".
 * **ReAct loop final answer persistence regression.** The final text answer from the ReAct loop is now persisted as a `succeeded` step titled "Final answer" with `output: { generated: "..." }`, and an `agent_loop.final_answer` audit event is logged. This prevents the semantic verifier from reporting "not satisfied" and triggering infinite replan/re-enqueue storms.
 * **Rapid dashboard authentication request fix.** Dashboard auth endpoints now handle rapid concurrent requests without failure.
 * **Rate limiter revert.** Reverted the KV degradation fail-visible change that caused rate limit store failures under high load.

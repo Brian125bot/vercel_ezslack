@@ -8,8 +8,8 @@ import { mutatePlan } from '../planMutation.js';
  * W4-C: Determine whether the user wants to cancel or update/modify
  * an active run. "cancel/stop/abort" → cancel, everything else → update.
  */
-function classifyCancelVsUpdate(text: string): 'cancel' | 'update' {
-  const cancelPatterns = /\b(cancel|stop|abort|kill|end|halt|nevermind|never\s*mind)\b/i;
+export function classifyCancelVsUpdate(text: string): 'cancel' | 'update' {
+  const cancelPatterns = /(?<!-)\b(cancel|stop|abort|kill|end|halt|nevermind|never\s*mind)\b(?!-)/i;
   if (cancelPatterns.test(text)) return 'cancel';
   return 'update';
 }
