@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-07-28
+
+### Added
+
+* **Semantic message deduplication for Slack AI Agent.** `src/server/agent/dedup.ts` implements dual-strategy deduplication: exact SHA-256 hash matching for instant detection, plus Jaccard similarity over FNV-1a 32-bit bigram hashes for catching near-duplicate paraphrased messages. Fingerprints are stored in Redis with configurable TTL, falling back to an in-memory LRU `Map`. Integrated into `slack.replyInThread` so near-duplicate Slack replies are suppressed automatically. New environment variables: `SLACK_DEDUP_SIMILARITY_THRESHOLD` (0.75), `SLACK_DEDUP_WINDOW_SIZE` (5), `SLACK_DEDUP_TTL_SECONDS` (300).
+* **Self-host Dockerfile.** New `Dockerfile` provides a multi-stage Node 22 Alpine build producing a minimal, non-root production container. Also adds `.dockerignore` for clean build context.
+* **Expanded Gemini model support.** Added `gemini-3.6-flash` and `gemini-3.5-flash-lite` to the allowed models list in `src/server/agent/models.ts`, with accurate context window sizing (1M tokens for most Flash models, 128K for Flash-lite).
+
+### Fixed
+
+* **ReAct loop final answer persistence regression.** The final text answer from the ReAct loop is now persisted as a `succeeded` step titled "Final answer" with `output: { generated: "..." }`, and an `agent_loop.final_answer` audit event is logged. This prevents the semantic verifier from reporting "not satisfied" and triggering infinite replan/re-enqueue storms.
+* **Rapid dashboard authentication request fix.** Dashboard auth endpoints now handle rapid concurrent requests without failure.
+* **Rate limiter revert.** Reverted the KV degradation fail-visible change that caused rate limit store failures under high load.
+
+### 🧪 Test Results
+
+* 355 tests across 28 files — all passing.
+* `tsc --noEmit` — clean.
+
 ## [7.3.0] - Redis Distributed Auth Lockout, Approval Scope Creep Hardening, Vercel Analytics - 2026-07-17
 
 ### Security

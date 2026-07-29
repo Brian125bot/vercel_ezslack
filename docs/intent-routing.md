@@ -121,3 +121,31 @@ interval_seconds. The scheduler is triggered via the Vercel Cron endpoint
 `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *`), creates new runs, and
 enqueues them via the workflow endpoint. Scheduled runs inherit the model from the
 goal's most recent run.
+
+## Semantic Message Deduplication
+
+The agent suppresses near-duplicate Slack replies within the same thread using a
+dual-strategy deduplication system implemented in `src/server/agent/dedup.ts`:
+
+1. **Exact hash match** — SHA-256 of normalized text (first 16 chars) for
+   instant duplicate detection.
+2. **Semantic similarity** — Jaccard similarity over FNV-1a 32-bit bigram hashes,
+   catching paraphrased or near-identical messages.
+
+### How It Works
+
+- `computeFingerprint()` generates a SHA-256 hash and a set of FNV-1a 32-bit
+  bigram hashes for each message.
+- `isNearDuplicate()` compares new messages against stored fingerprints in the
+  same thread (Redis-backed, TTL-based, with in-memory LRU fallback).
+- Short messages (< 3 bigrams / < 4 words) use exact-hash check only.
+- `storeMessageFingerprint()` persists fingerprints after a successful Slack post.
+- Deduplication is **fail-open** — errors never block a Slack post.
+
+### Configuration
+
+| Variable | Default | Description |
+|---|---|-------------|
+| `SLACK_DEDUP_SIMILARITY_THRESHOLD` | `0.75` | Jaccard similarity above which a message is suppressed (0.0–1.0) |
+| `SLACK_DEDUP_WINDOW_SIZE` | `5` | Number of recent messages per thread to compare against |
+| `SLACK_DEDUP_TTL_SECONDS` | `300` | TTL for stored fingerprints (5 minutes) |

@@ -23,7 +23,7 @@ Use TypeScript with ES modules and React JSX. Vite aliases `@/` to the repositor
 
 ## Testing Guidelines
 
-Tests use Vitest with 338 test cases across 27 test files. Run `npm run test` before committing. `npm run test:watch` for development. Coverage reports available via `npm run test:coverage`. No specific coverage threshold is defined, but ensure existing tests pass and the `tsc --noEmit` lint gate is clean.
+Tests use Vitest with 355 test cases across 28 test files. Run `npm run test` before committing. `npm run test:watch` for development. Coverage reports available via `npm run test:coverage`. No specific coverage threshold is defined, but ensure existing tests pass and the `tsc --noEmit` lint gate is clean.
 
 ## Commit & Pull Request Guidelines
 

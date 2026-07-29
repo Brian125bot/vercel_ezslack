@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-27%20files%20%7C%20338%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-28%20files%20%7C%20355%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -163,6 +163,8 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 | Fail-fast env validation at boot | Catches missing/placeholder secrets before `app.listen()`, not on first user request |
 | Content Security Policy (CSP) | `default-src 'self'` + restrictive directives prevent XSS via `dangerouslySetInnerHTML` rendering of Slack/AI content |
 | HTTPS redirect + HSTS | Production-only middleware redirects HTTP→HTTPS when `x-forwarded-proto` is `http`; `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` |
+| Semantic message deduplication via Jaccard similarity | Dual-strategy dedup (exact SHA-256 hash + bigram Jaccard similarity) prevents near-duplicate Slack replies; configurable threshold, window size, and TTL |
+| ReAct loop final answer persistence | Final text answers are persisted as a `succeeded` step so the semantic verifier sees the delivered result, preventing infinite replan/re-enqueue storms |
 
 ---
 
@@ -225,9 +227,11 @@ User Message
   ├─ streamReplyToThread()   # Post initial message → incremental edits
   │   └─ Throttled at 800ms intervals to avoid Slack rate limits
   │
-  ├─ Agent turns persisted   # agent_messages table (survives requeue)
-  │
-  └─ Cost tracking           # total_tokens captured per run
+├─ Agent turns persisted   # agent_messages table (survives requeue)
+      │
+      ├─ Final answer persisted   # Succeeded step for semantic verifier; prevents replan storms
+      │
+      └─ Cost tracking           # total_tokens captured per run
 ```
 
 ---
@@ -403,6 +407,49 @@ Supported patterns:
 
 ---
 
+## 🔁 Semantic Message Deduplication
+
+The agent suppresses near-duplicate Slack replies within the same thread using a
+dual-strategy deduplication system:
+
+1. **Exact hash match** — SHA-256 of normalized text (first 16 chars) for instant
+   duplicate detection.
+2. **Semantic similarity** — Jaccard similarity over FNV-1a 32-bit bigram hashes,
+   catching paraphrased or near-identical messages (e.g., "The World Cup was won
+   by Spain" vs "2026 World Cup was won by Spain").
+
+### How It Works
+
+- `src/server/agent/dedup.ts` implements `computeFingerprint()`, `jaccardSimilarity()`,
+  `isNearDuplicate()`, and `storeMessageFingerprint()`.
+- Fingerprints are stored in Redis (`dedup:thread:<channelId>:<threadTs>`) with a TTL,
+  falling back to an in-memory LRU `Map` when Redis is unavailable.
+- Short messages (< 3 bigrams / < 4 words) use exact-hash check only to avoid false
+  positives.
+- Deduplication is **fail-open**: errors never block a Slack post.
+
+### Integration
+
+`slack.replyInThread` calls `isNearDuplicate()` before posting. If suppressed, it
+returns `{ status: 'suppressed' }` and the ReAct loop continues. The fingerprint is
+stored **after** a successful post.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SLACK_DEDUP_SIMILARITY_THRESHOLD` | `0.75` | Jaccard similarity above which a message is suppressed (0.0–1.0) |
+| `SLACK_DEDUP_WINDOW_SIZE` | `5` | Number of recent messages per thread to compare against |
+| `SLACK_DEDUP_TTL_SECONDS` | `300` | TTL for stored fingerprints (5 minutes) |
+
+### Why Semantic Dedup Matters
+
+Without it, a model that generates slightly different phrasing for the same answer
+(e.g. after a replan) would post a second near-duplicate Slack message. Semantic
+dedup catches these while allowing genuinely new content through.
+
+---
+
 ## 🔒 Security
 
 ### Content Security Policy (CSP)
@@ -515,7 +562,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-27 test files, 338 test cases. Run with:
+28 test files, 355 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -543,6 +590,7 @@ npm run test:coverage # With coverage report
 | Deferral Detection | `tests/deferral.test.ts` | 10 | Time-deferred language patterns, unit normalization, negative cases |
 | Rate Limit Store | `tests/rateLimitStore.test.ts` | 10 | KV-backed store, sliding window, TTL expiry |
 | Scheduler | `tests/scheduler.test.ts` | 8 | Cron parsing, interval triggers, one-shot scheduling |
+| Semantic Message Deduplication | `tests/dedup.test.ts` | 17 | Fingerprinting, tokenization, Jaccard similarity, exact-hash check, Redis fallback |
 | Planner | `tests/planner.test.ts` | 8 | Plan generation, date/time context injection |
 | Policy Gate | `tests/policy.test.ts` | 7 | Risk level evaluation, approval requirement, policy decisions |
 | Orchestrator + Planner | `tests/orchestrator-planner.test.ts` | 7 | Pipeline dispatch, plan mutation wiring |
@@ -559,8 +607,6 @@ npm run test:coverage # With coverage report
 ---
 
 ## 📡 API Reference
-
-### Public Endpoints (no auth)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -613,6 +659,7 @@ npm run test:coverage # With coverage report
 │       ├── agent/
 │       │   ├── orchestrator.ts        # Pipeline entry point, resume logic
 │       │   ├── intent.ts              # Heuristic + LLM intent classifier
+│       │   ├── dedup.ts               # Semantic message deduplication (Jaccard + SHA-256)
 │       │   ├── handlers/
 │       │   │   ├── index.ts           # Handler dispatch
 │       │   │   ├── directReply.ts     # DB-less conversational reply
@@ -701,7 +748,7 @@ npm run test:coverage # With coverage report
 ├── Dockerfile                        # Multi-stage Node 22 Alpine build
 ├── vitest.config.ts                  # Vitest configuration
 ├── vite.config.ts                    # Vite build configuration
-├── CHANGELOG.md                      # Version history (v2.0.0 → v7.3.0)
+├── CHANGELOG.md                      # Version history (v2.0.0 → v7.3.0 → unreleased)
 ├── .env.example                      # Environment variable template
 └── package.json                      # Dependencies and scripts
 ```
@@ -975,3 +1022,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v7.1.0 | ✅ Done | Centralized system maintenance (shared runSystemMaintenance, cron/workflow dedup) |
 | v7.2.0 | ✅ Done | Env validation on Vercel, approval scope creep fix (plan_version_id, consumption) |
 | v7.3.0 | ✅ Done | Redis distributed auth lockout, approval scope creep hardening, Vercel Analytics |
+| Unreleased | 🔄 In Progress | Semantic message deduplication (Jaccard + SHA-256), self-host Dockerfile, gemini-3.6-flash and gemini-3.5-flash-lite support, ReAct loop final answer persistence |
