@@ -836,6 +836,49 @@ Stop: serverless execution terminates automatically upon response return
 
 ---
 
+## 🐳 Self-Hosting with Docker
+
+You can package and deploy the full-stack Slack AI Agent as a standalone Docker container. The built image is secure, minimal, runs under a non-root user, and is optimized for cloud runtimes (such as GCP Cloud Run, AWS ECS, or self-hosted virtual machines).
+
+### Step 1: Build the Image
+The build uses a multi-stage `Dockerfile` pinning Node 22 (Debian slim to support native Postgres/Google connectors) and runs the complete build pipeline to output both the static frontend and the compiled Express CJS server:
+
+```bash
+docker build -t slack-ez-cloud .
+```
+
+### Step 2: Configure Environment
+Copy the included `.env.example` to `.env` (it contains placeholders and descriptions for all supported options) and fill in your values.
+
+At a minimum, the container requires:
+- **Core Credentials**: `GEMINI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
+- **Dashboard Password**: `DASHBOARD_PASSWORD` (for logging in to the admin panel)
+- **App URL**: `APP_URL` (the public-facing URL of your container, required for Slack webhook callbacks)
+- **Database**: A Postgres database connection string in `DATABASE_URL` (or standard connection variables `SQL_HOST`, etc.).
+
+*Note: A running PostgreSQL database is a runtime requirement only. Database migrations are lazily and automatically run during container boot — no database connection is required at image build time.*
+
+### Step 3: Run the Container
+Run the container on port 3000 (or any PORT of your choice):
+
+```bash
+docker run -d \
+  -p 3000:3000 \
+  --name slack-ez-cloud \
+  --env-file .env \
+  slack-ez-cloud
+```
+
+### Gaps and Differences from Vercel Deployment
+
+When self-hosting with Docker, keep in mind the following platform-specific differences:
+1. **Cron Poller**: Vercel Cron automatically triggers `/api/cron/poll` to run maintenance and trigger scheduled tasks. In Docker, you must set up an external scheduler or cron job (e.g., using crontab, AWS EventBridge, or GCP Cloud Scheduler) to hit the POST/GET `/api/cron/poll` endpoint regularly (e.g. every 15 minutes or daily at 9am UTC) with the correct `CRON_SECRET` headers.
+2. **Key-Value / Redis Store**: In Vercel, Upstash Redis details are auto-injected. When self-hosting, you should manually supply standard Upstash/Redis connection variables (`KV_REST_API_URL` and `KV_REST_API_TOKEN` or `UPSTASH_REDIS_REST_URL`) in your `.env` file to enable shared rate-limiting, deduplication, and thread caches across instances. If unconfigured, the app gracefully falls back to an in-memory store.
+3. **Sandbox Code Execution**: Vercel Sandbox tools are available natively only when deployed on Vercel. For self-hosting, sandbox tools require configuring a standalone `SANDBOX_API_KEY` for execution, or they will be skipped.
+
+---
+
+
 ## 📊 Dashboard
 
 The companion React dashboard provides:
