@@ -78,6 +78,25 @@ describe('intent.ts - classifyIntent', () => {
     });
   });
 
+  it('does not classify ordinary conversational messages as durable_task via bare keyword match', async () => {
+    const res = await classifyIntent('what should I watch tonight?', 'gemini-2.5-flash');
+    expect(res.intent).not.toBe('durable_task');
+  });
+
+  it('does not classify substrings inside unrelated words as durable_task (regression case)', async () => {
+    const res = await classifyIntent('is this feature trackable in the new release?', 'gemini-2.5-flash');
+    expect(res.intent).not.toBe('durable_task');
+  });
+
+  it('still classifies genuine durable task phrasing via word-boundary-safe matching', async () => {
+    const res = await classifyIntent('please track this deployment for me', 'gemini-2.5-flash');
+    expect(res).toEqual({
+      intent: 'durable_task',
+      confidence: 'high',
+      source: 'heuristic'
+    });
+  });
+
   it('classifies short messages as direct reply', async () => {
     const res = await classifyIntent('hello', 'gemini-2.5-flash');
     expect(res).toEqual({
