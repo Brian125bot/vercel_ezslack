@@ -164,6 +164,24 @@ describe('HTTPS redirect (production)', () => {
     expect(location).toContain('/api/health');
   });
 
+  it('uses APP_URL for redirect host to prevent host header injection', async () => {
+    const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      const req = http.request({
+        hostname: '127.0.0.1',
+        port: getPort(server),
+        path: '/api/health',
+        method: 'GET',
+        headers: { 'x-forwarded-proto': 'http', 'host': 'evil.com' },
+      }, resolve);
+      req.on('error', reject);
+      req.end();
+    });
+    expect(res.statusCode).toBe(301);
+    const location = res.headers['location'] || '';
+    expect(location).toMatch(/^https:\/\/example\.com/);
+    expect(location).toContain('/api/health');
+  });
+
   it('passes through (200) when x-forwarded-proto is missing', async () => {
     const res = await fetch(`http://127.0.0.1:${getPort(server)}/api/health`);
     expect(res.status).toBe(200);

@@ -20,9 +20,21 @@ const PORT = parseInt(process.env.PORT || '3000');
 
 // Security: Redirect HTTP to HTTPS in production (behind proxy)
 if (process.env.DISABLE_HTTPS_REDIRECT !== '1' && process.env.NODE_ENV === 'production') {
+  let safeHost: string | null = null;
+  try {
+    if (process.env.APP_URL) {
+      safeHost = new URL(process.env.APP_URL).host;
+    }
+  } catch (err) {
+    console.warn('[Security] Invalid APP_URL for HTTPS redirect fallback');
+  }
+
   app.use((req, res, next) => {
     if (req.headers['x-forwarded-proto'] === 'http') {
-      res.redirect(301, `https://${req.headers['host']}${req.originalUrl}`);
+      if (!safeHost) {
+        return res.status(400).send('Bad Request');
+      }
+      res.redirect(301, `https://${safeHost}${req.originalUrl}`);
     } else {
       next();
     }
