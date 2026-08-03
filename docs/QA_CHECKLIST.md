@@ -25,6 +25,7 @@
 
 | Suite | File | Cases | Status |
 |-------|------|:-----:|:------:|
+| AI Response | `tests/ai.test.ts` | 5 | [x] |
 | Intent Classification | `tests/intent.test.ts` | 11 | [ ] |
 | Policy Gate | `tests/policy.test.ts` | 6 | [ ] |
 | Secret Sanitization | `tests/sanitize.test.ts` | 11 | [ ] |
