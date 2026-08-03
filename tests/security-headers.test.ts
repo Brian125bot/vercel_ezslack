@@ -186,4 +186,42 @@ describe('HTTPS redirect (production)', () => {
     const res = await fetch(`http://127.0.0.1:${getPort(server)}/api/health`);
     expect(res.status).toBe(200);
   });
+
+  it('returns 400 when APP_URL is not set in production', async () => {
+    const originalAppUrl = process.env.APP_URL;
+    const originalNodeEnv = process.env.NODE_ENV;
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: string | number | null | undefined) => {
+      throw new Error(`process.exit called with ${code}`);
+    });
+    try {
+      process.env.NODE_ENV = 'production';
+      delete process.env.APP_URL;
+      vi.resetModules();
+
+      await expect(import('../server.js')).rejects.toThrow();
+    } finally {
+      process.env.APP_URL = originalAppUrl;
+      process.env.NODE_ENV = originalNodeEnv;
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('returns 400 when APP_URL is invalid in production', async () => {
+    const originalAppUrl = process.env.APP_URL;
+    const originalNodeEnv = process.env.NODE_ENV;
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code?: string | number | null | undefined) => {
+      throw new Error(`process.exit called with ${code}`);
+    });
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.APP_URL = 'not-a-url';
+      vi.resetModules();
+
+      await expect(import('../server.js')).rejects.toThrow('APP_URL must be a valid URL in production for HTTPS redirect security');
+    } finally {
+      process.env.APP_URL = originalAppUrl;
+      process.env.NODE_ENV = originalNodeEnv;
+      exitSpy.mockRestore();
+    }
+  });
 });

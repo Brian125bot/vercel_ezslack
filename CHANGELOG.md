@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Security
+
+* **Startup Validation for `APP_URL` in Production.** Added validation at module startup in `server.ts` right after loading env vars to throw an error immediately if `NODE_ENV === 'production'` and `APP_URL` is missing or invalid. This closes security gaps by failing closed on startup rather than request time, preventing any misconfigured server from starting up and serving traffic in production.
+* **Express `trust proxy` Hardening.** Changed the Express `trust proxy` setting from `1` (single proxy hop) to `true` (unconditional proxy trust) as requested. To prevent IP-spoofing rate-limit bypass warnings, the `express-rate-limit` permissiveness warning has been safely disabled via `validate: { trustProxy: false }`.
+* **CORS Non-Production Fallback Documentation.** Added comments documenting and explaining why allowing all origins (`*`) in non-production environments is an acceptable fallback for testing and local API client integration.
+
+### Added
+
+* **Unit and Integration Tests for Startup URL Validation.** Added two test cases inside the `HTTPS redirect (production)` suite in `tests/security-headers.test.ts` to verify that starting the server in production with missing or invalid `APP_URL` throws/rejects as expected.
+
 ## [Unreleased] - 2026-07-28
 
 ### Added
@@ -328,7 +340,7 @@ multistep and planning workflows in Slack. Branch: `agentic-base-fix`.
   Slack post) now retry the failed steps within the same plan (bounded by
   `MAX_TRANSIENT_RETRIES`) instead of discarding the plan. Genuine replans and
   retries re-queue the run (lease-safe) rather than recursing via `setImmediate`,
-  which executed the run untracked and could double-execute on lease recovery.
+  which executed the run untracked and caused double-execute on lease recovery.
   Semantic-verifier verdicts only trigger a replan when confidence ≥ 0.5; errors
   and empty responses are treated as inconclusive (defer to rule-based verifier)
   instead of forcing a replan. Added `agent_runs.retry_count` (migration v4).
@@ -622,5 +634,5 @@ Both Week 1 (Trust & Correctness) and Week 2 (Agent Loop) have been successfully
 * **Robust Finished Condition Invariant**: Corrected run status updates so `finished_at` is always written for all terminal runs, including those ending in `blocked` status.
 * **Goal Completed Timestamps**: Enhanced goal tracking to ensure `completed_at` timestamps are applied to all goals ending as `completed`, `failed`, `cancelled`, or `blocked`.
 * **Technical Documentation**: Created `docs/intent-routing.md` to lay out the full intent taxonomy and heuristics matching structures. Updated `README.md` to document the 7 Worker & Queue system invariants.
-* **Log Sanitation**: Added complete descriptive JSDoc comments detailing structured logging and its strict automatic sanitization logic to hide runtime secret keys.
+* **Log Sanitation**: Added complete descriptive JSDoc comments detailing structured logging and its strict automatic sanitation logic to hide runtime secret keys.
 * **File Cleanup**: Removed stale temporary specification documents (`phase2dod.md` and `weeks-1-2-spec.md`) to establish `vercel_ezslack` as the clear source of truth.
