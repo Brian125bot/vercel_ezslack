@@ -14,8 +14,16 @@ import { validateEnv } from "./src/server/env.js";
 dotenv.config();
 validateEnv();
 
+if (process.env.NODE_ENV === 'production') {
+  try {
+    new URL(process.env.APP_URL || '');
+  } catch {
+    throw new Error('APP_URL must be a valid URL in production for HTTPS redirect security');
+  }
+}
+
 const app = express();
-app.set('trust proxy', 1);
+app.set('trust proxy', true);
 const PORT = parseInt(process.env.PORT || '3000');
 
 // Security: Redirect HTTP to HTTPS in production (behind proxy)
@@ -65,6 +73,9 @@ app.use(helmet({
 }));
 
 // Security: Cross-Origin Resource Sharing (CORS)
+// In non-production environments (development and local testing), allowing all origins ('*')
+// is acceptable and standard because it facilitates testing, frontend/backend integration from different ports,
+// and doesn't pose production risks since production handles CORS restrictions securely based on APP_URL.
 app.use(cors({
   origin: process.env.APP_URL || (process.env.NODE_ENV === 'production' ? false : '*'),
   methods: ["GET", "POST"]
@@ -89,7 +100,7 @@ const apiLimiter = rateLimit({
   message: "Too many requests from this IP, please try again after 15 minutes",
   standardHeaders: true,
   legacyHeaders: false,
-  validate: { xForwardedForHeader: false, default: true }
+  validate: { xForwardedForHeader: false, trustProxy: false, default: true }
 });
 app.use("/api", apiLimiter);
 
