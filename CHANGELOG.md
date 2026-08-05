@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+* **Resilient Rate-Limiter Fail-Open Fallback.** Modified `KvRateLimitStore` in `src/server/rateLimitStore.ts` to implement a robust fail-open fallback. All Redis network client operations (`increment()`, `decrement()`, and `resetKey()`) are now wrapped in `try/catch` blocks. If `getRedisClient()` returns `null` (unconfigured store) or a Redis operation throws a network/runtime exception, the store gracefully logs a structured warning via `slog` with a `'rate-limit'` scope and returns a permissive payload (e.g. `totalHits: 1` and a reset time derived dynamically from `this.windowMs`) rather than allowing the error to bubble up and trigger an Express 500 server error across `/api/*` endpoints. Added extensive unit tests inside `tests/rateLimitStore.test.ts` to assert exact fail-open payload properties, graceful rejections avoidance, and `slog` structure.
 * **Task Client Requeue Timeout & Hang Prevention.** Added a dedicated wall-clock timeout (`ENQUEUE_FETCH_TIMEOUT_MS` default 5s) via `AbortSignal.timeout` to fetch requests inside `taskClient.ts`. This prevents infinite execution hangs on requeue tasks and resolves the flaky `vercel.test.ts` timeout-guard test by properly stubbing and simulating fetch timeouts.
 
 ## [Unreleased] - 2026-07-28
@@ -191,7 +192,7 @@ All notable changes to this project will be documented in this file.
 ### 🚀 Features & Fixes
 
 * **Thread History Configuration & Bounds.** Prevents unbounded row growth in the `thread_memories` DB table and stops the agent from unnecessarily re-embedding stale attachment payloads (which consumed excessive Gemini token window limits and latency). Historical messages with attachments now persist their metadata only (filename, mimeType, sizeBytes) without `base64Data`, and are summarized via a text note in the model context instead of being re-uploaded to Gemini on every turn.
-* **Char/Message Caps.** Added a cumulative character limit and a per-message truncation limit. Three new configurable environment variables shape these limits (with backward-compatible defaults for text-only threads): `MAX_THREAD_HISTORY_MESSAGES` (default 20), `MAX_THREAD_HISTORY_CHARS` (default 40000), and `MAX_THREAD_MESSAGE_CHARS` (default 4000).
+* **Char/Message Caps.** Added a cumulative character limit and a per-message truncation limit. Three new configurable environment variables shape these limits (with backward-compatible defaults for text-only threads): `MAX_THREAD_HISTORY_MESSAGES` (default 20), `MAX_THREAD_HISTORY_CHARS` (default 40000), and `MAX_THREAD_MESSAGE_CHARS` (default 400).
 
 ## [6.3.0] - Multimodal Input & Generic Output Injection - 2026-07-01
 

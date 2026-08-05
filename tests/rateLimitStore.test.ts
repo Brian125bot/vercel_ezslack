@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getRedisClient } from '../src/server/redis.js';
 import { KvRateLimitStore } from '../src/server/rateLimitStore.js';
+import { slog } from '../src/server/agent/log.js';
+
+// Mock log module to spy on slog
+vi.mock('../src/server/agent/log.js', () => ({
+  slog: vi.fn(),
+}));
 
 // Use vi.hoisted to define mock client before vi.mock runs
 const { mockStore, mockClient } = vi.hoisted(() => {
@@ -58,7 +64,6 @@ describe('KvRateLimitStore', () => {
     store.init({ windowMs });
   });
 
-  // Task 13: Update tests for synchronous init
   it('init should store windowMs synchronously', () => {
     const result = store.init({ windowMs });
     expect(result).toBeUndefined();
@@ -77,7 +82,6 @@ describe('KvRateLimitStore', () => {
     expect(result.totalHits).toBe(2);
   });
 
-  // Task 10: Verify atomic set with nx+px
   it('increment should set key atomically with TTL on first hit', async () => {
     await store.increment('192.168.1.1');
     expect(mockClient.set).toHaveBeenCalledWith('rl:192.168.1.1', '1', {
@@ -92,7 +96,6 @@ describe('KvRateLimitStore', () => {
     expect(mockClient.incr).toHaveBeenCalledWith('rl:192.168.1.1');
   });
 
-  // Task 11: Edge case for pttl === -1
   it('increment should handle pttl === -1 by resetting TTL', async () => {
     let callCount = 0;
     const originalPttl = mockClient.pttl;
@@ -128,23 +131,63 @@ describe('KvRateLimitStore', () => {
     expect(result.totalHits).toBe(1);
   });
 
-  // Task 12: KV unavailable test - increment must throw when getRedisClient() returns null (fail-closed)
-  it('increment should throw when KV client is unavailable', async () => {
-    vi.resetModules();
-    vi.doMock('../src/server/redis.js', () => ({
-      getRedisClient: vi.fn().mockResolvedValue(null),
-    }));
-    const { KvRateLimitStore: KvRateLimitStoreNull } = await import('../src/server/rateLimitStore.js');
-    const nullStore = new KvRateLimitStoreNull();
-    nullStore.init({ windowMs });
-    await expect(nullStore.increment('192.168.1.1')).rejects.toThrow('KV rate-limit store unavailable');
+  // Updated Task 12: KV unavailable test - increment must NOT throw but fail-open gracefully with slog and safe default
+  it('increment should fail-open when KV client is unavailable (null)', async () => {
+    const getRedisClientMock = vi.mocked(getRedisClient);
+    getRedisClientMock.mockResolvedValueOnce(null);
+
+    const result = await store.increment('192.168.1.1');
+
+    expect(result.totalHits).toBe(1);
+    expect(result.resetTime).toBeInstanceOf(Date);
+    expect(result.resetTime!.getTime()).toBeGreaterThanOrEqual(Date.now() + windowMs - 1000);
+
+    expect(slog).toHaveBeenCalledWith('rate-limit', 'store_unreachable', {
+      key: '192.168.1.1',
+      error: 'KV rate-limit store unavailable'
+    });
   });
 
-  // Task 14: Concurrency test
-  // Verifies the first-hit-then-incr path never loses counts. A single-threaded
-  // mock cannot truly simulate Redis SET NX atomicity, so we assert the resulting
-  // totals cover 1..N (proving no double-count and no lost increment). The actual
-  // atomicity guarantee comes from the real Redis `SET key 1 NX PX` command.
+  // New fail-open on network/runtime errors test
+  it('increment should fail-open when Redis operation throws a network exception', async () => {
+    mockClient.set.mockRejectedValueOnce(new Error('Connection timed out'));
+
+    const result = await store.increment('192.168.1.1');
+
+    expect(result.totalHits).toBe(1);
+    expect(result.resetTime).toBeInstanceOf(Date);
+    expect(result.resetTime!.getTime()).toBeGreaterThanOrEqual(Date.now() + windowMs - 1000);
+
+    expect(slog).toHaveBeenCalledWith('rate-limit', 'store_unreachable', {
+      key: '192.168.1.1',
+      error: 'Connection timed out'
+    });
+  });
+
+  // New fail-safe on decrement() test
+  it('decrement should fail gracefully without bubbling rejections when exception is thrown', async () => {
+    mockClient.decr.mockRejectedValueOnce(new Error('Redis connection lost'));
+
+    await expect(store.decrement('192.168.1.1')).resolves.toBeUndefined();
+
+    expect(slog).toHaveBeenCalledWith('rate-limit', 'decrement_failed', {
+      key: '192.168.1.1',
+      error: 'Redis connection lost'
+    });
+  });
+
+  // New fail-safe on resetKey() test
+  it('resetKey should fail gracefully without bubbling rejections when exception is thrown', async () => {
+    mockClient.del.mockRejectedValueOnce(new Error('Redis server error'));
+
+    await expect(store.resetKey('192.168.1.1')).resolves.toBeUndefined();
+
+    expect(slog).toHaveBeenCalledWith('rate-limit', 'reset_failed', {
+      key: '192.168.1.1',
+      error: 'Redis server error'
+    });
+  });
+
   it('increment should produce distinct totals across concurrent first hits', async () => {
     mockStore.clear();
 
