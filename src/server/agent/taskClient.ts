@@ -2,6 +2,7 @@ import { slog } from './log.js';
 
 const ENQUEUE_MAX_RETRIES = 3;
 const ENQUEUE_RETRY_BASE_MS = 1000;
+const ENQUEUE_FETCH_TIMEOUT_MS = parseInt(process.env.ENQUEUE_FETCH_TIMEOUT_MS || '5000');
 
 /**
  * Triggers a run via the Vercel Workflow endpoint with exponential-backoff retry.
@@ -17,7 +18,7 @@ export async function enqueueRunTask(runId: string, logItemId?: string): Promise
 
   for (let attempt = 0; attempt <= ENQUEUE_MAX_RETRIES; attempt++) {
     try {
-const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
       if (bypassSecret) {
         headers['x-vercel-protection-bypass'] = bypassSecret;
@@ -26,7 +27,8 @@ const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       const res = await fetch(endpoint, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ runId, logItemId })
+        body: JSON.stringify({ runId, logItemId }),
+        signal: AbortSignal.timeout(ENQUEUE_FETCH_TIMEOUT_MS)
       });
 
       if (res.ok) {
@@ -59,14 +61,15 @@ const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
       slog('taskClient', 'enqueue_error', { runId, error: `HTTP ${res.status} after ${ENQUEUE_MAX_RETRIES} retries`, endpoint });
     } catch (err: any) {
+      const errorMsg = err.name === 'TimeoutError' ? 'fetch timed out' : err.message;
       // Network/connection errors — retry with backoff
       if (attempt < ENQUEUE_MAX_RETRIES) {
         const delay = ENQUEUE_RETRY_BASE_MS * Math.pow(2, attempt);
-        slog('taskClient', 'enqueue_retry', { runId, attempt: attempt + 1, delay, error: err.message });
+        slog('taskClient', 'enqueue_retry', { runId, attempt: attempt + 1, delay, error: errorMsg });
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
-      slog('taskClient', 'enqueue_error', { runId, error: err.message, attempt });
+      slog('taskClient', 'enqueue_error', { runId, error: errorMsg, attempt });
     }
   }
   return false;
@@ -96,10 +99,12 @@ export async function enqueueSchedulerPollTask(): Promise<void> {
   try {
     await fetch(endpoint, {
       method: 'POST',
-      headers
+      headers,
+      signal: AbortSignal.timeout(ENQUEUE_FETCH_TIMEOUT_MS)
     });
     slog('taskClient', 'enqueued_poll', { endpoint });
   } catch (err: any) {
-    slog('taskClient', 'enqueue_poll_error', { error: err.message });
+    const errorMsg = err.name === 'TimeoutError' ? 'fetch timed out' : err.message;
+    slog('taskClient', 'enqueue_poll_error', { error: errorMsg });
   }
 }

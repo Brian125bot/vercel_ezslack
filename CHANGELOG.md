@@ -14,6 +14,10 @@ All notable changes to this project will be documented in this file.
 
 * **Unit and Integration Tests for Startup URL Validation.** Added two test cases inside the `HTTPS redirect (production)` suite in `tests/security-headers.test.ts` to verify that starting the server in production with missing or invalid `APP_URL` throws/rejects as expected.
 
+### Fixed
+
+* **Task Client Requeue Timeout & Hang Prevention.** Added a dedicated wall-clock timeout (`ENQUEUE_FETCH_TIMEOUT_MS` default 5s) via `AbortSignal.timeout` to fetch requests inside `taskClient.ts`. This prevents infinite execution hangs on requeue tasks and resolves the flaky `vercel.test.ts` timeout-guard test by properly stubbing and simulating fetch timeouts.
+
 ## [Unreleased] - 2026-07-28
 
 ### Added
@@ -330,7 +334,7 @@ multistep and planning workflows in Slack. Branch: `agentic-base-fix`.
   from whether any executable step actually maps to an external_write tool, and
   free-text `riskLevel` values from the model (e.g. "low"/"medium"/"high") are
   coerced to the strict `AgentRiskLevel` enum. `generate` steps are guaranteed a
-  prompt, and `kind`-in-`toolName` mistakes are normalised.
+  prompt, and `kindKind`-in-`toolName` mistakes are normalised.
 * **Multistep state isolation (WS3).** Upstream-output gathering, the
   `slack.replyInThread` auto-injection, and the empty-reply fallback now scope to
   the current plan iteration (`plan_id`) instead of `getStepsForRun`, which mixed

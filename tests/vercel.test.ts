@@ -84,10 +84,12 @@ describe('Vercel Migration Integration Tests', () => {
       DATABASE_URL: 'postgres://user:pass@host:5432/db',
       APP_URL: 'https://example.com',
     };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }))));
   });
 
   afterEach(() => {
     process.env = originalEnv;
+    vi.unstubAllGlobals();
   });
 
   describe('1. Lazy Migration Middleware in api/index.ts', () => {
@@ -358,6 +360,10 @@ describe('Vercel Migration Integration Tests', () => {
   });
 
   describe('5. Closed-Loop Worker - Timeout Guard (Fix 5)', () => {
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }))));
+    });
+
     it('re-queues and does not finalize when wall-clock timeout is exceeded', async () => {
       // Set a zero ms timeout so the guard fires on the first check
       process.env.RUN_TIMEOUT_MS = '0';
@@ -384,10 +390,51 @@ describe('Vercel Migration Integration Tests', () => {
       const requeueCall = updateCalls.find((c: any) => c[1] === 'queued');
       expect(requeueCall).toBeDefined();
       expect(requeueCall[2]?.failure_reason).toContain('timeout');
-      // If taskClient fails (because it's not a real environment or fetch fails), we now hit our new last-resort finalizeRun fallback.
-      // The goal here is that runLoop attempted to queue it, but fell back to finalizing.
+    });
+
+    it('regression: enqueueRunTask does not hang when fetch hangs past ENQUEUE_FETCH_TIMEOUT_MS', async () => {
+      // Mock fetch to simulate real fetch behavior with AbortSignal
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((url, options) => {
+        return new Promise((resolve, reject) => {
+          if (options?.signal) {
+            if (options.signal.aborted) {
+              const err = new Error('The operation was aborted.');
+              err.name = 'TimeoutError';
+              return reject(err);
+            }
+            options.signal.addEventListener('abort', () => {
+              const err = new Error('The operation was aborted.');
+              err.name = 'TimeoutError';
+              reject(err);
+            });
+          }
+        });
+      }));
+
+      // Mock setTimeout to bypass retry delays, executing them immediately (0ms delay)
+      const originalSetTimeout = global.setTimeout;
+      vi.stubGlobal('setTimeout', vi.fn().mockImplementation((fn, delay, ...args) => {
+        if (delay === 1000 || delay === 2000 || delay === 4000) {
+          return originalSetTimeout(fn, 0, ...args);
+        }
+        return originalSetTimeout(fn, delay, ...args);
+      }));
+
+      // Override the timeout env var to make the test extremely fast
+      process.env.ENQUEUE_FETCH_TIMEOUT_MS = '10';
+
+      const { enqueueRunTask } = await import('../src/server/agent/taskClient.js');
+
+      const startTime = Date.now();
+      const result = await enqueueRunTask('run-timeout-hang-test');
+      const elapsed = Date.now() - startTime;
+
+      expect(result).toBe(false);
+      // Ensure it returned quickly (well under the 10s test timeout)
+      expect(elapsed).toBeLessThan(1000);
     });
   });
+
   describe('6. Atomic Run Claim (Fix: concurrent worker storm)', () => {
     it('returns 200 without invoking runLoop when the run is already claimed', async () => {
       const { agentStore } = await import('../src/server/storage/agentStore.js');
