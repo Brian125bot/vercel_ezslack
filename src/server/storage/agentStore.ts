@@ -190,6 +190,14 @@ async createApprovalRequest(input: CreateApprovalRequestInput): Promise<Approval
     return rows[0];
   },
 
+  async getApprovalById(id: string): Promise<ApprovalRequest | null> {
+    const rows = await query<ApprovalRequest>(
+      `SELECT * FROM approval_requests WHERE id = $1`,
+      [id]
+    );
+    return rows[0] || null;
+  },
+
   async resolveApproval(id: string, status: 'approved' | 'rejected'): Promise<ApprovalRequest> {
     // Only resolve if still pending AND not expired (W3-F9: expired approvals must not execute)
     const rows = await query<ApprovalRequest>(

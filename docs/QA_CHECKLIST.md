@@ -36,6 +36,7 @@
 
 | Suite | File | Cases | Status |
 |-------|------|:-----:|:------:|
+| Interactivity Authorization | `tests/interactivity-authorization.test.ts` | 6 | [x] |
 | Deferral Detection | `tests/deferral.test.ts` | 17 | [ ] |
 | Agent Loop | `tests/loop.test.ts` | 4 | [ ] |
 | Migration Idempotency | `tests/migration.test.ts` | 9 | [ ] |

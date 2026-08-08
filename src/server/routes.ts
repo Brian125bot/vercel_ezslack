@@ -15,6 +15,11 @@ import { ALLOWED_MODELS } from './agent/models.js';
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
 
+const SLACK_APPROVAL_ADMIN_IDS = (process.env.SLACK_APPROVAL_ADMIN_IDS || '')
+  .split(',')
+  .map(id => id.trim())
+  .filter(id => id.length > 0);
+
 export const router = express.Router();
 
 /**
@@ -333,6 +338,35 @@ router.post('/slack/interactivity', async (req: any, res: any) => {
         }
 
         const newStatus: 'approved' | 'rejected' = actionId.includes('approve') ? 'approved' : 'rejected';
+
+        const loadedApproval = await agentStore.getApprovalById(approvalId);
+        if (!loadedApproval) {
+          return;
+        }
+
+        if (userId !== loadedApproval.requested_from_user_id && !SLACK_APPROVAL_ADMIN_IDS.includes(userId)) {
+          const { WebClient } = await import('@slack/web-api');
+          const client = new WebClient(process.env.SLACK_BOT_TOKEN);
+          await client.chat.postEphemeral({
+            channel: channelId,
+            user: userId,
+            text: `Only <@${loadedApproval.requested_from_user_id}> or an authorized admin can approve or reject this request.`
+          });
+
+          if (loadedApproval.run_id) {
+            const trace = await agentStore.getRunTrace(loadedApproval.run_id);
+            await agentStore.appendAuditEvent({
+              workspace_id: trace.goal.workspace_id,
+              goal_id: loadedApproval.goal_id!,
+              run_id: loadedApproval.run_id,
+              type: 'approval.unauthorized_attempt',
+              actor: userId,
+              summary: `User ${userId} attempted to resolve an approval requested by ${loadedApproval.requested_from_user_id}`,
+              payload: { approvalId: loadedApproval.id, attemptedBy: userId, requestedFrom: loadedApproval.requested_from_user_id }
+            });
+          }
+          return;
+        }
 
         const approval = await agentStore.resolveApproval(approvalId, newStatus);
 

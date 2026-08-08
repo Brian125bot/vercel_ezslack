@@ -362,6 +362,9 @@ Step with riskLevel 'external_write' or 'destructive'
   ├─ User clicks button
   │   └─ POST /api/slack/interactivity
   │       ├─ verifySlackSignature() (HMAC-SHA256)
+  │       ├─ Authorization Check
+  │       │   ├─ Allow if user is requester or in SLACK_APPROVAL_ADMIN_IDS
+  │       │   └─ Deny → postEphemeral() + audit event + early return
   │       ├─ resolveApproval() (checks status='pending' AND expires_at > now())
   │       ├─ updateApprovalMessage() (removes buttons, shows outcome)
   │       └─ approved → resumeAgentPipeline()
