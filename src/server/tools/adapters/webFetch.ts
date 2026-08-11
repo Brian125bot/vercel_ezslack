@@ -1,5 +1,6 @@
 import type { ExternalAdapter } from './base.js';
 import type { AgentTool, ToolExecutionContext } from '../../agent/types.js';
+import { safeFetch } from '../../ssrfGuard.js';
 
 const TOOL_TIMEOUT_MS = parseInt(process.env.TOOL_TIMEOUT_MS || '60000');
 const DEFAULT_MAX_LENGTH = 50000; // 50KB default
@@ -29,6 +30,7 @@ export class WebFetchAdapter implements ExternalAdapter {
     return [this.webFetchTool];
   }
 
+  // TODO: Resolve unbounded-response-body-read issue where the entire body is read into memory before maxLength truncation is applied (separate DoS concern, not SSRF).
   private webFetchTool: AgentTool<WebFetchInput, WebFetchOutput> = {
     name: 'web.fetch',
     description: 'Fetch and extract text content from a URL. Input: url (string), maxLength (optional int). Returns extracted text content with metadata.',
@@ -63,7 +65,7 @@ export class WebFetchAdapter implements ExternalAdapter {
 
       const maxLength = Math.min(Math.max(1, input.maxLength ?? DEFAULT_MAX_LENGTH), 200000);
 
-      const response = await fetch(input.url, {
+      const response = await safeFetch(input.url, {
         signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; SlackAI/1.0; +https://github.com/slackcloud)',

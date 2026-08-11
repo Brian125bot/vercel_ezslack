@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
+* **SSRF Guard for `web.fetch`.** Implemented a comprehensive shared SSRF protection module `src/server/ssrfGuard.ts` and integrated it into the `web.fetch` tool. The guard validates all requested URLs, parses the hostnames, resolves all IP addresses (using Node's native `dns` module), and blocks any requests containing private, reserved, loopback, or multicast IPv4 and IPv6 network ranges, specifically protecting cloud metadata addresses like `169.254.169.254`. It also extracts and inspects the embedded IPv4 address for IPv4-mapped/translated IPv6 addresses (`::ffff:a.b.c.d/96` and `64:ff9b::/96`), prevents open-redirect bypasses by forcing `redirect: 'manual'` during `fetch` and validating every hop in redirect chains, and fails closed if DNS resolution fails.
+  * *Residual Limitation:* This implementation closes direct-IP-targeting and redirect-based bypass. It does NOT provide full DNS-rebinding defense (pinning the TCP connection to a pre-validated IP via a custom `undici` dispatcher). DNS-rebinding remains a known, deliberately deferred residual limitation.
 * **Requester and Admin Authorization for Slack Interactivity Approvals.** Secured the `/api/slack/interactivity` button-click resolution path. Interactive action payloads (Approve/Reject) on Block Kit messages are now strictly verified to ensure only the original requester (`requested_from_user_id` stored during approval creation) or authorized Slack administrators (configured via the comma-separated `SLACK_APPROVAL_ADMIN_IDS` environment variable) can resolve a pending request. Unauthorized attempts are ignored, keeping the request pending, and trigger an ephemeral warning to the interacting user while appending an `approval.unauthorized_attempt` audit event to the store.
 * **Startup Validation for `APP_URL` in Production.** Added validation at module startup in `server.ts` right after loading env vars to throw an error immediately if `NODE_ENV === 'production'` and `APP_URL` is missing or invalid. This closes security gaps by failing closed on startup rather than request time, preventing any misconfigured server from starting up and serving traffic in production.
 * **Express `trust proxy` Hardening.** Changed the Express `trust proxy` setting from `1` (single proxy hop) to `true` (unconditional proxy trust) as requested. To prevent IP-spoofing rate-limit bypass warnings, the `express-rate-limit` permissiveness warning has been safely disabled via `validate: { trustProxy: false }`.
@@ -13,6 +15,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+* **Comprehensive Unit and Integration Tests for SSRF Guard and Web Fetch Adapter.** Created `tests/ssrfGuard.test.ts` (17 tests) and `tests/webFetch.test.ts` (7 tests) to verify IP blocks, boundary CIDR cases, cloud metadata (`169.254.169.254`), IPv4-mapped IPv6 unwrapping, safe redirects, relative redirects, max redirect limits, and `web.fetch` end-to-end SSRF rejection and regression safety.
 * **Unit and Integration Tests for Startup URL Validation.** Added two test cases inside the `HTTPS redirect (production)` suite in `tests/security-headers.test.ts` to verify that starting the server in production with missing or invalid `APP_URL` throws/rejects as expected.
 
 ### Fixed
@@ -65,7 +68,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-* **Plan-level approval now truly single-use.** The original post-execution consumption in `loop.ts` allowed a brief window where a concurrent invocation or re-execution of the same step could use the same approval. Moving consumption into `executor.ts` with an atomic `UPDATE ... WHERE consumed_at IS NULL RETURNING id` closes this gap — the SQL itself rejects a second consume.
+* **Plan-level approval now truly single-use.** The original post-execution consumption in `loop.ts` allowed a brief window where a concurrent invocation or re-execution of the same step could use the same approval. Moving consumption into `executor.ts` with an `UPDATE ... WHERE consumed_at IS NULL RETURNING id` closes this gap — the SQL itself rejects a second consume.
 * **Migration v13: `plan_version_id` cast to `text`.** The column was originally `uuid`, but the code stores composite `<planId>:<version>` strings. Migration v13 alters the column type to `text` via `USING plan_version_id::text`.
 
 ### 🧪 Test Results
@@ -493,7 +496,7 @@ now passes its own CI gate (`npm run lint` + `npm test`) end-to-end.
   trigger. Recurring triggers are re-inserted with the next run time after successful
   claim; one-shot triggers are not re-inserted (effectively disabled).
 
-## [3.0.0] - Weeks 3–4 (Real-World Action & Autonomy) - 2026-06-20
+## [3.0.0] - Weeks 3–4 (merged) - 2026-06-20
 
 ### Week 3: Real-World Action
 
