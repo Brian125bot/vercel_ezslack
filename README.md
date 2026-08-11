@@ -50,7 +50,7 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 - [Scheduler & Deferral](#-scheduler--deferral)
 - [Security](#-security)
 - [Database Schema](#-database-schema)
-- [Worker & Queue](#-worker--queue)
+- [Worker & Queue](#-queue)
 - [Test Suite](#-test-suite)
 - [API Reference](#-api-reference)
 - [Project Structure](#-project-structure)
@@ -106,7 +106,7 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 │               │  │ ┌──────────────┐ │  │ ┌──────────────┐ │ │             │
 │               │  │ │Plan → Execute│ │  │ │Agent Step →  │ │ │             │
 │               │  │ │→ Verify →   │ │  │ │Stream Reply  │ │ │             │
-│               │  │ │Replan ↺     │ │  │ │→ Post to     │ │ │             │
+│               │  │ │→ Replan ↺   │ │  │ │→ Post to     │ │ │             │
 │               │  │ └──────────────┘ │  │ │  Slack (thr.)│ │ │             │
 │               │  │ Policy Gate →    │  │ └──────────────┘ │ │             │
 │               │  │ Approval (if     │  │ Cost tracking:   │ │             │
@@ -145,7 +145,7 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 | ACK Slack within 15ms, delegate to Vercel Workflow | Slack cancels and retries if no `200 OK` within 3 seconds |
 | Atomic `claimQueuedRunById` for run claiming | Prevents duplicate/concurrent invocations from both entering `runLoop` |
 | `FOR UPDATE SKIP LOCKED` queue claims | Concurrency fallback for synchronous execution paths |
-| Semantic + rule-based dual verification | Rules catch structural failures; LLM catches semantic mismatches |
+| Dual verification (semantic + rule-based) | Rules catch structural failures; LLM catches semantic mismatches |
 | `generate` step kind | Solves the "chat wrapper" problem — content generation deferred to exec time |
 | Atomic `DELETE ... RETURNING` for scheduler | Prevents double-firing across concurrent function invocations |
 | Dynamic adapter registration | External tools only activate when env vars are set |
@@ -282,13 +282,13 @@ Incoming Message
 
 ### External Adapters (conditional on env vars)
 
-| Adapter | Tool Name | Risk Level | Env Var Required |
-|---------|-----------|-----------|------------------|
-| `WebSearchAdapter` | `search.query` | `read` | `TAVILY_API_KEY` |
-| `WebFetchAdapter` | `web.fetch` | `read` | `ENABLE_WEB_FETCH` |
-| `GitHubIssueAdapter` | `github.createIssue` | `external_write` | `GITHUB_TOKEN` |
-| `EmailAdapter` | `email.send` | `external_write` | `EMAIL_WEBHOOK_URL` |
-| `SandboxAdapter` | `sandbox.*` | `internal_write` | `SANDBOX_API_KEY` |
+| Adapter | Tool Name | Risk Level | Env Var Required | Note on SSRF Guard |
+|---------|-----------|-----------|------------------|--------------------|
+| `WebSearchAdapter` | `search.query` | `read` | `TAVILY_API_KEY` | |
+| `WebFetchAdapter` | `web.fetch` | `read` | `ENABLE_WEB_FETCH` | Protected by a multi-hop SSRF guard which blocks loopback, private CIDRs (including cloud metadata address `169.254.169.254`), IPv6 equivalents, IPv4-mapped/translated IP forms, and open redirects targeting those ranges. *Limitation:* It does NOT block DNS-rebinding (connection pinning is deferred). |
+| `GitHubIssueAdapter` | `github.createIssue` | `external_write` | `GITHUB_TOKEN` | |
+| `EmailAdapter` | `email.send` | `external_write` | `EMAIL_WEBHOOK_URL` | |
+| `SandboxAdapter` | `sandbox.*` | `internal_write` | `SANDBOX_API_KEY` | |
 
 External adapters implement the `ExternalAdapter` interface from `src/server/tools/adapters/base.ts`. They self-register at startup only when their required environment variables are present. All `external_write` adapters automatically require user approval via Block Kit buttons. `read` and `internal_write` adapters execute without approval.
 
@@ -843,13 +843,13 @@ Three are required in all environments; `DASHBOARD_PASSWORD` is warn-only everyw
 
 ### External Adapters
 
-| Variable | Enables | Risk Level |
-|----------|---------|:----------:|
-| `TAVILY_API_KEY` | `search.query` — Web search via Tavily | `read` |
-| `GITHUB_TOKEN` | `github.createIssue` — GitHub issue creation | `external_write` |
-| `EMAIL_WEBHOOK_URL` | `email.send` — Email via webhook relay | `external_write` |
-| `ENABLE_WEB_FETCH` | `web.fetch` — General URL fetching | `read` |
-| `SANDBOX_API_KEY` | `sandbox.*` — Vercel Sandbox code execution | `internal_write` |
+| Variable | Enables | Risk Level | Description |
+|----------|---------|:----------:|-------------|
+| `TAVILY_API_KEY` | `search.query` | `read` | Web search via Tavily |
+| `GITHUB_TOKEN` | `github.createIssue` | `external_write` | GitHub issue creation |
+| `EMAIL_WEBHOOK_URL` | `email.send` | `external_write` | Email via webhook relay |
+| `ENABLE_WEB_FETCH` | `web.fetch` | `read` | General URL fetching (SSRF protected) |
+| `SANDBOX_API_KEY` | `sandbox.*` | `internal_write` | Vercel Sandbox code execution |
 
 ### Database Pool
 
@@ -1025,4 +1025,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v7.1.0 | ✅ Done | Centralized system maintenance (shared runSystemMaintenance, cron/workflow dedup) |
 | v7.2.0 | ✅ Done | Env validation on Vercel, approval scope creep fix (plan_version_id, consumption) |
 | v7.3.0 | ✅ Done | Redis distributed auth lockout, approval scope creep hardening, Vercel Analytics |
-| Unreleased | 🔄 In Progress | Semantic message deduplication (Jaccard + SHA-256), self-host Dockerfile, gemini-3.6-flash and gemini-3.5-flash-lite support, ReAct loop final answer persistence |
+| Unreleased | 🔄 In Progress | Semantic message deduplication (Jaccard + SHA-256), self-host Dockerfile, gemini-3.6-flash and gemini-3.5-flash-lite support, ReAct loop final answer persistence, SSRF Guard for `web.fetch` |

@@ -34,9 +34,10 @@ describe('generateSimpleResponse', () => {
     const callArgs = vi.mocked(geminiClient.geminiCall).mock.calls[0][0];
 
     expect(callArgs.model).toBe('gemini-test');
-    expect(callArgs.contents).toHaveLength(1);
-    expect(callArgs.contents[0].role).toBe('user');
-    expect(callArgs.contents[0].parts).toEqual([{ text: 'Hello AI' }]);
+    const contents = callArgs.contents as any[];
+    expect(contents).toHaveLength(1);
+    expect(contents[0].role).toBe('user');
+    expect(contents[0].parts).toEqual([{ text: 'Hello AI' }]);
     expect(callArgs.label).toBe('directReply');
     expect(callArgs.config?.systemInstruction).toContain('Current date and time: 2023-10-27T10:00:00Z');
 
@@ -59,10 +60,11 @@ describe('generateSimpleResponse', () => {
     await generateSimpleResponse('How are you?', 'model', threadHistory);
 
     const callArgs = vi.mocked(geminiClient.geminiCall).mock.calls[0][0];
-    expect(callArgs.contents).toHaveLength(3);
-    expect(callArgs.contents[0]).toEqual({ role: 'user', parts: [{ text: 'Hi' }] });
-    expect(callArgs.contents[1]).toEqual({ role: 'assistant', parts: [{ text: 'Hello\n[Attached: test.png]' }] });
-    expect(callArgs.contents[2]).toEqual({ role: 'user', parts: [{ text: 'How are you?' }] });
+    const contents = callArgs.contents as any[];
+    expect(contents).toHaveLength(3);
+    expect(contents[0]).toEqual({ role: 'user', parts: [{ text: 'Hi' }] });
+    expect(contents[1]).toEqual({ role: 'assistant', parts: [{ text: 'Hello\n[Attached: test.png]' }] });
+    expect(contents[2]).toEqual({ role: 'user', parts: [{ text: 'How are you?' }] });
   });
 
   it('should include attachments in user parts', async () => {
@@ -77,12 +79,13 @@ describe('generateSimpleResponse', () => {
     await generateSimpleResponse('Look at this', 'model', [], attachments);
 
     const callArgs = vi.mocked(geminiClient.geminiCall).mock.calls[0][0];
-    expect(callArgs.contents).toHaveLength(1);
-    expect(callArgs.contents[0].parts).toHaveLength(2);
-    expect(callArgs.contents[0].parts[0]).toEqual({
+    const contents = callArgs.contents as any[];
+    expect(contents).toHaveLength(1);
+    expect(contents[0].parts).toHaveLength(2);
+    expect(contents[0].parts[0]).toEqual({
       inlineData: { mimeType: 'image/png', data: 'base64str' }
     });
-    expect(callArgs.contents[0].parts[1]).toEqual({ text: 'Look at this' });
+    expect(contents[0].parts[1]).toEqual({ text: 'Look at this' });
   });
 
   it('should omit datetime when AGENT_INCLUDE_DATETIME is false', async () => {

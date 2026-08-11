@@ -12,7 +12,7 @@
 - [x] `npm install` — completes without errors
 - [x] `npm run lint` (`tsc --noEmit`) — zero type errors
 - [x] `npm run build` — Vite frontend + esbuild backend compile successfully
-- [x] `npm test` — all 8 suites pass (72 tests)
+- [x] `npm test` — all suites pass
 - [x] `npm run test:coverage` — review coverage report for gaps
 - [x] `npm start` (or `node dist/server.cjs`) — server starts on port 3000
 - [x] No new `npm audit` vulnerabilities introduced
@@ -40,6 +40,8 @@
 | Deferral Detection | `tests/deferral.test.ts` | 17 | [ ] |
 | Agent Loop | `tests/loop.test.ts` | 4 | [ ] |
 | Migration Idempotency | `tests/migration.test.ts` | 9 | [ ] |
+| SSRF Guard | `tests/ssrfGuard.test.ts` | 17 | [x] |
+| Web Fetch Adapter SSRF | `tests/webFetch.test.ts` | 7 | [x] |
 
 ---
 
