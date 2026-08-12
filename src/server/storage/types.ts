@@ -233,3 +233,12 @@ export interface ListRunsFilter {
   limit?: number;
   offset?: number;
 }
+
+export interface ToolPolicy {
+  id: string;
+  workspace_id: string;
+  channel_id?: string | null;
+  profile: string;
+  created_at: Date;
+  updated_at: Date;
+}

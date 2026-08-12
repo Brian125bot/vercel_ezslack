@@ -7,6 +7,7 @@ import { finalizeRun } from './finalize.js';
 import { verifyRun } from './verifier.js';
 import { verifySemantically } from './semanticVerifier.js';
 import { runAgentLoop } from './reactLoop.js';
+import { resolveAllowedTools } from './policy.js';
 import { slog } from './log.js';
 
 const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
@@ -89,7 +90,9 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
       return;
     }
 
-let planId = run.plan_id;
+    const allowedTools = await resolveAllowedTools(goal.workspace_id, goal.source_channel_id || null);
+
+    let planId = run.plan_id;
     // Determine if the plan was approved wholesale (plan-level approval, not step-level)
     let isPlanPreApproved = false;
     let planApprovalId: string | null = null;
@@ -142,7 +145,8 @@ let planId = run.plan_id;
           channelId: goal.source_channel_id || '',
           userId: goal.created_by_user_id,
           messageTs: goal.source_message_ts || '',
-          threadTs: goal.source_thread_ts || ''
+          threadTs: goal.source_thread_ts || '',
+          allowedTools
         };
 
         const loopResult = await runAgentLoop(run, goal, {
@@ -193,7 +197,7 @@ let planId = run.plan_id;
         const ctx = await assembleContext(goal, run);
       const contextBlock = renderContextForPrompt(ctx);
       
-      const planDraft = await createPlan(goal.title, goal.original_instruction, run.model, contextBlock, ctx?.attachments);
+      const planDraft = await createPlan(goal.title, goal.original_instruction, run.model, contextBlock, ctx?.attachments, allowedTools);
       
       const plan = await agentStore.createPlan({
         goal_id: goal.id,
@@ -243,7 +247,8 @@ let planId = run.plan_id;
             channelId: goal.source_channel_id || '',
             userId: goal.created_by_user_id,
             messageTs: goal.source_message_ts || '',
-            threadTs: goal.source_thread_ts || ''
+            threadTs: goal.source_thread_ts || '',
+            allowedTools
           });
 
           await agentStore.updateRunStatus(run.id, 'awaiting_approval', { plan_id: planId });
@@ -324,7 +329,8 @@ let planId = run.plan_id;
         messageTs: goal.source_message_ts || '',
         threadTs: goal.source_thread_ts || '',
         preApproved: isPlanPreApproved || !!stepApproval,
-        planApprovalId: isPlanPreApproved ? planApprovalId : null
+        planApprovalId: isPlanPreApproved ? planApprovalId : null,
+        allowedTools
       };
 
       await executeStep(run, step, context);

@@ -303,7 +303,6 @@ export const migrations = [
     name: 'sub_agents_and_costs',
     sql: `
       ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS parent_run_id uuid REFERENCES agent_runs(id);
-      ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS total_tokens integer NOT NULL DEFAULT 0;
       ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS estimated_cost_usd numeric;
       ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS sandbox_seconds integer NOT NULL DEFAULT 0;
 
@@ -352,6 +351,22 @@ export const migrations = [
     sql: `
       -- plan_version_id stores a composite "<planId>:<version>" string, not a uuid.
       ALTER TABLE approval_requests ALTER COLUMN plan_version_id TYPE text USING plan_version_id::text;
+    `
+  },
+  {
+    version: 14,
+    name: 'tool_policies',
+    sql: `
+      CREATE TABLE IF NOT EXISTS tool_policies (
+        id uuid PRIMARY KEY,
+        workspace_id text NOT NULL,
+        channel_id text,
+        profile text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_policies_scope
+        ON tool_policies (workspace_id, COALESCE(channel_id, ''));
     `
   }
 ];
