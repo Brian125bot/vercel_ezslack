@@ -7,7 +7,7 @@
  * answer. That observation→adapt step is what was missing.
  *
  * The loop is layered *inside* the existing durable run ledger: every model
- * tool-call is persisted as `agent_steps` + `tool_calls` row, so the
+ * tool-call is persisted as an `agent_steps` + `tool_calls` row, so the
  * existing verifier, reporter, dashboard, and approval flow all keep working
  * unchanged. The conversation turns (`contents[]`) are persisted to
  * `agent_runs.agent_messages` so a run can resume across a serverless re-queue
@@ -19,7 +19,7 @@ import type { ToolExecutionContext } from './types.js';
 import { geminiAgentStep } from './geminiClient.js';
 import { resolveModel } from './models.js';
 import { toolsRegistry } from '../tools/registry.js';
-import { checkPolicy, resolveAllowedTools } from './policy.js';
+import { checkPolicy } from './policy.js';
 import { assembleContext, renderContextForPrompt } from './context.js';
 import { attachmentsToGeminiParts } from './attachments.js';
 import { slog } from './log.js';
@@ -60,12 +60,6 @@ export async function runAgentLoop(
 ): Promise<AgentLoopOutcome> {
   let run = runIn;
   const model = resolveModel(run.model);
-
-  // Resolve allowed tools once at the top of runAgentLoop
-  const allowedTools = ctx.execContext.allowedTools !== undefined
-    ? ctx.execContext.allowedTools
-    : await resolveAllowedTools(goal.workspace_id, goal.source_channel_id || null);
-  ctx.execContext.allowedTools = allowedTools;
 
   // 1) Create (or reuse) a plan to scope the steps the loop writes. The
   //    verifier/reporter key off plan_id, so we need a row.
@@ -108,7 +102,7 @@ export async function runAgentLoop(
     contents = [{ role: 'user', parts: firstParts }];
   }
 
-  const toolDeclarations = toolsRegistry.toFunctionDeclarations(allowedTools);
+  const toolDeclarations = toolsRegistry.toFunctionDeclarations();
   const tools = toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : undefined;
 
   let toolCallsMade = await countExistingToolCalls(run.id);
@@ -219,7 +213,7 @@ export async function runAgentLoop(
         run_id: run.id,
         step_id: answerStep.id,
         type: 'agent_loop.final_answer',
-        author: 'system',
+        actor: 'system',
         summary: 'Agent loop produced final answer',
         payload: { chars: finalText.length }
       });
@@ -309,7 +303,7 @@ async function executeOneToolCall(
   execContext: ToolExecutionContext,
   orderIndex: number
 ): Promise<ToolExecResult> {
-  const { tool, deniedByPolicy } = toolsRegistry.getScoped(toolName, execContext.allowedTools ?? null);
+  const tool = toolsRegistry.get(toolName);
 
   // Unknown/unconfigured tool: honest failure (the model hallucinated a name).
   if (!tool) {
@@ -318,16 +312,13 @@ async function executeOneToolCall(
     });
     await agentStore.appendAuditEvent({
       workspace_id: goal.workspace_id, goal_id: goal.id, run_id: run.id, step_id: step.id,
-      type: deniedByPolicy ? 'tool.policy_denied' : 'tool.failed', actor: 'system',
-      summary: deniedByPolicy
-        ? `Agent loop policy denied: Tool not found: ${toolName}`
-        : `Agent loop: unknown tool ${toolName}`,
+      type: 'tool.failed', actor: 'system',
+      summary: `Agent loop: unknown tool ${toolName}`,
       payload: { error: `Tool not found: ${toolName}` }
     });
-    const availableToolNames = toolsRegistry.getAllowed(execContext.allowedTools ?? null).map(t => t.name).join(', ');
     return {
       kind: 'done',
-      response: { error: `Tool "${toolName}" does not exist. Available tools: ${availableToolNames}` }
+      response: { error: `Tool "${toolName}" does not exist. Available tools: ${toolsRegistry.getAll().map(t => t.name).join(', ')}` }
     };
   }
 

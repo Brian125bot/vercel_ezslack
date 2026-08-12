@@ -26,24 +26,22 @@
 | Suite | File | Cases | Status |
 |-------|------|:-----:|:------:|
 | AI Response | `tests/ai.test.ts` | 5 | [x] |
-| Intent Classification | `tests/intent.test.ts` | 11 | [x] |
-| Policy Gate | `tests/policy.test.ts` | 6 | [x] |
-| Secret Sanitization | `tests/sanitize.test.ts` | 11 | [x] |
-| Rule Verifier | `tests/verifier.test.ts` | 6 | [x] |
-| Action Reporter | `tests/reporter.test.ts` | 8 | [x] |
+| Intent Classification | `tests/intent.test.ts` | 11 | [ ] |
+| Policy Gate | `tests/policy.test.ts` | 6 | [ ] |
+| Secret Sanitization | `tests/sanitize.test.ts` | 11 | [ ] |
+| Rule Verifier | `tests/verifier.test.ts` | 6 | [ ] |
+| Action Reporter | `tests/reporter.test.ts` | 8 | [ ] |
 
-### New Tests (version-3 & onwards)
+### New Tests (version-3)
 
 | Suite | File | Cases | Status |
 |-------|------|:-----:|:------:|
 | Interactivity Authorization | `tests/interactivity-authorization.test.ts` | 6 | [x] |
-| Deferral Detection | `tests/deferral.test.ts` | 17 | [x] |
-| Agent Loop | `tests/loop.test.ts` | 4 | [x] |
-| Migration Idempotency | `tests/migration.test.ts` | 9 | [x] |
+| Deferral Detection | `tests/deferral.test.ts` | 17 | [ ] |
+| Agent Loop | `tests/loop.test.ts` | 4 | [ ] |
+| Migration Idempotency | `tests/migration.test.ts` | 9 | [ ] |
 | SSRF Guard | `tests/ssrfGuard.test.ts` | 17 | [x] |
 | Web Fetch Adapter SSRF | `tests/webFetch.test.ts` | 7 | [x] |
-| Tool Policy Integration | `tests/toolPolicyIntegration.test.ts` | 5 | [x] |
-| Tool Policy API REST Handlers | `tests/toolPolicyApi.test.ts` | 5 | [x] |
 
 ---
 
@@ -278,17 +276,6 @@
 
 ---
 
-## 🚀 Tool Scoping Profiles Verification
-
-- [x] Added `tool_policies` migration (v14) to database schema (`src/server/storage/schema.ts`)
-- [x] Implemented precedence resolver `resolveAllowedTools` in `src/server/agent/policy.ts` (channel > workspace > unrestricted default)
-- [x] Handled corrupt policy profiles safely with fail-closed return `[]` and error logging
-- [x] Enforced least-privilege scoping rules on registration list output and execution step runners
-- [x] Implemented GET, PUT (with verified ON CONFLICT expressions), and DELETE tool-policy administration endpoints in routes
-- [x] Covered behavior through robust unit, integration, and API test files
-
----
-
 ## ✅ Final Sign-Off
 
 | Area | Reviewer | Date | Status |
@@ -300,7 +287,6 @@
 | Documentation | Automated | 2026-06-20 | [x] |
 | Code Quality | Automated | 2026-06-20 | [x] |
 | Integration (post-merge) | Automated | 2026-06-20 | [x] |
-| Tool Scoping Profiles | Automated | 2026-08-12 | [x] |
 
 **Merge Decision:** [x] Approved / [ ] Needs Changes
 

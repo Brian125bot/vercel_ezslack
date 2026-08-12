@@ -188,7 +188,7 @@ export async function executeStep(
     }
   }
 
-  const { tool, deniedByPolicy } = toolsRegistry.getScoped(toolName, context.allowedTools ?? null);
+  const tool = toolsRegistry.get(toolName);
   if (!tool) {
     await agentStore.updateStepStatus(step.id, 'failed', { error: `Tool not found: ${toolName}` });
     await agentStore.appendAuditEvent({
@@ -196,11 +196,9 @@ export async function executeStep(
       goal_id: run.goal_id,
       run_id: run.id,
       step_id: step.id,
-      type: deniedByPolicy ? 'step.policy_denied' : 'step.failed',
+      type: 'step.failed',
       actor: 'system',
-      summary: deniedByPolicy
-        ? `Step policy denied: Tool not found: ${toolName}`
-        : `Step failed: Tool not found: ${toolName}`,
+      summary: `Step failed: Tool not found: ${toolName}`,
       payload: { error: `Tool not found: ${toolName}` }
     });
     return;

@@ -33,42 +33,14 @@ class ToolRegistry {
     return Array.from(this.tools.values());
   }
 
-  getAllowed(allowedTools: readonly string[] | null): AgentTool[] {
-    const all = this.getAll();
-    if (allowedTools === null) {
-      return all;
-    }
-    const allowedSet = new Set<string>(allowedTools);
-    return all.filter(tool => allowedSet.has(tool.name));
-  }
-
-  getScoped(
-    name: string,
-    allowedTools: readonly string[] | null
-  ): { tool: AgentTool | undefined; deniedByPolicy: boolean } {
-    const tool = this.get(name);
-    if (!tool) {
-      return { tool: undefined, deniedByPolicy: false };
-    }
-    if (allowedTools === null) {
-      return { tool, deniedByPolicy: false };
-    }
-    const isAllowed = allowedTools.includes(name);
-    if (isAllowed) {
-      return { tool, deniedByPolicy: false };
-    } else {
-      return { tool: undefined, deniedByPolicy: true };
-    }
-  }
-
   /**
    * Emit every registered tool as a Gemini FunctionDeclaration. Because adapters
    * only register their tools when env-configured, the model is never advertised
    * a tool that cannot actually run — this is the fix for "plan silently does
    * nothing" when an adapter key is missing.
    */
-  toFunctionDeclarations(allowedTools: readonly string[] | null = null): ToolFunctionDeclaration[] {
-    return this.getAllowed(allowedTools).map((tool) => ({
+  toFunctionDeclarations(): ToolFunctionDeclaration[] {
+    return this.getAll().map((tool) => ({
       name: tool.name,
       description: tool.description,
       ...(tool.parameters ? { parametersJsonSchema: tool.parameters } : {})

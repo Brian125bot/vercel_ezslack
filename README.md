@@ -165,39 +165,6 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 | HTTPS redirect + HSTS | Production-only middleware redirects HTTP→HTTPS when `x-forwarded-proto` is `http`; `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` |
 | Semantic message deduplication via Jaccard similarity | Dual-strategy dedup (exact SHA-256 hash + bigram Jaccard similarity) prevents near-duplicate Slack replies; configurable threshold, window size, and TTL |
 | ReAct loop final answer persistence | Final text answers are persisted as a `succeeded` step so the semantic verifier sees the delivered result, preventing infinite replan/re-enqueue storms |
-| Least-privilege Tool Scoping Profiles | Constrains which tools are available in specific channels/workspaces (`coding`, `research`, `messaging`, `minimal`), enforcing permissions at execution time and sanitizing error responses to prevent information disclosure. |
-
----
-
-## 🛡️ Tool Policy Profiles (Least-Privilege Enforcement)
-
-The agent supports **Tool Policy Profiles** to restrict which tools are available to specific channels or workspaces. This enables administrators to enforce a strict, least-privilege security model (e.g. limiting sandbox code execution to authorized development channels only).
-
-### Precedence Resolution Rules
-
-When resolving the allowed tools for an execution context, the engine applies standard override precedence:
-
-1. **Channel-level Policy** (`workspace_id` + `channel_id`): Checked first if `channel_id` is present. If found, this policy is authoritative and the lookup terminates.
-2. **Workspace-level Policy** (`workspace_id` and `channel_id IS NULL`): Checked if no channel-level policy exists.
-3. **Default Unrestricted**: If no policy row is found at either level, the workspace/channel remains fully unrestricted (all registered tools available), ensuring backwards-compatibility for unconfigured deployments.
-4. **Fail-Closed on Corruption**: If a policy row is found but its `profile` value is unrecognized (neither `'unrestricted'` nor a known `POLICY_PROFILES` key), the lookup **fails closed** (empty allowlist, denying all tools) and logs an error.
-
-The four standard profiles defined in `src/server/agent/policy.ts` are:
-*   `coding`: Permissive. Sandbox execution and file-system read/write.
-*   `research`: Information gathering. Web search, fetch, and sandbox read-only.
-*   `messaging`: Core Slack communication and reaction only.
-*   `minimal`: Restricted to replying in threads only.
-
-### Tool Policy Management REST API
-
-The administrative policy state can be managed via the following endpoints (protected by `requireDashboardAuth`):
-
-*   `GET /api/agent/tool-policy?workspace_id=...` — Lists all tool policy rows (both workspace- and channel-level) configured for a workspace.
-*   `PUT /api/agent/tool-policy` — Upserts a policy row. Accepts JSON body `{ workspace_id: string, channel_id?: string, profile: string }`.
-    *   `workspace_id`: Required, non-empty string.
-    *   `channel_id`: Optional. If provided, must be a non-empty string (rejects `""` with 400).
-    *   `profile`: Must be `'unrestricted'` or one of the active keys in `POLICY_PROFILES`.
-*   `DELETE /api/agent/tool-policy/:id` — Removes a policy row by ID, reverting the affected channel or workspace back to its inherited/unrestricted default.
 
 ---
 
@@ -437,7 +404,7 @@ Supported patterns:
 - Recurring triggers (cron/interval): re-inserted with next run time after claim.
 - One-shot triggers: not re-inserted after firing.
 - `cron-parser` (v5) for full cron expression support.
-- Scheduled runs now inherit the model from the goal's most recent run.
+- Scheduled runs inherit the model from the goal's most recent run.
 - Lifecycle is handled on-demand via HTTP webhooks, replacing persistent `setInterval` polling loops.
 - Maintenance (`recoverStaleClaims`, `reapExpiredApprovals`, dedup cleanup, trigger polling) runs on every workflow invocation for low MTTR; daily Vercel Cron (`0 9 * * *`) is the idle-period safety net. On Vercel Pro, change `vercel.json` to `*/15 * * * *` for 15-minute idle coverage.
 
@@ -546,7 +513,7 @@ In production, a middleware checks `x-forwarded-proto` (set by Cloud Run / Verce
 
 ## 🗄 Database Schema
 
-PostgreSQL with 13 idempotent migrations (v1–v14). All DDL uses `IF NOT EXISTS` / `IF EXISTS` guards.
+PostgreSQL with 12 idempotent migrations (v1–v12). All DDL uses `IF NOT EXISTS` / `IF EXISTS` guards.
 
 ### Tables
 
@@ -561,7 +528,6 @@ PostgreSQL with 13 idempotent migrations (v1–v14). All DDL uses `IF NOT EXISTS
 | `memory_records` | Agent long-term memory (per-workspace, per-user) |
 | `audit_events` | Full replayable timeline of all agent actions |
 | `scheduled_triggers` | Cron/interval/one-shot triggers for deferred goals |
-| `tool_policies` | Enforces least-privilege scoping profiles (coding, research, etc.) on specific channels/workspaces |
 
 ### Key Columns (agent_runs)
 
@@ -599,13 +565,47 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-29 test files, 365+ test cases. Run with:
+28 test files, 355 test cases. Run with:
 
 ```bash
 npm test              # Single run
 npm run test:watch    # Watch mode
 npm run test:coverage # With coverage report
 ```
+
+| Suite | File | Tests | Coverage |
+|-------|------|:-----:|----------|
+| Env Validation | `tests/env.test.ts` | 31 | Missing/empty/placeholder vars, DB variants, VERCEL guard, APP_URL, adapter warnings, DASHBOARD_PASSWORD dev/prod split, DB/APP_URL placeholder detection, no value leaks |
+| Security Headers | `tests/security-headers.test.ts` | 12 | CSP directives, HSTS, X-Frame-Options, nosniff, HTTPS redirect |
+| Agent Handlers | `tests/handlers.test.ts` | 27 | direct reply, durable task, status query, approval response, cancel/update |
+| Agent Extras | `tests/agent-extra.test.ts` | 23 | Plan mutation, intent ensure, pipeline dispatch, semaphore |
+| State Management | `tests/state.test.ts` | 15 | Thread memory, dedup sets, intent hash, LRU eviction |
+| Context Assembly | `tests/context.test.ts` | 14 | Thread history compaction, memory formatting, date/time context |
+| Intent Classification | `tests/intent.test.ts` | 13 | Heuristic rules, LLM fallback, category dispatch |
+| Attachment Conversion | `tests/attachments.test.ts` | 13 | Slack file download, size/count limits, MIME types, inlineData parts |
+| Vercel Integration | `tests/vercel.test.ts` | 14 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard |
+| Auth Lockout | `tests/auth.test.ts` | 11 | Redis distributed lockout, in-memory fallback, audit safety |
+| Approval Scope Creep | `tests/approval-scope-creep.test.ts` | 4 | Single-use consumption, plan-version scoping, mutation bump |
+| System Maintenance | `tests/maintenance.test.ts` | 5 | Centralized maintenance: stale claims, approval expiry, dedup cleanup, trigger polling |
+| Secret Sanitization | `tests/sanitize.test.ts` | 11 | Token/password/key detection and redaction |
+| Gemini Client | `tests/geminiClient.test.ts` | 11 | mapStructured response parsing, thoughtSignature preservation |
+| Web Search | `tests/webSearch.test.ts` | 10 | Tavily adapter integration, result formatting, error handling |
+| Deferral Detection | `tests/deferral.test.ts` | 10 | Time-deferred language patterns, unit normalization, negative cases |
+| Rate Limit Store | `tests/rateLimitStore.test.ts` | 10 | KV-backed store, sliding window, TTL expiry |
+| Scheduler | `tests/scheduler.test.ts` | 8 | Cron parsing, interval triggers, one-shot scheduling |
+| Semantic Message Deduplication | `tests/dedup.test.ts` | 17 | Fingerprinting, tokenization, Jaccard similarity, exact-hash check, Redis fallback |
+| Planner | `tests/planner.test.ts` | 8 | Plan generation, date/time context injection |
+| Policy Gate | `tests/policy.test.ts` | 7 | Risk level evaluation, approval requirement, policy decisions |
+| Orchestrator + Planner | `tests/orchestrator-planner.test.ts` | 7 | Pipeline dispatch, plan mutation wiring |
+| Agent Loop (Closed) | `tests/loop.test.ts` | 6 | Full closed-loop: plan→execute→verify→finalize |
+| ReAct Agent Loop | `tests/agent-loop.test.ts` | 6 | runAgentLoop with tool calls, streaming yields, deadline, turn cap |
+| Finalize | `tests/finalize.test.ts` | 6 | Run/goal status finalization, Slack reporting |
+| Tool Registry | `tests/registry.test.ts` | 5 | Adapter registration, tool catalog freshness |
+| Debug Mock | `tests/debug-mock.test.ts` | 1 | Simulated environment smoke test |
+
+### CI Gate
+
+`npm run lint` (`tsc --noEmit`) and `npm test` are the pre-merge CI gates.
 
 ---
 
@@ -634,9 +634,6 @@ npm run test:coverage # With coverage report
 | `GET` | `/api/agent/audit` | Audit events (`?runId` required) |
 | `POST` | `/api/agent/approvals/:id/resolve` | Dashboard approval resolution |
 | `POST` | `/api/slack/test` | Pipeline simulator (test webhook) |
-| `GET` | `/api/agent/tool-policy` | List all configured tool policy rows for a workspace |
-| `PUT` | `/api/agent/tool-policy` | Upsert a tool policy row (workspace- or channel-level) |
-| `DELETE` | `/api/agent/tool-policy/:id` | Delete a tool policy row |
 
 ---
 
@@ -665,7 +662,7 @@ npm run test:coverage # With coverage report
 │       ├── agent/
 │       │   ├── orchestrator.ts        # Pipeline entry point, resume logic
 │       │   ├── intent.ts              # Heuristic + LLM intent classifier
-│       │   ├── dedup.ts               # Centralized deduplication
+│       │   ├── dedup.ts               # Semantic message deduplication (Jaccard + SHA-256)
 │       │   ├── handlers/
 │       │   │   ├── index.ts           # Handler dispatch
 │       │   │   ├── directReply.ts     # DB-less conversational reply
@@ -684,7 +681,7 @@ npm run test:coverage # With coverage report
 │       │   ├── reactLoop.ts          # ReAct loop with streaming + function calling
 │       │   ├── finalize.ts           # Run/goal status finalization
 │       │   ├── reporter.ts           # Action-aware Slack run reports
-│       │   ├── policy.ts             # Risk-level policy gate & resolver
+│       │   ├── policy.ts             # Risk-level policy gate
 │       │   ├── sanitize.ts           # Secret detection and redaction
 │       │   ├── skills.ts             # Skill system prompt loader
 │       │   ├── semaphore.ts          # Concurrency semaphore
@@ -740,8 +737,6 @@ npm run test:coverage # With coverage report
 │   ├── finalize.test.ts              # 6 run finalization tests
 │   ├── registry.test.ts              # 5 tool registry tests
 │   ├── maintenance.test.ts           # 5 system maintenance tests
-│   ├── toolPolicyIntegration.test.ts # 5 tool policy integration tests
-│   ├── toolPolicyApi.test.ts         # 5 tool policy API tests
 │   └── debug-mock.test.ts            # 1 simulated environment smoke test
 ├── skills/
 │   └── builtin/
@@ -1030,4 +1025,4 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v7.1.0 | ✅ Done | Centralized system maintenance (shared runSystemMaintenance, cron/workflow dedup) |
 | v7.2.0 | ✅ Done | Env validation on Vercel, approval scope creep fix (plan_version_id, consumption) |
 | v7.3.0 | ✅ Done | Redis distributed auth lockout, approval scope creep hardening, Vercel Analytics |
-| Unreleased | 🔄 In Progress | Semantic message deduplication (Jaccard + SHA-256), self-host Dockerfile, gemini-3.6-flash and gemini-3.5-flash-lite support, ReAct loop final answer persistence, SSRF Guard for `web.fetch`, least-privilege scoping profiles |
+| Unreleased | 🔄 In Progress | Semantic message deduplication (Jaccard + SHA-256), self-host Dockerfile, gemini-3.6-flash and gemini-3.5-flash-lite support, ReAct loop final answer persistence, SSRF Guard for `web.fetch` |
