@@ -11,6 +11,7 @@ import { isDbAvailable } from './storage/db.js';
 import { runAgentPipeline } from './agent/orchestrator.js';
 import { Semaphore } from './agent/semaphore.js';
 import { ALLOWED_MODELS } from './agent/models.js';
+import { POLICY_PROFILES } from './agent/policy.js';
 
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
@@ -223,6 +224,58 @@ router.post('/agent/approvals/:id/resolve', requireDashboardAuth, async (req, re
     }
 
     res.json({ success: true, approval });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/agent/tool-policy', requireDashboardAuth, async (req, res) => {
+  try {
+    const workspaceId = req.query.workspace_id as string | undefined;
+    if (!workspaceId) {
+      return res.status(400).json({ error: 'workspace_id is required' });
+    }
+    const policies = await agentStore.listToolPolicies(workspaceId);
+    res.json(policies);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/agent/tool-policy', requireDashboardAuth, async (req, res) => {
+  try {
+    const { workspace_id, channel_id, profile } = req.body;
+
+    if (typeof workspace_id !== 'string' || workspace_id.trim() === '') {
+      return res.status(400).json({ error: 'workspace_id is required and must be a non-empty string' });
+    }
+
+    let resolvedChannelId: string | null = null;
+    if (channel_id !== undefined) {
+      if (typeof channel_id !== 'string' || channel_id === '') {
+        return res.status(400).json({ error: 'channel_id must be a non-empty string if provided' });
+      }
+      resolvedChannelId = channel_id;
+    }
+
+    if (profile !== 'unrestricted' && !(profile in POLICY_PROFILES)) {
+      return res.status(400).json({ error: `Invalid profile value. Must be 'unrestricted' or one of: ${Object.keys(POLICY_PROFILES).join(', ')}` });
+    }
+
+    const policy = await agentStore.upsertToolPolicy(workspace_id, resolvedChannelId, profile);
+    res.json(policy);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/agent/tool-policy/:id', requireDashboardAuth, async (req, res) => {
+  try {
+    const deleted = await agentStore.deleteToolPolicy(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: `Tool policy ${req.params.id} not found` });
+    }
+    res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -536,5 +589,3 @@ router.post('/slack/events', async (req: any, res: any) => {
     res.status(400).send(`Exception caught: ${syncErr.message || String(syncErr)}`);
   }
 });
-
-

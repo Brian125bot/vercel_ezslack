@@ -74,6 +74,7 @@ export interface ToolExecutionContext {
   threadTs?: string;
   preApproved?: boolean;
   planApprovalId?: string | null;
+  allowedTools?: readonly string[] | null;
 }
 
 export interface PlanningContext {
