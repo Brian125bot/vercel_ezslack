@@ -5,7 +5,6 @@ import { slog } from './log.js';
 import { geminiCall } from './geminiClient.js';
 import { resolveModel } from './models.js';
 import { toolsRegistry } from '../tools/registry.js';
-import { resolveAllowedTools } from './policy.js';
 
 interface MutationInstruction {
   action: 'add' | 'remove' | 'replace' | 'modify';
@@ -41,8 +40,6 @@ export async function mutatePlan(
   if (steps.length === 0) {
     return { success: false, summary: 'Plan has no steps to mutate' };
   }
-
-  const allowedTools = await resolveAllowedTools(goal.workspace_id, goal.source_channel_id || null);
 
   const stepsDescription = steps
     .map((s, i) => `${i}: [${s.status}] ${s.title} (tool: ${(s.input as any)?.toolName || 'none'}, kind: ${(s.input as any)?.kind || 'tool'})`)
@@ -125,14 +122,7 @@ Generate the mutations as JSON.`,
         if (step.status === 'pending') {
           const newInput = { ...(step.input as any), ...mut.newInput };
           if (mut.newTitle) newInput.title = mut.newTitle;
-          if (mut.newToolName) {
-            const { tool } = toolsRegistry.getScoped(mut.newToolName, allowedTools);
-            if (!tool) {
-              slog('planMutation', 'modify_tool_denied', { toolName: mut.newToolName });
-              continue;
-            }
-            newInput.toolName = mut.newToolName;
-          }
+          if (mut.newToolName) newInput.toolName = mut.newToolName;
           if (mut.newKind) newInput.kind = mut.newKind;
           await agentStore.updateStepInput(step.id, newInput);
           applied++;
@@ -140,12 +130,6 @@ Generate the mutations as JSON.`,
       } else if (mut.action === 'replace' && idx !== undefined && idx >= 0 && idx < steps.length) {
         const step = steps[idx];
         if (step.status === 'pending') {
-          const { tool } = toolsRegistry.getScoped(mut.newToolName, allowedTools);
-          if (mut.newToolName && !tool) {
-            slog('planMutation', 'replace_tool_denied', { toolName: mut.newToolName });
-            continue;
-          }
-
           await agentStore.updateStepStatus(step.id, 'skipped', { output: { reason: `Replaced by plan mutation: ${mut.reason}` } });
           // Insert the replacement as a new step
           await agentStore.createStep({
@@ -160,16 +144,11 @@ Generate the mutations as JSON.`,
               ...mut.newInput
             }
           });
+          const tool = toolsRegistry.get(mut.newToolName);
           if (tool?.riskLevel === 'external_write') newExternalWriteSteps++;
           applied++;
         }
       } else if (mut.action === 'add') {
-        const { tool } = toolsRegistry.getScoped(mut.newToolName, allowedTools);
-        if (mut.newToolName && !tool) {
-          slog('planMutation', 'add_tool_denied', { toolName: mut.newToolName });
-          continue;
-        }
-
         const maxOrder = steps.reduce((max, s) => Math.max(max, s.order_index), 0);
         await agentStore.createStep({
           run_id: runId,
@@ -183,6 +162,7 @@ Generate the mutations as JSON.`,
             ...mut.newInput
           }
         });
+        const tool = toolsRegistry.get(mut.newToolName);
         if (tool?.riskLevel === 'external_write') newExternalWriteSteps++;
         applied++;
       }

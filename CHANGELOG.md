@@ -4,12 +4,6 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-
-* **Tool Policy Scoping Profiles (least-privilege enforcement).** Implemented database-driven least-privilege scoping profiles (`coding`, `research`, `messaging`, `minimal`) to constrain what tools are available in specific channels or workspaces. Adds a new migration (version 14) creating the `tool_policies` table with unique constraint checking. Wire dynamic policy resolution once per run in both the Plan-Based Loop and ReAct Agent Loop execution engines, propagating the list of allowed tools to the planner, executor, and plan mutation modules. Tool executions outside the allowlist are denied immediately (defense-in-depth), logging policy denial audit events (`step.policy_denied` / `tool.policy_denied`) while returning generic error text to the model to prevent information disclosure.
-* **REST APIs for Tool Policy Management.** Exposed three new `requireDashboardAuth`-gated REST endpoints: `GET /api/agent/tool-policy` (list policies), `PUT /api/agent/tool-policy` (upsert with verified ON CONFLICT matching unique index expression), and `DELETE /api/agent/tool-policy/:id` (delete/revert to unrestricted default).
-* **Comprehensive Tool Policy Test Suite.** Added `tests/toolPolicyIntegration.test.ts` and `tests/toolPolicyApi.test.ts`, and extended `tests/policy.test.ts` to assert precedence rules (channel > workspace > unrestricted default), corrupt data fail-closed safety, and duplicate upsert correctness.
-
 ### Security
 
 * **SSRF Guard for `web.fetch`.** Implemented a comprehensive shared SSRF protection module `src/server/ssrfGuard.ts` and integrated it into the `web.fetch` tool. The guard validates all requested URLs, parses the hostnames, resolves all IP addresses (using Node's native `dns` module), and blocks any requests containing private, reserved, loopback, or multicast IPv4 and IPv6 network ranges, specifically protecting cloud metadata addresses like `169.254.169.254`. It also extracts and inspects the embedded IPv4 address for IPv4-mapped/translated IPv6 addresses (`::ffff:a.b.c.d/96` and `64:ff9b::/96`), prevents open-redirect bypasses by forcing `redirect: 'manual'` during `fetch` and validating every hop in redirect chains, and fails closed if DNS resolution fails.
@@ -19,7 +13,7 @@ All notable changes to this project will be documented in this file.
 * **Express `trust proxy` Hardening.** Changed the Express `trust proxy` setting from `1` (single proxy hop) to `true` (unconditional proxy trust) as requested. To prevent IP-spoofing rate-limit bypass warnings, the `express-rate-limit` permissiveness warning has been safely disabled via `validate: { trustProxy: false }`.
 * **CORS Non-Production Fallback Documentation.** Added comments documenting and explaining why allowing all origins (`*`) in non-production environments is an acceptable fallback for testing and local API client integration.
 
-### Added (Previous)
+### Added
 
 * **Comprehensive Unit and Integration Tests for SSRF Guard and Web Fetch Adapter.** Created `tests/ssrfGuard.test.ts` (17 tests) and `tests/webFetch.test.ts` (7 tests) to verify IP blocks, boundary CIDR cases, cloud metadata (`169.254.169.254`), IPv4-mapped IPv6 unwrapping, safe redirects, relative redirects, max redirect limits, and `web.fetch` end-to-end SSRF rejection and regression safety.
 * **Unit and Integration Tests for Startup URL Validation.** Added two test cases inside the `HTTPS redirect (production)` suite in `tests/security-headers.test.ts` to verify that starting the server in production with missing or invalid `APP_URL` throws/rejects as expected.
@@ -260,7 +254,7 @@ Resolves the remaining critical and high-priority issues identified during Verce
 * **`enqueueRunTask` no longer silently swallows errors (Fix 9).** `taskClient.ts` changed from `Promise<void>` to `Promise<boolean>`. `durableTask.ts` checks the return value and throws on failure, which marks the run as `failed` instead of leaving it stranded in `queued` forever with a misleading "I have accepted your goal" reply.
 * **Dashboard approval handler wrapped in `waitUntil` (Fix 10).** The `POST /agent/approvals/:id/resolve` route wraps the dynamic import and pipeline resume in `waitUntil()`, matching the interactivity handler pattern. Prevents Vercel from freezing the function before pipeline resume completes.
 * **`setInterval` guarded for Vercel serverless (Fix 11).** Two `setInterval` calls in `state.ts` (dedup cache eviction, DB cleanup) are now guarded with `if (process.env.VERCEL !== '1')`. The DB `processed_events` cleanup was moved to the Vercel Cron handler as a replacement.
-* **Step-level approval resume fixed (Fix 18).** `resumeAgentPipeline()` in `orchestrator.ts` now resets any blocked steps to `pending` before re-queuing the run. approving a tool call silently skipped the blocked step because `runLoop()` only processes steps with status `pending`.
+* **Step-level approval resume fixed (Fix 18).** `resumeAgentPipeline()` in `orchestrator.ts` now resets any blocked steps to `pending` before re-queuing the run. Previously, approving a tool call silently skipped the blocked step because `runLoop()` only processes steps with status `pending`.
 
 ### 🟡 Medium-Priority Fixes
 
@@ -622,7 +616,7 @@ Both Week 1 (Trust & Correctness) and Week 2 (Agent Loop) have been successfully
   * Adjusted handlers and the core router in `routes.ts` to allow conversational operations (`direct_reply`) safely without a connected PostgreSQL instance.
   * Ensures Slack bot availability stays highly-resilient, cleanly refusing durable workflows with an explicit user notification rather than timing out or crashing when SQL instances restart or drop.
 * **Honest Step Execution / No-Tool Blocking (Epic W1-D)**:
-  * Kept step runner in `executor.ts` from passing unmapped actions silently. Step executions now explicitly fail unless explicitly marked as a conceptual step (`note` kind), preventing empty tasks from falsely reporting as completed.
+  * Hardened the step runner in `executor.ts` to detect unsupported and "no-tool" plans generated by the LLM. Step executions now explicitly fail unless explicitly marked as a conceptual step (`note` kind), preventing empty tasks from falsely reporting as completed.
 * **Memory Secret Refusal (Epic W1-E)**:
   * Reinforced standard agentic boundaries with an intercepted credential pattern match. The application explicitly blocks "secret", "password", or "token"-esque entries into `memory.write` routines, keeping database entries compliant.
 * **Orchestrator Context Wiring**:
