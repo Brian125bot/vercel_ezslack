@@ -295,8 +295,21 @@ describe('Vercel Migration Integration Tests', () => {
       const { enqueueRunTask } = await import('../src/server/agent/taskClient.js');
       await enqueueRunTask('run-fail-test');
 
-      // Called 4 times: initial + 3 retries = 4 total
-      expect(fetchSpy).toHaveBeenCalledTimes(4);
+      // Called 3 times: initial + 2 retries = 3 total
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      fetchSpy.mockRestore();
+    });
+
+    it('stops and returns false after 2 retries (3 total attempts) on persistent server error', async () => {
+      const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() =>
+        Promise.resolve(new Response('Server Error', { status: 503 }))
+      );
+
+      const { enqueueRunTask } = await import('../src/server/agent/taskClient.js');
+      const result = await enqueueRunTask('run-fail-test-2');
+
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      expect(result).toBe(false);
       fetchSpy.mockRestore();
     });
 

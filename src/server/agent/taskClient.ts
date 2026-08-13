@@ -16,7 +16,14 @@ export async function enqueueRunTask(runId: string, logItemId?: string): Promise
 
   const endpoint = `${url.replace(/\/$/, '')}/api/workflows/agentRun`;
 
-  for (let attempt = 0; attempt <= ENQUEUE_MAX_RETRIES; attempt++) {
+  // The timeout guard only fires when the run has already exceeded its
+  // logical deadline. We fail-fast to avoid spending 20+ seconds retrying
+  // when the function's hard deadline is near. The database row is already
+  // atomically marked 'queued', so the cron poller will pick it up if this
+  // fails — no permanent data loss.
+  const ENQUEUE_RUN_MAX_RETRIES = 2; // timeout-guard context: fail fast
+
+  for (let attempt = 0; attempt <= ENQUEUE_RUN_MAX_RETRIES; attempt++) {
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
@@ -52,18 +59,18 @@ export async function enqueueRunTask(runId: string, logItemId?: string): Promise
       }
 
       // Server errors (5xx) — retry with backoff
-      if (attempt < ENQUEUE_MAX_RETRIES) {
+      if (attempt < ENQUEUE_RUN_MAX_RETRIES) {
         const delay = ENQUEUE_RETRY_BASE_MS * Math.pow(2, attempt);
         slog('taskClient', 'enqueue_retry', { runId, attempt: attempt + 1, delay, status: res.status });
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
 
-      slog('taskClient', 'enqueue_error', { runId, error: `HTTP ${res.status} after ${ENQUEUE_MAX_RETRIES} retries`, endpoint });
+      slog('taskClient', 'enqueue_error', { runId, error: `HTTP ${res.status} after ${ENQUEUE_RUN_MAX_RETRIES} retries`, endpoint });
     } catch (err: any) {
       const errorMsg = err.name === 'TimeoutError' ? 'fetch timed out' : err.message;
       // Network/connection errors — retry with backoff
-      if (attempt < ENQUEUE_MAX_RETRIES) {
+      if (attempt < ENQUEUE_RUN_MAX_RETRIES) {
         const delay = ENQUEUE_RETRY_BASE_MS * Math.pow(2, attempt);
         slog('taskClient', 'enqueue_retry', { runId, attempt: attempt + 1, delay, error: errorMsg });
         await new Promise(r => setTimeout(r, delay));
