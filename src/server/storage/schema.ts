@@ -353,5 +353,22 @@ export const migrations = [
       -- plan_version_id stores a composite "<planId>:<version>" string, not a uuid.
       ALTER TABLE approval_requests ALTER COLUMN plan_version_id TYPE text USING plan_version_id::text;
     `
+  },
+  {
+    version: 14,
+    name: 'tool_policy_profiles',
+    sql: `
+      CREATE TABLE IF NOT EXISTS tool_policies (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        workspace_id text NOT NULL,
+        channel_id text,
+        profile text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_policies_scope
+        ON tool_policies (workspace_id, COALESCE(channel_id, ''));
+    `
   }
 ];

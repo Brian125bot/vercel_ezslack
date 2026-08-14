@@ -10,6 +10,7 @@ const {
   agentStore,
   toolsRegistry,
   checkPolicy,
+  resolveAllowedTools,
   postApprovalBlockKit,
   streamReplyToThread,
 } = vi.hoisted(() => {
@@ -34,20 +35,23 @@ const {
   const toolsRegistry = {
     toFunctionDeclarations: vi.fn().mockReturnValue([]),
     get: vi.fn(),
+    getAllowed: vi.fn().mockReturnValue([]),
+    getScoped: vi.fn(),
     getAll: vi.fn().mockReturnValue([]),
   };
 
   const checkPolicy = vi.fn();
+  const resolveAllowedTools = vi.fn().mockResolvedValue(null);
   const postApprovalBlockKit = vi.fn().mockResolvedValue(undefined);
   const streamReplyToThread = vi.fn().mockResolvedValue(undefined);
 
-  return { geminiAgentStep, toolExecute, agentStore, toolsRegistry, checkPolicy, postApprovalBlockKit, streamReplyToThread };
+  return { geminiAgentStep, toolExecute, agentStore, toolsRegistry, checkPolicy, resolveAllowedTools, postApprovalBlockKit, streamReplyToThread };
 });
 
 vi.mock('../src/server/agent/geminiClient.js', () => ({ geminiAgentStep }));
 vi.mock('../src/server/storage/agentStore.js', () => ({ agentStore }));
 vi.mock('../src/server/tools/registry.js', () => ({ toolsRegistry }));
-vi.mock('../src/server/agent/policy.js', () => ({ checkPolicy }));
+vi.mock('../src/server/agent/policy.js', () => ({ checkPolicy, resolveAllowedTools }));
 vi.mock('../src/server/tools/slack.js', () => ({ postApprovalBlockKit, streamReplyToThread }));
 
 import { runAgentLoop } from '../src/server/agent/reactLoop.js';
@@ -101,6 +105,9 @@ describe('runAgentLoop (ReAct loop)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     toolsRegistry.get.mockImplementation((name: string) => tool(name));
+    toolsRegistry.getAllowed.mockReturnValue([]);
+    toolsRegistry.getScoped.mockImplementation((name: string) => ({ tool: toolsRegistry.get(name), deniedByPolicy: false }));
+    resolveAllowedTools.mockResolvedValue(null);
     checkPolicy.mockReturnValue({ allowed: true, requiresApproval: false, reason: 'ok' });
   });
 
@@ -328,5 +335,61 @@ describe('runAgentLoop (ReAct loop)', () => {
     // and ultimately complete once the model stops calling tools.
     expect(agentStore.createStep).toHaveBeenCalled();
     expect(outcome.status).toBe('completed');
+  });
+
+  it('filters advertised tools through the resolved policy profile', async () => {
+    const allowed = [tool('slack.replyInThread')];
+    resolveAllowedTools.mockResolvedValue(['slack.replyInThread']);
+    toolsRegistry.getAllowed.mockReturnValue(allowed);
+    geminiAgentStep.mockResolvedValueOnce({ text: 'all done' });
+
+    await runAgentLoop(makeRun(), goal, {
+      deadlineMs: Date.now() + 60_000,
+      signal: new AbortController().signal,
+      execContext,
+    });
+
+    expect(resolveAllowedTools).toHaveBeenCalledTimes(1);
+    expect(toolsRegistry.getAllowed).toHaveBeenCalledWith(['slack.replyInThread']);
+    expect(geminiAgentStep).toHaveBeenCalledWith(expect.objectContaining({
+      tools: [{ functionDeclarations: [expect.objectContaining({ name: 'slack.replyInThread' })] }]
+    }));
+  });
+
+  it('returns identical model-facing text for unregistered and policy-denied tools while hiding restricted names', async () => {
+    resolveAllowedTools.mockResolvedValue(['slack.replyInThread']);
+    toolsRegistry.getAllowed.mockReturnValue([tool('slack.replyInThread')]);
+    toolsRegistry.getScoped
+      .mockReturnValueOnce({ tool: undefined, deniedByPolicy: false })
+      .mockReturnValueOnce({ tool: undefined, deniedByPolicy: true });
+
+    geminiAgentStep
+      .mockResolvedValueOnce({
+        functionCalls: [{ name: 'secret.tool', args: {} }],
+        parts: [{ functionCall: { name: 'secret.tool', args: {} }, thoughtSignature: 'sig' }],
+      })
+      .mockResolvedValueOnce({
+        functionCalls: [{ name: 'secret.tool', args: {} }],
+        parts: [{ functionCall: { name: 'secret.tool', args: {} }, thoughtSignature: 'sig' }],
+      })
+      .mockResolvedValueOnce({ text: 'done' });
+
+    const outcome = await runAgentLoop(makeRun(), goal, {
+      deadlineMs: Date.now() + 60_000,
+      signal: new AbortController().signal,
+      execContext,
+    });
+
+    expect(outcome.status).toBe('completed');
+    const responses = [geminiAgentStep.mock.calls[1][0].contents, geminiAgentStep.mock.calls[2][0].contents]
+      .flatMap((messages: any[]) => messages)
+      .flatMap((message: any) => message.parts || [])
+      .filter((part: any) => part.functionResponse)
+      .map((part: any) => part.functionResponse.response.error);
+
+    expect(responses[0]).toBe('Tool "secret.tool" does not exist. Available tools: slack.replyInThread');
+    expect(responses[1]).toBe(responses[0]);
+    expect(agentStore.appendAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'tool.failed' }));
+    expect(agentStore.appendAuditEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'tool.policy_denied' }));
   });
 });

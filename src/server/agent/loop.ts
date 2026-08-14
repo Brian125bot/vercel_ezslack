@@ -8,6 +8,7 @@ import { verifyRun } from './verifier.js';
 import { verifySemantically } from './semanticVerifier.js';
 import { runAgentLoop } from './reactLoop.js';
 import { slog } from './log.js';
+import { resolveAllowedTools } from './policy.js';
 
 const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
 const MAX_ITERATIONS = 3;
@@ -74,6 +75,7 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
   slog('loop', 'runLoop.start', { run_id: run.id, goal_id: run.goal_id, worker_id: workerId, wall_time_ms: wallTimeMs });
 
   const goal = await agentStore.getGoal(run.goal_id);
+  const allowedTools = await resolveAllowedTools(goal.workspace_id, goal.source_channel_id || null);
 
   // Start lease heartbeat to prevent stale claim recovery during long operations
   const leaseHeartbeat = setInterval(() => {
@@ -193,7 +195,7 @@ let planId = run.plan_id;
         const ctx = await assembleContext(goal, run);
       const contextBlock = renderContextForPrompt(ctx);
       
-      const planDraft = await createPlan(goal.title, goal.original_instruction, run.model, contextBlock, ctx?.attachments);
+      const planDraft = await createPlan(goal.title, goal.original_instruction, run.model, contextBlock, ctx?.attachments, allowedTools);
       
       const plan = await agentStore.createPlan({
         goal_id: goal.id,
@@ -327,7 +329,7 @@ let planId = run.plan_id;
         planApprovalId: isPlanPreApproved ? planApprovalId : null
       };
 
-      await executeStep(run, step, context);
+      await executeStep(run, step, context, allowedTools);
 
       const updatedStep = await agentStore.getStep(step.id);
       if (updatedStep.status === 'blocked') {

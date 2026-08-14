@@ -12,6 +12,7 @@ const {
   mockVerifyRun,
   mockVerifySemantically,
   mockRunAgentLoop,
+  mockResolveAllowedTools,
 } = vi.hoisted(() => ({
   mockAgentStore: {
     getGoal: vi.fn(),
@@ -42,6 +43,7 @@ const {
   mockVerifyRun: vi.fn(),
   mockVerifySemantically: vi.fn(),
   mockRunAgentLoop: vi.fn(),
+  mockResolveAllowedTools: vi.fn(),
 }));
 
 vi.mock('../src/server/storage/agentStore.js', () => ({
@@ -83,6 +85,10 @@ vi.mock('../src/server/agent/log.js', () => ({
 
 vi.mock('../src/server/agent/reactLoop.js', () => ({
   runAgentLoop: mockRunAgentLoop,
+}));
+
+vi.mock('../src/server/agent/policy.js', () => ({
+  resolveAllowedTools: mockResolveAllowedTools,
 }));
 
 vi.mock('../src/server/agent/attachments.js', () => ({
@@ -164,6 +170,7 @@ describe('Agent Loop (W4-F6)', () => {
     // buildScopedTrace() re-fetches the run + trace; provide sane defaults so
     // the verification path doesn't throw when a test doesn't override them.
     mockAgentStore.getRun.mockResolvedValue(makeRun({ status: 'running', plan_id: 'plan-1' }));
+    mockResolveAllowedTools.mockResolvedValue(null);
     mockAgentStore.getRunTrace.mockResolvedValue({
       run: makeRun({ status: 'running', plan_id: 'plan-1' }),
       goal: makeGoal(),
@@ -203,6 +210,21 @@ describe('Agent Loop (W4-F6)', () => {
 
     await runLoop(run);
 
+    expect(mockResolveAllowedTools).toHaveBeenCalledTimes(1);
+    expect(mockCreatePlan).toHaveBeenCalledWith(
+      goal.title,
+      goal.original_instruction,
+      run.model,
+      undefined,
+      undefined,
+      null
+    );
+    expect(mockExecuteStep).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'run-1' }),
+      step,
+      expect.any(Object),
+      null
+    );
     expect(mockFinalizeRun).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'run-1' }),
       'succeeded'

@@ -33,6 +33,24 @@ class ToolRegistry {
     return Array.from(this.tools.values());
   }
 
+  getAllowed(allowedTools: readonly string[] | null): AgentTool[] {
+    if (allowedTools === null) return this.getAll();
+    const allowed = new Set(allowedTools);
+    return this.getAll().filter(tool => allowed.has(tool.name));
+  }
+
+  getScoped(
+    name: string,
+    allowedTools: readonly string[] | null
+  ): { tool: AgentTool | undefined; deniedByPolicy: boolean } {
+    const tool = this.get(name);
+    if (!tool) return { tool: undefined, deniedByPolicy: false };
+    if (allowedTools === null || allowedTools.includes(name)) {
+      return { tool, deniedByPolicy: false };
+    }
+    return { tool: undefined, deniedByPolicy: true };
+  }
+
   /**
    * Emit every registered tool as a Gemini FunctionDeclaration. Because adapters
    * only register their tools when env-configured, the model is never advertised
