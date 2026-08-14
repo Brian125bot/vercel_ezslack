@@ -31,10 +31,27 @@ const {
     createApprovalRequest: vi.fn().mockResolvedValue({ id: 'appr-1' }),
   };
 
+  const get = vi.fn();
+  const getAll = vi.fn().mockReturnValue([]);
+  // Mirrors the real registry's policy-scoping semantics against the same
+  // `get` mock other tests already configure, so existing `toolsRegistry.get`
+  // stubs keep working unchanged.
+  const getScoped = vi.fn((name: string, allowedTools: readonly string[] | null) => {
+    const t = get(name);
+    if (!t) return { tool: undefined, deniedByPolicy: false };
+    if (allowedTools != null && !allowedTools.includes(name)) {
+      return { tool: undefined, deniedByPolicy: true };
+    }
+    return { tool: t, deniedByPolicy: false };
+  });
+  const getAllowed = vi.fn((_allowedTools: readonly string[] | null) => getAll());
+
   const toolsRegistry = {
     toFunctionDeclarations: vi.fn().mockReturnValue([]),
-    get: vi.fn(),
-    getAll: vi.fn().mockReturnValue([]),
+    get,
+    getAll,
+    getScoped,
+    getAllowed,
   };
 
   const checkPolicy = vi.fn();
@@ -328,5 +345,118 @@ describe('runAgentLoop (ReAct loop)', () => {
     // and ultimately complete once the model stops calling tools.
     expect(agentStore.createStep).toHaveBeenCalled();
     expect(outcome.status).toBe('completed');
+  });
+
+  describe('tool policy scoping (allowedTools)', () => {
+    it('filters the tool declarations sent to the model when allowedTools is set', async () => {
+      geminiAgentStep.mockResolvedValueOnce({ text: 'done' });
+
+      await runAgentLoop(makeRun(), goal, {
+        deadlineMs: Date.now() + 60_000,
+        signal: new AbortController().signal,
+        execContext,
+        allowedTools: ['slack.replyInThread'],
+      });
+
+      expect(toolsRegistry.toFunctionDeclarations).toHaveBeenCalledWith(['slack.replyInThread']);
+    });
+
+    it('an unrestricted (null allowedTools / no policy row) run is unaffected — regression for default behavior', async () => {
+      geminiAgentStep
+        .mockResolvedValueOnce({
+          functionCalls: [{ name: 'task.record', args: { title: 'x' } }],
+          parts: [{ functionCall: { name: 'task.record', args: { title: 'x' } }, thoughtSignature: 'sig' }],
+        })
+        .mockResolvedValueOnce({ text: 'done after tool' });
+      toolExecute.mockResolvedValue({ recorded: true });
+
+      const outcome = await runAgentLoop(makeRun(), goal, {
+        deadlineMs: Date.now() + 60_000,
+        signal: new AbortController().signal,
+        execContext,
+        allowedTools: null,
+      });
+
+      expect(toolsRegistry.toFunctionDeclarations).toHaveBeenCalledWith(null);
+      expect(toolExecute).toHaveBeenCalledWith({ title: 'x' }, expect.anything());
+      expect(outcome.status).toBe('completed');
+    });
+
+    it('rejects a direct out-of-policy tool call even if the model requests it (defense-in-depth)', async () => {
+      geminiAgentStep
+        .mockResolvedValueOnce({
+          functionCalls: [{ name: 'task.record', args: { title: 'x' } }],
+          parts: [{ functionCall: { name: 'task.record', args: { title: 'x' } }, thoughtSignature: 'sig' }],
+        })
+        .mockResolvedValueOnce({ text: 'ok, I could not use that tool' });
+
+      const outcome = await runAgentLoop(makeRun(), goal, {
+        deadlineMs: Date.now() + 60_000,
+        signal: new AbortController().signal,
+        execContext,
+        allowedTools: ['slack.replyInThread'], // task.record is NOT in this list
+      });
+
+      // The tool must never actually execute.
+      expect(toolExecute).not.toHaveBeenCalled();
+      // Denial is logged distinctly from an unregistered tool, for audit use only.
+      expect(agentStore.appendAuditEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'tool.policy_denied' })
+      );
+      expect(outcome.status).toBe('completed');
+    });
+
+    it('emits the same generic error text for an unregistered tool and a policy-denied tool', async () => {
+      function functionResponseError(contents: any[]): string {
+        const userTurn = contents.find((c) => c.role === 'user' && c.parts?.some((p: any) => p.functionResponse));
+        const part = userTurn.parts.find((p: any) => p.functionResponse);
+        return part.functionResponse.response.error as string;
+      }
+
+      // Unregistered tool: `get` returns undefined for this specific name.
+      toolsRegistry.get.mockImplementation((name: string) => (name === 'does.not.exist' ? undefined : tool(name)));
+      geminiAgentStep
+        .mockResolvedValueOnce({
+          functionCalls: [{ name: 'does.not.exist', args: {} }],
+          parts: [{ functionCall: { name: 'does.not.exist', args: {} }, thoughtSignature: 'sig' }],
+        })
+        .mockResolvedValueOnce({ text: 'done' });
+
+      await runAgentLoop(makeRun(), goal, {
+        deadlineMs: Date.now() + 60_000,
+        signal: new AbortController().signal,
+        execContext,
+        allowedTools: null,
+      });
+
+      const unregisteredErrorText = functionResponseError(geminiAgentStep.mock.calls[1][0].contents);
+      expect(unregisteredErrorText).toContain('Tool "does.not.exist" does not exist');
+
+      vi.clearAllMocks();
+      toolsRegistry.get.mockImplementation((name: string) => tool(name));
+      checkPolicy.mockReturnValue({ allowed: true, requiresApproval: false, reason: 'ok' });
+
+      // Policy-denied (registered) tool.
+      geminiAgentStep
+        .mockResolvedValueOnce({
+          functionCalls: [{ name: 'task.record', args: { title: 'x' } }],
+          parts: [{ functionCall: { name: 'task.record', args: { title: 'x' } }, thoughtSignature: 'sig' }],
+        })
+        .mockResolvedValueOnce({ text: 'done' });
+
+      await runAgentLoop(makeRun(), goal, {
+        deadlineMs: Date.now() + 60_000,
+        signal: new AbortController().signal,
+        execContext,
+        allowedTools: ['slack.replyInThread'],
+      });
+
+      const deniedErrorText = functionResponseError(geminiAgentStep.mock.calls[1][0].contents);
+      expect(deniedErrorText).toContain('Tool "task.record" does not exist');
+      // The available-tools list surfaced to the model comes from
+      // `getAllowed(allowedTools)`, i.e. it must never leak a restricted
+      // tool name back to the model as "available".
+      expect(toolsRegistry.getAllowed).toHaveBeenCalledWith(['slack.replyInThread']);
+    });
   });
 });

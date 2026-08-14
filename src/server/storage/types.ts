@@ -170,6 +170,21 @@ export interface Skill {
 
 export interface CreateSkillInput extends Omit<Skill, 'id' | 'created_at' | 'updated_at'> {}
 
+export interface ToolPolicy {
+  id: string;
+  workspace_id: string;
+  channel_id?: string | null;
+  profile: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface UpsertToolPolicyInput {
+  workspace_id: string;
+  channel_id?: string | null;
+  profile: string;
+}
+
 export interface CreateGoalInput extends Omit<AgentGoal, 'id' | 'created_at' | 'updated_at' | 'completed_at'> {}
 export type UpdateGoalInput = Partial<Omit<AgentGoal, 'id' | 'created_at' | 'updated_at'>>;
 

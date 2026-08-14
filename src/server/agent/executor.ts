@@ -107,7 +107,8 @@ Generate the requested content. Be concise and use Slack-compatible markdown.`;
 export async function executeStep(
   run: AgentRun, 
   step: AgentStep, 
-  context: ToolExecutionContext
+  context: ToolExecutionContext,
+  allowedTools: readonly string[] | null = null
 ): Promise<void> {
   await agentStore.updateStepStatus(step.id, 'running');
   const stepKind: StepKind = (step.input as any)?.kind || 'tool';
@@ -188,15 +189,18 @@ export async function executeStep(
     }
   }
 
-  const tool = toolsRegistry.get(toolName);
+  const { tool, deniedByPolicy } = toolsRegistry.getScoped(toolName, allowedTools);
   if (!tool) {
+    // Model-facing/error text stays generically "tool not found" whether the
+    // name is unregistered or registered-but-policy-denied; deniedByPolicy is
+    // only used to pick the audit event type below for the caller's own logs.
     await agentStore.updateStepStatus(step.id, 'failed', { error: `Tool not found: ${toolName}` });
     await agentStore.appendAuditEvent({
       workspace_id: context.workspaceId,
       goal_id: run.goal_id,
       run_id: run.id,
       step_id: step.id,
-      type: 'step.failed',
+      type: deniedByPolicy ? 'step.policy_denied' : 'step.failed',
       actor: 'system',
       summary: `Step failed: Tool not found: ${toolName}`,
       payload: { error: `Tool not found: ${toolName}` }

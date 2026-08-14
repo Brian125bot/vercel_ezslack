@@ -5,6 +5,7 @@ import { slog } from './log.js';
 import { geminiCall } from './geminiClient.js';
 import { resolveModel } from './models.js';
 import { toolsRegistry } from '../tools/registry.js';
+import { resolveAllowedTools } from './policy.js';
 
 interface MutationInstruction {
   action: 'add' | 'remove' | 'replace' | 'modify';
@@ -40,6 +41,10 @@ export async function mutatePlan(
   if (steps.length === 0) {
     return { success: false, summary: 'Plan has no steps to mutate' };
   }
+
+  // Resolved once for this mutation call — every scoped tool lookup below
+  // shares this same resolution.
+  const allowedTools = await resolveAllowedTools(goal.workspace_id, goal.source_channel_id || null);
 
   const stepsDescription = steps
     .map((s, i) => `${i}: [${s.status}] ${s.title} (tool: ${(s.input as any)?.toolName || 'none'}, kind: ${(s.input as any)?.kind || 'tool'})`)
@@ -144,8 +149,16 @@ Generate the mutations as JSON.`,
               ...mut.newInput
             }
           });
-          const tool = toolsRegistry.get(mut.newToolName);
+          const { tool, deniedByPolicy } = toolsRegistry.getScoped(mut.newToolName, allowedTools);
           if (tool?.riskLevel === 'external_write') newExternalWriteSteps++;
+          if (deniedByPolicy) {
+            await agentStore.appendAuditEvent({
+              workspace_id: goal.workspace_id, goal_id: goal.id, run_id: runId,
+              type: 'plan.mutation.policy_denied', actor: 'system',
+              summary: `Plan mutation replaced a step with policy-denied tool ${mut.newToolName}`,
+              payload: { tool: mut.newToolName }
+            });
+          }
           applied++;
         }
       } else if (mut.action === 'add') {
@@ -162,8 +175,16 @@ Generate the mutations as JSON.`,
             ...mut.newInput
           }
         });
-        const tool = toolsRegistry.get(mut.newToolName);
+        const { tool, deniedByPolicy } = toolsRegistry.getScoped(mut.newToolName, allowedTools);
         if (tool?.riskLevel === 'external_write') newExternalWriteSteps++;
+        if (deniedByPolicy) {
+          await agentStore.appendAuditEvent({
+            workspace_id: goal.workspace_id, goal_id: goal.id, run_id: runId,
+            type: 'plan.mutation.policy_denied', actor: 'system',
+            summary: `Plan mutation added a step with policy-denied tool ${mut.newToolName}`,
+            payload: { tool: mut.newToolName }
+          });
+        }
         applied++;
       }
     }

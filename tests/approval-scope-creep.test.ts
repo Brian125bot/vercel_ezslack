@@ -19,13 +19,43 @@ const {
     getRun: vi.fn(),
     getGoal: vi.fn(),
     createStep: vi.fn().mockResolvedValue({ id: 'new-step' }),
-    bumpPlanVersion: vi.fn().mockResolvedValue({ id: 'plan-1', version: 2 })
+    bumpPlanVersion: vi.fn().mockResolvedValue({ id: 'plan-1', version: 2 }),
+    // Tool policy lookups: no row at either level -> resolveAllowedTools()
+    // resolves to null (unrestricted) — identical to pre-existing behavior.
+    getChannelToolPolicy: vi.fn().mockResolvedValue(null),
+    getWorkspaceToolPolicy: vi.fn().mockResolvedValue(null)
   },
   mockExecute: vi.fn().mockResolvedValue({ ok: true }),
   mockGeminiCall: vi.fn(),
-  mockToolsRegistry: { get: vi.fn() },
+  mockToolsRegistry: {
+    get: vi.fn(),
+    // Mirrors the real registry's policy-scoping semantics against the same
+    // `get` mock these tests already configure.
+    getScoped: vi.fn((name: string, allowedTools: readonly string[] | null) => {
+      const t = mockToolsRegistryGet(name);
+      if (!t) return { tool: undefined, deniedByPolicy: false };
+      if (allowedTools != null && !allowedTools.includes(name)) {
+        return { tool: undefined, deniedByPolicy: true };
+      }
+      return { tool: t, deniedByPolicy: false };
+    }),
+    getAllowed: vi.fn((allowedTools: readonly string[] | null) => {
+      const all = mockToolsRegistryGetAll();
+      return allowedTools == null ? all : all.filter((t: any) => allowedTools.includes(t.name));
+    }),
+    getAll: vi.fn().mockReturnValue([])
+  },
   mockPostApprovalBlockKit: vi.fn().mockResolvedValue(undefined)
 }));
+
+// Indirection so `getScoped`/`getAllowed` above always see the latest `get`/
+// `getAll` mock implementation configured by each test's `beforeEach`.
+function mockToolsRegistryGet(name: string) {
+  return (mockToolsRegistry.get as any)(name);
+}
+function mockToolsRegistryGetAll() {
+  return (mockToolsRegistry.getAll as any)();
+}
 
 vi.mock('../src/server/storage/agentStore.js', () => ({ agentStore: mockAgentStore }));
 vi.mock('../src/server/tools/registry.js', () => ({ toolsRegistry: mockToolsRegistry }));
