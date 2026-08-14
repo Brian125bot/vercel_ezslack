@@ -203,7 +203,7 @@ User Message
   │       │
   │       └─ finalizeRun()
   │           ├─ updateRunStatus()
-  ��           ├─ updateGoalStatus()
+  │           ├─ updateGoalStatus()
   │           └─ reportRunResult()  # Action-aware Slack summary
   │
   └─ Audit trail logged at every stage (audit_events table)
@@ -633,9 +633,6 @@ npm run test:coverage # With coverage report
 | `GET` | `/api/agent/memory` | Search memory (`?workspace_id` required) |
 | `GET` | `/api/agent/audit` | Audit events (`?runId` required) |
 | `POST` | `/api/agent/approvals/:id/resolve` | Dashboard approval resolution |
-| `GET` | `/api/agent/tool-policy` | List tool policy profiles for a workspace (`?workspace_id` required) |
-| `PUT` | `/api/agent/tool-policy` | Upsert a workspace- or channel-scoped tool policy profile |
-| `DELETE` | `/api/agent/tool-policy/:id` | Remove a tool policy row (reverts that scope to unrestricted) |
 | `POST` | `/api/slack/test` | Pipeline simulator (test webhook) |
 
 ---

@@ -11,8 +11,7 @@ import type {
   AuditEvent, CreateAuditEventInput,
   AgentRunTrace, ListRunsFilter,
   ScheduledTrigger,
-  Skill, CreateSkillInput,
-  ToolPolicy, UpsertToolPolicyInput
+  Skill, CreateSkillInput
 } from './types.js';
 
 import { sanitizePayload } from '../agent/sanitize.js';
@@ -676,46 +675,5 @@ async reinsertScheduledTrigger(trigger: ScheduledTrigger, nextRunAt: Date | null
 
   async deleteSkill(id: string): Promise<void> {
     await query(`DELETE FROM skills WHERE id = $1`, [id]);
-  },
-
-  // ── Tool policies (workspace/channel-scoped tool restriction profiles) ────
-  async getChannelToolPolicy(workspaceId: string, channelId: string): Promise<ToolPolicy | null> {
-    const rows = await query<ToolPolicy>(
-      `SELECT * FROM tool_policies WHERE workspace_id = $1 AND channel_id = $2 LIMIT 1`,
-      [workspaceId, channelId]
-    );
-    return rows.length ? rows[0] : null;
-  },
-
-  async getWorkspaceToolPolicy(workspaceId: string): Promise<ToolPolicy | null> {
-    const rows = await query<ToolPolicy>(
-      `SELECT * FROM tool_policies WHERE workspace_id = $1 AND channel_id IS NULL LIMIT 1`,
-      [workspaceId]
-    );
-    return rows.length ? rows[0] : null;
-  },
-
-  async listToolPolicies(workspaceId: string): Promise<ToolPolicy[]> {
-    return query<ToolPolicy>(
-      `SELECT * FROM tool_policies WHERE workspace_id = $1 ORDER BY channel_id IS NULL DESC, created_at ASC`,
-      [workspaceId]
-    );
-  },
-
-  async upsertToolPolicy(input: UpsertToolPolicyInput): Promise<ToolPolicy> {
-    const id = crypto.randomUUID();
-    const rows = await query<ToolPolicy>(
-      `INSERT INTO tool_policies (id, workspace_id, channel_id, profile)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (workspace_id, COALESCE(channel_id, ''))
-       DO UPDATE SET profile = EXCLUDED.profile, updated_at = now()
-       RETURNING *`,
-      [id, input.workspace_id, input.channel_id || null, input.profile]
-    );
-    return rows[0];
-  },
-
-  async deleteToolPolicy(id: string): Promise<void> {
-    await query(`DELETE FROM tool_policies WHERE id = $1`, [id]);
   }
 };
