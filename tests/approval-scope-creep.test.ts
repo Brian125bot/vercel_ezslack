@@ -5,7 +5,6 @@ const {
   mockExecute,
   mockGeminiCall,
   mockToolsRegistry,
-  mockResolveAllowedTools,
   mockPostApprovalBlockKit
 } = vi.hoisted(() => ({
   mockAgentStore: {
@@ -24,8 +23,7 @@ const {
   },
   mockExecute: vi.fn().mockResolvedValue({ ok: true }),
   mockGeminiCall: vi.fn(),
-  mockToolsRegistry: { get: vi.fn(), getScoped: vi.fn() },
-  mockResolveAllowedTools: vi.fn(),
+  mockToolsRegistry: { get: vi.fn() },
   mockPostApprovalBlockKit: vi.fn().mockResolvedValue(undefined)
 }));
 
@@ -33,10 +31,6 @@ vi.mock('../src/server/storage/agentStore.js', () => ({ agentStore: mockAgentSto
 vi.mock('../src/server/tools/registry.js', () => ({ toolsRegistry: mockToolsRegistry }));
 vi.mock('../src/server/tools/slack.js', () => ({ postApprovalBlockKit: mockPostApprovalBlockKit }));
 vi.mock('../src/server/agent/geminiClient.js', () => ({ geminiCall: mockGeminiCall }));
-vi.mock('../src/server/agent/policy.js', async () => {
-  const actual = await vi.importActual<any>('../src/server/agent/policy.js');
-  return { ...actual, resolveAllowedTools: mockResolveAllowedTools };
-});
 
 import { executeStep } from '../src/server/agent/executor.js';
 import { mutatePlan } from '../src/server/agent/planMutation.js';
@@ -67,11 +61,6 @@ describe('approval scope-creep prevention', () => {
       riskLevel: 'external_write',
       execute: mockExecute
     });
-    mockToolsRegistry.getScoped.mockImplementation((name: string) => ({
-      tool: mockToolsRegistry.get(name),
-      deniedByPolicy: false
-    }));
-    mockResolveAllowedTools.mockResolvedValue(null);
     mockAgentStore.getRun.mockResolvedValue({ goal_id: 'goal-1' });
     mockAgentStore.getGoal.mockResolvedValue({
       id: 'goal-1',
@@ -125,27 +114,6 @@ describe('approval scope-creep prevention', () => {
     expect(mockExecute).not.toHaveBeenCalled();
   });
 
-  it('fails a direct out-of-policy tool call with generic tool-not-found text', async () => {
-    mockToolsRegistry.getScoped.mockReturnValue({ tool: undefined, deniedByPolicy: true });
-
-    await executeStep(run, step, context, []);
-
-    expect(mockAgentStore.updateStepStatus).toHaveBeenCalledWith(
-      'step-1',
-      'failed',
-      { error: 'Tool not found: external.write' }
-    );
-    expect(mockAgentStore.appendAuditEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'step.policy_denied',
-        summary: 'Step failed: Tool not found: external.write',
-        payload: { error: 'Tool not found: external.write' }
-      })
-    );
-    expect(mockAgentStore.createToolCall).not.toHaveBeenCalled();
-    expect(mockExecute).not.toHaveBeenCalled();
-  });
-
   it('bumps the plan version when mutation adds an external write', async () => {
     mockAgentStore.getStepsForPlan.mockResolvedValue([
       { id: 'existing-step', order_index: 1, status: 'pending', title: 'Existing', input: {} }
@@ -172,31 +140,5 @@ describe('approval scope-creep prevention', () => {
         payload: { newExternalWriteSteps: 1, planId: 'plan-1' }
       })
     );
-  });
-
-  it('does not treat a policy-denied external write as approvable during mutation', async () => {
-    mockResolveAllowedTools.mockResolvedValue(['slack.replyInThread']);
-    mockToolsRegistry.getScoped.mockReturnValue({ tool: undefined, deniedByPolicy: true });
-    mockAgentStore.getStepsForPlan.mockResolvedValue([
-      { id: 'existing-step', order_index: 1, status: 'pending', title: 'Existing', input: {} }
-    ]);
-    mockGeminiCall.mockResolvedValue(JSON.stringify({
-      summary: 'Added external write',
-      mutations: [{
-        action: 'add',
-        newTitle: 'New write',
-        newKind: 'tool',
-        newToolName: 'external.write',
-        newInput: {},
-        reason: 'Needed'
-      }]
-    }));
-
-    const result = await mutatePlan('run-1', 'plan-1', 'add a write', 'flash');
-
-    expect(result.success).toBe(true);
-    expect(mockToolsRegistry.getScoped).toHaveBeenCalledWith('external.write', ['slack.replyInThread']);
-    expect(mockAgentStore.createStep).not.toHaveBeenCalled();
-    expect(mockAgentStore.bumpPlanVersion).not.toHaveBeenCalled();
   });
 });

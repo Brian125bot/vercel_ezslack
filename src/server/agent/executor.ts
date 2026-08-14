@@ -107,8 +107,7 @@ Generate the requested content. Be concise and use Slack-compatible markdown.`;
 export async function executeStep(
   run: AgentRun, 
   step: AgentStep, 
-  context: ToolExecutionContext,
-  allowedTools: readonly string[] | null = null
+  context: ToolExecutionContext
 ): Promise<void> {
   await agentStore.updateStepStatus(step.id, 'running');
   const stepKind: StepKind = (step.input as any)?.kind || 'tool';
@@ -189,7 +188,7 @@ export async function executeStep(
     }
   }
 
-  const { tool, deniedByPolicy } = toolsRegistry.getScoped(toolName, allowedTools);
+  const tool = toolsRegistry.get(toolName);
   if (!tool) {
     await agentStore.updateStepStatus(step.id, 'failed', { error: `Tool not found: ${toolName}` });
     await agentStore.appendAuditEvent({
@@ -197,7 +196,7 @@ export async function executeStep(
       goal_id: run.goal_id,
       run_id: run.id,
       step_id: step.id,
-      type: deniedByPolicy ? 'step.policy_denied' : 'step.failed',
+      type: 'step.failed',
       actor: 'system',
       summary: `Step failed: Tool not found: ${toolName}`,
       payload: { error: `Tool not found: ${toolName}` }

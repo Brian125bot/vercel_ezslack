@@ -1,5 +1,4 @@
 import type { AgentRiskLevel, PolicyDecision } from './types.js';
-import { query } from '../storage/db.js';
 
 export function checkPolicy(riskLevel: AgentRiskLevel, requestedAction: string): PolicyDecision {
   switch (riskLevel) {
@@ -34,10 +33,7 @@ export const POLICY_PROFILES: Record<string, readonly string[]> = {
     'sandbox.glob',
     'sandbox.grep',
     'sandbox.python',
-    'sandbox.node',
-    'memory.write',
-    'memory.search',
-    'task.record'
+    'sandbox.node'
   ],
   research: [
     'search.query',
@@ -45,10 +41,7 @@ export const POLICY_PROFILES: Record<string, readonly string[]> = {
     'sandbox.read',
     'sandbox.ls',
     'sandbox.glob',
-    'sandbox.grep',
-    'memory.write',
-    'memory.search',
-    'task.record'
+    'sandbox.grep'
   ],
   messaging: [
     'slack.replyInThread',
@@ -67,49 +60,4 @@ export function getPolicyProfile(profile: PolicyProfile): readonly string[] {
 
 export function getToolsForProfile(profile: PolicyProfile): readonly string[] {
   return POLICY_PROFILES[profile];
-}
-
-interface ToolPolicyRow {
-  profile: string;
-}
-
-function resolvePolicyRow(row: ToolPolicyRow | null, workspaceId: string, channelId: string | null, level: 'channel' | 'workspace'): readonly string[] | null {
-  if (!row) return null;
-  if (row.profile === 'unrestricted') return null;
-  if (Object.prototype.hasOwnProperty.call(POLICY_PROFILES, row.profile)) {
-    return POLICY_PROFILES[row.profile];
-  }
-
-  console.error('[ToolPolicy] Unknown tool policy profile; denying all tools', {
-    workspaceId,
-    channelId,
-    level,
-    profile: row.profile
-  });
-  return [];
-}
-
-export async function resolveAllowedTools(
-  workspaceId: string,
-  channelId: string | null
-): Promise<readonly string[] | null> {
-  if (channelId) {
-    const channelRows = await query<ToolPolicyRow>(
-      `SELECT profile FROM tool_policies WHERE workspace_id = $1 AND channel_id = $2 LIMIT 1`,
-      [workspaceId, channelId]
-    );
-    if (channelRows.length > 0) {
-      return resolvePolicyRow(channelRows[0], workspaceId, channelId, 'channel');
-    }
-  }
-
-  const workspaceRows = await query<ToolPolicyRow>(
-    `SELECT profile FROM tool_policies WHERE workspace_id = $1 AND channel_id IS NULL LIMIT 1`,
-    [workspaceId]
-  );
-  if (workspaceRows.length > 0) {
-    return resolvePolicyRow(workspaceRows[0], workspaceId, channelId, 'workspace');
-  }
-
-  return null;
 }
