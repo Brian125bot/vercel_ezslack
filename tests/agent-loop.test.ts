@@ -329,4 +329,26 @@ describe('runAgentLoop (ReAct loop)', () => {
     expect(agentStore.createStep).toHaveBeenCalled();
     expect(outcome.status).toBe('completed');
   });
+
+  it('passes gemini-3.7-flash through to geminiAgentStep without downgrading to safe default', async () => {
+    // Regression: when the run is configured with the newest model
+    // (gemini-3.7-flash), the loop must call geminiAgentStep with the
+    // exact same id. resolveModel() must not silently downgrade to
+    // gemini-2.5-flash just because the id is "new".
+    const run37 = { ...makeRun(), model: 'gemini-3.7-flash' };
+    geminiAgentStep.mockResolvedValueOnce({ text: 'done with 3.7' });
+
+    const outcome = await runAgentLoop(run37, goal, {
+      deadlineMs: Date.now() + 60_000,
+      signal: new AbortController().signal,
+      execContext,
+    });
+
+    expect(outcome.status).toBe('completed');
+    expect(geminiAgentStep).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'gemini-3.7-flash' })
+    );
+    // The run's model field is not mutated by the loop.
+    expect(run37.model).toBe('gemini-3.7-flash');
+  });
 });

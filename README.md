@@ -1025,4 +1025,5 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v7.1.0 | ✅ Done | Centralized system maintenance (shared runSystemMaintenance, cron/workflow dedup) |
 | v7.2.0 | ✅ Done | Env validation on Vercel, approval scope creep fix (plan_version_id, consumption) |
 | v7.3.0 | ✅ Done | Redis distributed auth lockout, approval scope creep hardening, Vercel Analytics |
-| Unreleased | 🔄 In Progress | Semantic message deduplication (Jaccard + SHA-256), self-host Dockerfile, gemini-3.6-flash and gemini-3.5-flash-lite support, ReAct loop final answer persistence, SSRF Guard for `web.fetch` |
+| v7.4.0 | ✅ Done | Gemini 3.7 Flash support (latest-gen model, 1M context, 8192 max output) |
+| Unreleased | 🔄 In Progress | Semantic message deduplication (Jaccard + SHA-256), self-host Dockerfile, ReAct loop final answer persistence, SSRF Guard for `web.fetch` |

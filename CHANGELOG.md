@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+* **Gemini 3.7 Flash support.** Added `gemini-3.7-flash` as a supported model option with full context-window and output-token configuration. Available via the dashboard model selector and the `/api/model/select` endpoint. Maintains `gemini-3.1-flash-lite` as the user-facing default and `gemini-2.5-flash` as the safe fallback.
 * **Comprehensive Unit and Integration Tests for SSRF Guard and Web Fetch Adapter.** Created `tests/ssrfGuard.test.ts` (17 tests) and `tests/webFetch.test.ts` (7 tests) to verify IP blocks, boundary CIDR cases, cloud metadata (`169.254.169.254`), IPv4-mapped IPv6 unwrapping, safe redirects, relative redirects, max redirect limits, and `web.fetch` end-to-end SSRF rejection and regression safety.
 * **Unit and Integration Tests for Startup URL Validation.** Added two test cases inside the `HTTPS redirect (production)` suite in `tests/security-headers.test.ts` to verify that starting the server in production with missing or invalid `APP_URL` throws/rejects as expected.
 
