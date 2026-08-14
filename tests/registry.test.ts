@@ -20,33 +20,6 @@ describe('tool registry completeness', () => {
       expect(registeredNames).toContain(tool.name);
     }
   });
-
-  it('getAllowed returns every registered tool when allowedTools is null', () => {
-    expect(toolsRegistry.getAllowed(null)).toEqual(toolsRegistry.getAll());
-  });
-
-  it('getAllowed filters registered tools by allowed tool names', () => {
-    const allowed = toolsRegistry.getAllowed(['slack.replyInThread']);
-
-    expect(allowed.map(t => t.name)).toEqual(['slack.replyInThread']);
-  });
-
-  it('getScoped distinguishes unregistered tools from registered tools denied by policy', () => {
-    expect(toolsRegistry.getScoped('does.not.exist', ['slack.replyInThread'])).toEqual({
-      tool: undefined,
-      deniedByPolicy: false
-    });
-
-    expect(toolsRegistry.getScoped('slack.replyInThread', [])).toEqual({
-      tool: undefined,
-      deniedByPolicy: true
-    });
-
-    expect(toolsRegistry.getScoped('slack.replyInThread', null)).toEqual({
-      tool: slackReplyInThreadTool,
-      deniedByPolicy: false
-    });
-  });
 });
 
 // Native tool-calling: the model can only see what the registry advertises, so

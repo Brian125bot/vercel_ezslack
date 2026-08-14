@@ -8,11 +8,9 @@ import { classifyIntent } from './agent/intent.js';
 import { SlackEventLog } from '../types.js';
 import { agentStore } from './storage/agentStore.js';
 import { isDbAvailable } from './storage/db.js';
-import { query } from './storage/db.js';
 import { runAgentPipeline } from './agent/orchestrator.js';
 import { Semaphore } from './agent/semaphore.js';
 import { ALLOWED_MODELS } from './agent/models.js';
-import { POLICY_PROFILES } from './agent/policy.js';
 
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
@@ -175,62 +173,6 @@ router.get('/agent/audit', requireDashboardAuth, async (req, res) => {
     }
     const auditEvents = await agentStore.listAuditEvents(req.query.runId as string);
     res.json(auditEvents);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-router.get('/agent/tool-policy', requireDashboardAuth, async (req, res) => {
-  try {
-    const workspaceId = req.query.workspace_id;
-    if (typeof workspaceId !== 'string' || workspaceId.trim().length === 0) {
-      return res.status(400).json({ error: 'workspace_id query parameter is required' });
-    }
-
-    const rows = await query(
-      `SELECT id, workspace_id, channel_id, profile, created_at, updated_at
-       FROM tool_policies
-       WHERE workspace_id = $1
-       ORDER BY channel_id NULLS FIRST, created_at ASC`,
-      [workspaceId]
-    );
-    res.json(rows);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-router.put('/agent/tool-policy', requireDashboardAuth, async (req, res) => {
-  try {
-    const { workspace_id, channel_id, profile } = req.body || {};
-    if (typeof workspace_id !== 'string' || workspace_id.trim().length === 0) {
-      return res.status(400).json({ error: 'workspace_id is required' });
-    }
-    if (channel_id !== undefined && (typeof channel_id !== 'string' || channel_id.length === 0)) {
-      return res.status(400).json({ error: 'channel_id must be a non-empty string when provided' });
-    }
-    if (typeof profile !== 'string' || (profile !== 'unrestricted' && !Object.prototype.hasOwnProperty.call(POLICY_PROFILES, profile))) {
-      return res.status(400).json({ error: 'profile must be unrestricted or a known policy profile' });
-    }
-
-    const rows = await query(
-      `INSERT INTO tool_policies (workspace_id, channel_id, profile)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (workspace_id, COALESCE(channel_id, '')) DO UPDATE
-       SET profile = EXCLUDED.profile, updated_at = now()
-       RETURNING id, workspace_id, channel_id, profile, created_at, updated_at`,
-      [workspace_id, channel_id ?? null, profile]
-    );
-    res.json(rows[0]);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-router.delete('/agent/tool-policy/:id', requireDashboardAuth, async (req, res) => {
-  try {
-    await query(`DELETE FROM tool_policies WHERE id = $1`, [req.params.id]);
-    res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -594,4 +536,5 @@ router.post('/slack/events', async (req: any, res: any) => {
     res.status(400).send(`Exception caught: ${syncErr.message || String(syncErr)}`);
   }
 });
+
 

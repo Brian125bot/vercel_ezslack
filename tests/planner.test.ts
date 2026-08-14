@@ -119,17 +119,4 @@ describe('createPlan', () => {
     const promptText = typeof callArg.contents === 'string' ? callArg.contents : callArg.contents?.[0]?.parts?.[0]?.text || '';
     expect(promptText).toContain('Current date and time: 2026-07-16 10:30:00 America/Chicago');
   });
-
-  it('filters the planner-visible tool list when allowedTools is restricted', async () => {
-    mockGeminiCall.mockResolvedValue(null);
-    const { createPlan } = await import('../src/server/agent/planner.js');
-
-    await createPlan('Title', 'Inst', 'gemini-2.5-flash', undefined, undefined, ['slack.replyInThread']);
-
-    const callArg = mockGeminiCall.mock.calls[0][0];
-    const promptText = typeof callArg.contents === 'string' ? callArg.contents : callArg.contents?.[0]?.parts?.[0]?.text || '';
-    expect(promptText).toContain('slack.replyInThread');
-    expect(promptText).not.toContain('memory.write');
-    expect(promptText).not.toContain('task.record');
-  });
 });
