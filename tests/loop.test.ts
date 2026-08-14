@@ -35,10 +35,6 @@ const {
     createApprovalRequest: vi.fn(),
     updateApprovalMessageTs: vi.fn(),
     updateApprovalStatus: vi.fn(),
-    // Tool policy lookups: default to "no row" so resolveAllowedTools()
-    // resolves to null (unrestricted) — identical to pre-existing behavior.
-    getChannelToolPolicy: vi.fn().mockResolvedValue(null),
-    getWorkspaceToolPolicy: vi.fn().mockResolvedValue(null),
   },
   mockCreatePlan: vi.fn(),
   mockExecuteStep: vi.fn(),
@@ -165,10 +161,6 @@ describe('Agent Loop (W4-F6)', () => {
     // Default: getApprovalsForRun and getAuditEventsForRun return empty
     mockAgentStore.getApprovalsForRun.mockResolvedValue([]);
     mockAgentStore.getAuditEventsForRun.mockResolvedValue([]);
-    // Default: no tool policy row at either level -> resolveAllowedTools()
-    // resolves to null (unrestricted), matching pre-existing behavior.
-    mockAgentStore.getChannelToolPolicy.mockResolvedValue(null);
-    mockAgentStore.getWorkspaceToolPolicy.mockResolvedValue(null);
     // buildScopedTrace() re-fetches the run + trace; provide sane defaults so
     // the verification path doesn't throw when a test doesn't override them.
     mockAgentStore.getRun.mockResolvedValue(makeRun({ status: 'running', plan_id: 'plan-1' }));

@@ -12,8 +12,7 @@ export async function createPlan(
   originalInstruction: string,
   selectedModel: string,
   contextBlock?: string,
-  attachments?: AgentAttachment[],
-  allowedTools: readonly string[] | null = null
+  attachments?: AgentAttachment[]
 ): Promise<AgentPlanDraft> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -44,10 +43,8 @@ export async function createPlan(
     required: ['summary', 'assumptions', 'steps', 'riskLevel', 'requiresApproval']
   };
 
-  // Build the tool catalogue dynamically from the registry, scoped to
-  // whatever tool policy applies to this workspace/channel (unrestricted by
-  // default — see resolveAllowedTools).
-  const allTools = toolsRegistry.getAllowed(allowedTools);
+  // Build the tool catalogue dynamically from the registry
+  const allTools = toolsRegistry.getAll();
   const toolDescriptions = allTools
     .map(t => `- ${t.name} (risk: ${t.riskLevel}) — ${t.description}`)
     .join('\n');

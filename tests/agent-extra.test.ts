@@ -11,10 +11,6 @@ const { mockAgentStore, mockGeminiCall, mockExistsSync, mockReaddirSync, mockRea
     createStep: vi.fn(),
     appendAuditEvent: vi.fn(),
     listSkills: vi.fn(),
-    // Tool policy lookups: no row at either level -> resolveAllowedTools()
-    // resolves to null (unrestricted) — identical to pre-existing behavior.
-    getChannelToolPolicy: vi.fn().mockResolvedValue(null),
-    getWorkspaceToolPolicy: vi.fn().mockResolvedValue(null),
   },
   mockGeminiCall: vi.fn(),
   mockExistsSync: vi.fn(),

@@ -7,7 +7,6 @@ import { finalizeRun } from './finalize.js';
 import { verifyRun } from './verifier.js';
 import { verifySemantically } from './semanticVerifier.js';
 import { runAgentLoop } from './reactLoop.js';
-import { resolveAllowedTools } from './policy.js';
 import { slog } from './log.js';
 
 const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || '300');
@@ -75,11 +74,6 @@ export async function runLoop(runIn: AgentRun, workerId?: string): Promise<void>
   slog('loop', 'runLoop.start', { run_id: run.id, goal_id: run.goal_id, worker_id: workerId, wall_time_ms: wallTimeMs });
 
   const goal = await agentStore.getGoal(run.goal_id);
-
-  // Resolved exactly once per run (not per tool call) and threaded into both
-  // execution engines — the planner/tool-declaration catalogue and every
-  // scoped tool lookup for this run share this same resolution.
-  const allowedTools = await resolveAllowedTools(goal.workspace_id, goal.source_channel_id || null);
 
   // Start lease heartbeat to prevent stale claim recovery during long operations
   const leaseHeartbeat = setInterval(() => {
@@ -154,8 +148,7 @@ let planId = run.plan_id;
         const loopResult = await runAgentLoop(run, goal, {
           deadlineMs,
           signal: abortController.signal,
-          execContext,
-          allowedTools
+          execContext
         });
 
         // Reload run after the loop (plan_id may have been set, status may have changed).
@@ -200,7 +193,7 @@ let planId = run.plan_id;
         const ctx = await assembleContext(goal, run);
       const contextBlock = renderContextForPrompt(ctx);
       
-      const planDraft = await createPlan(goal.title, goal.original_instruction, run.model, contextBlock, ctx?.attachments, allowedTools);
+      const planDraft = await createPlan(goal.title, goal.original_instruction, run.model, contextBlock, ctx?.attachments);
       
       const plan = await agentStore.createPlan({
         goal_id: goal.id,
@@ -334,7 +327,7 @@ let planId = run.plan_id;
         planApprovalId: isPlanPreApproved ? planApprovalId : null
       };
 
-      await executeStep(run, step, context, allowedTools);
+      await executeStep(run, step, context);
 
       const updatedStep = await agentStore.getStep(step.id);
       if (updatedStep.status === 'blocked') {
