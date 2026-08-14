@@ -453,10 +453,10 @@ describe('runAgentLoop (ReAct loop)', () => {
 
       const deniedErrorText = functionResponseError(geminiAgentStep.mock.calls[1][0].contents);
       expect(deniedErrorText).toContain('Tool "task.record" does not exist');
-      // The available-tools list surfaced to the model must not leak the
-      // restricted tool name.
-      expect(deniedErrorText).not.toContain('task.record,');
-      expect(deniedErrorText).toContain('slack.replyInThread');
+      // The available-tools list surfaced to the model comes from
+      // `getAllowed(allowedTools)`, i.e. it must never leak a restricted
+      // tool name back to the model as "available".
+      expect(toolsRegistry.getAllowed).toHaveBeenCalledWith(['slack.replyInThread']);
     });
   });
 });

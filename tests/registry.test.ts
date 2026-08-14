@@ -60,3 +60,54 @@ describe('toFunctionDeclarations (native tool-calling catalogue)', () => {
     }
   });
 });
+
+// Tool policy scoping: `allowedTools === null` must remain byte-for-byte
+// identical to the pre-existing unscoped behavior (this feature is strictly
+// additive), while a non-null list must filter both the lookup and the
+// declaration catalogue consistently.
+describe('policy scoping (getAllowed / getScoped / toFunctionDeclarations)', () => {
+  it('getAllowed(null) returns exactly getAll() — the default, unrestricted case', () => {
+    expect(toolsRegistry.getAllowed(null)).toEqual(toolsRegistry.getAll());
+  });
+
+  it('getAllowed([...]) filters to only the named tools', () => {
+    const allowed = toolsRegistry.getAllowed([taskRecordTool.name]);
+    expect(allowed.map(t => t.name)).toEqual([taskRecordTool.name]);
+  });
+
+  it('getAllowed([]) (deny-all profile) returns no tools', () => {
+    expect(toolsRegistry.getAllowed([])).toEqual([]);
+  });
+
+  it('getScoped returns the tool and deniedByPolicy=false when allowedTools is null', () => {
+    const { tool, deniedByPolicy } = toolsRegistry.getScoped(taskRecordTool.name, null);
+    expect(tool).toBe(taskRecordTool);
+    expect(deniedByPolicy).toBe(false);
+  });
+
+  it('getScoped returns the tool and deniedByPolicy=false when the tool is in allowedTools', () => {
+    const { tool, deniedByPolicy } = toolsRegistry.getScoped(taskRecordTool.name, [taskRecordTool.name]);
+    expect(tool).toBe(taskRecordTool);
+    expect(deniedByPolicy).toBe(false);
+  });
+
+  it('getScoped returns undefined tool and deniedByPolicy=true for a registered-but-disallowed tool', () => {
+    const { tool, deniedByPolicy } = toolsRegistry.getScoped(taskRecordTool.name, [slackReplyInThreadTool.name]);
+    expect(tool).toBeUndefined();
+    expect(deniedByPolicy).toBe(true);
+  });
+
+  it('getScoped returns undefined tool and deniedByPolicy=false for an unregistered name, regardless of allowedTools', () => {
+    expect(toolsRegistry.getScoped('does.not.exist', null)).toEqual({ tool: undefined, deniedByPolicy: false });
+    expect(toolsRegistry.getScoped('does.not.exist', ['does.not.exist'])).toEqual({ tool: undefined, deniedByPolicy: false });
+  });
+
+  it('toFunctionDeclarations(null) is identical to the unscoped call (regression)', () => {
+    expect(toolsRegistry.toFunctionDeclarations(null)).toEqual(toolsRegistry.toFunctionDeclarations());
+  });
+
+  it('toFunctionDeclarations(allowedTools) only advertises the allowed subset to the model', () => {
+    const declarations = toolsRegistry.toFunctionDeclarations([taskRecordTool.name]);
+    expect(declarations.map(d => d.name)).toEqual([taskRecordTool.name]);
+  });
+});

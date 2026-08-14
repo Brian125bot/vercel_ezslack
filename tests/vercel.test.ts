@@ -66,6 +66,10 @@ vi.mock('../src/server/storage/agentStore.js', () => ({
     createStep: vi.fn().mockResolvedValue({}),
     incrementRunRetry: vi.fn().mockResolvedValue({}),
     renewLease: vi.fn().mockResolvedValue({}),
+    // Tool policy lookups: no row at either level -> resolveAllowedTools()
+    // resolves to null (unrestricted) — identical to pre-existing behavior.
+    getChannelToolPolicy: vi.fn().mockResolvedValue(null),
+    getWorkspaceToolPolicy: vi.fn().mockResolvedValue(null),
   }
 }));
 
