@@ -34,13 +34,46 @@ class ToolRegistry {
   }
 
   /**
-   * Emit every registered tool as a Gemini FunctionDeclaration. Because adapters
-   * only register their tools when env-configured, the model is never advertised
-   * a tool that cannot actually run — this is the fix for "plan silently does
-   * nothing" when an adapter key is missing.
+   * Tool-policy scoping (opt-in). `allowedTools === null` means unrestricted —
+   * identical to `getAll()` — which is the default when no policy row is
+   * configured for a workspace/channel.
    */
-  toFunctionDeclarations(): ToolFunctionDeclaration[] {
-    return this.getAll().map((tool) => ({
+  getAllowed(allowedTools: readonly string[] | null): AgentTool[] {
+    if (allowedTools === null) return this.getAll();
+    const allowedSet = new Set(allowedTools);
+    return this.getAll().filter((tool) => allowedSet.has(tool.name));
+  }
+
+  /**
+   * Look up a tool while honoring policy scoping. `tool` is `undefined` both
+   * when the name is unregistered AND when it is registered but disallowed by
+   * the current policy — callers must treat both cases identically for any
+   * model-facing error text. `deniedByPolicy` is `true` only in the
+   * registered-but-disallowed case, for the caller's own audit-logging use;
+   * it must never be surfaced to the model.
+   */
+  getScoped(
+    name: string,
+    allowedTools: readonly string[] | null
+  ): { tool: AgentTool | undefined; deniedByPolicy: boolean } {
+    const tool = this.tools.get(name);
+    if (!tool) return { tool: undefined, deniedByPolicy: false };
+    if (allowedTools !== null && !allowedTools.includes(name)) {
+      return { tool: undefined, deniedByPolicy: true };
+    }
+    return { tool, deniedByPolicy: false };
+  }
+
+  /**
+   * Emit every registered (and policy-allowed) tool as a Gemini
+   * FunctionDeclaration. Because adapters only register their tools when
+   * env-configured, the model is never advertised a tool that cannot actually
+   * run — this is the fix for "plan silently does nothing" when an adapter
+   * key is missing. `allowedTools` defaults to `null` (unrestricted), which
+   * preserves prior behavior for callers that don't scope by policy.
+   */
+  toFunctionDeclarations(allowedTools: readonly string[] | null = null): ToolFunctionDeclaration[] {
+    return this.getAllowed(allowedTools).map((tool) => ({
       name: tool.name,
       description: tool.description,
       ...(tool.parameters ? { parametersJsonSchema: tool.parameters } : {})

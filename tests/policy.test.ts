@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest';
-import { checkPolicy, getPolicyProfile, getToolsForProfile } from '../src/server/agent/policy.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { checkPolicy, getPolicyProfile, getToolsForProfile, resolveAllowedTools } from '../src/server/agent/policy.js';
+import { agentStore } from '../src/server/storage/agentStore.js';
+
+vi.mock('../src/server/storage/agentStore.js', () => ({
+  agentStore: {
+    getChannelToolPolicy: vi.fn(),
+    getWorkspaceToolPolicy: vi.fn()
+  }
+}));
 
 describe('policy.ts', () => {
   it('checks policy for read/draft risk levels', () => {

@@ -41,6 +41,12 @@ export interface AgentLoopContext {
   signal: AbortSignal;
   /** Shared execution context (channel/user ids) forwarded to every tool. */
   execContext: ToolExecutionContext;
+  /**
+   * Tool policy scoping for this run, resolved once by the caller (loop.ts)
+   * via `resolveAllowedTools()`. `null`/omitted means unrestricted —
+   * identical to the pre-existing, unscoped behavior.
+   */
+  allowedTools?: readonly string[] | null;
 }
 
 /** Whether the wall-clock deadline is close enough to stop and resume later. */
@@ -60,6 +66,7 @@ export async function runAgentLoop(
 ): Promise<AgentLoopOutcome> {
   let run = runIn;
   const model = resolveModel(run.model);
+  const allowedTools = ctx.allowedTools ?? null;
 
   // 1) Create (or reuse) a plan to scope the steps the loop writes. The
   //    verifier/reporter key off plan_id, so we need a row.
@@ -102,7 +109,7 @@ export async function runAgentLoop(
     contents = [{ role: 'user', parts: firstParts }];
   }
 
-  const toolDeclarations = toolsRegistry.toFunctionDeclarations();
+  const toolDeclarations = toolsRegistry.toFunctionDeclarations(allowedTools);
   const tools = toolDeclarations.length > 0 ? [{ functionDeclarations: toolDeclarations }] : undefined;
 
   let toolCallsMade = await countExistingToolCalls(run.id);
@@ -163,7 +170,7 @@ export async function runAgentLoop(
           break;
         }
 
-        const toolResult = await executeOneToolCall(run, goal, planId!, fc.name, fc.args, ctx.execContext, ++stepOrder);
+        const toolResult = await executeOneToolCall(run, goal, planId!, fc.name, fc.args, ctx.execContext, ++stepOrder, allowedTools);
         // A tool call that needed approval yields the whole run.
         if (toolResult.kind === 'approval') {
           await agentStore.updateRunMessages(run.id, contents);
@@ -301,24 +308,28 @@ async function executeOneToolCall(
   toolName: string,
   args: Record<string, unknown>,
   execContext: ToolExecutionContext,
-  orderIndex: number
+  orderIndex: number,
+  allowedTools: readonly string[] | null = null
 ): Promise<ToolExecResult> {
-  const tool = toolsRegistry.get(toolName);
+  const { tool, deniedByPolicy } = toolsRegistry.getScoped(toolName, allowedTools);
 
-  // Unknown/unconfigured tool: honest failure (the model hallucinated a name).
+  // Unknown/unconfigured tool OR policy-denied tool: honest failure (the model
+  // either hallucinated a name or requested something outside its current
+  // policy scope). The model-facing text is identical either way; only the
+  // audit event type differs, for the caller's own logs.
   if (!tool) {
     const step = await persistLoopStep(run, goal, planId, toolName, args, 'failed', orderIndex, {
       error: `Tool not found: ${toolName}`
     });
     await agentStore.appendAuditEvent({
       workspace_id: goal.workspace_id, goal_id: goal.id, run_id: run.id, step_id: step.id,
-      type: 'tool.failed', actor: 'system',
+      type: deniedByPolicy ? 'tool.policy_denied' : 'tool.failed', actor: 'system',
       summary: `Agent loop: unknown tool ${toolName}`,
       payload: { error: `Tool not found: ${toolName}` }
     });
     return {
       kind: 'done',
-      response: { error: `Tool "${toolName}" does not exist. Available tools: ${toolsRegistry.getAll().map(t => t.name).join(', ')}` }
+      response: { error: `Tool "${toolName}" does not exist. Available tools: ${toolsRegistry.getAllowed(allowedTools).map(t => t.name).join(', ')}` }
     };
   }
 
