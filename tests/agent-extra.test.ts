@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ---- Mocks ----
-const { mockAgentStore, mockGeminiCall, mockExistsSync, mockReaddirSync, mockReadFileSync } = vi.hoisted(() => ({
+const { mockAgentStore, mockGeminiCall, mockExistsSync, mockReaddirSync, mockReadFileSync, mockResolveAllowedTools } = vi.hoisted(() => ({
   mockAgentStore: {
     getGoal: vi.fn(),
     getRun: vi.fn(),
@@ -15,7 +15,8 @@ const { mockAgentStore, mockGeminiCall, mockExistsSync, mockReaddirSync, mockRea
   mockGeminiCall: vi.fn(),
   mockExistsSync: vi.fn(),
   mockReaddirSync: vi.fn(),
-  mockReadFileSync: vi.fn()
+  mockReadFileSync: vi.fn(),
+  mockResolveAllowedTools: vi.fn()
 }));
 
 vi.mock('../src/server/storage/agentStore.js', () => ({
@@ -25,6 +26,11 @@ vi.mock('../src/server/storage/agentStore.js', () => ({
 vi.mock('../src/server/agent/geminiClient.js', () => ({
   geminiCall: mockGeminiCall
 }));
+
+vi.mock('../src/server/agent/policy.js', async () => {
+  const actual = await vi.importActual<any>('../src/server/agent/policy.js');
+  return { ...actual, resolveAllowedTools: mockResolveAllowedTools };
+});
 
 vi.mock('fs', () => ({
   existsSync: mockExistsSync,
@@ -48,6 +54,7 @@ import { mutatePlan } from '../src/server/agent/planMutation.js';
 describe('agent-extra.test.ts', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveAllowedTools.mockResolvedValue(null);
     process.env.GEMINI_API_KEY = 'mock-key';
   });
 

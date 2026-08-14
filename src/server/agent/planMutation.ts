@@ -5,6 +5,7 @@ import { slog } from './log.js';
 import { geminiCall } from './geminiClient.js';
 import { resolveModel } from './models.js';
 import { toolsRegistry } from '../tools/registry.js';
+import { resolveAllowedTools } from './policy.js';
 
 interface MutationInstruction {
   action: 'add' | 'remove' | 'replace' | 'modify';
@@ -36,6 +37,7 @@ export async function mutatePlan(
   const steps = await agentStore.getStepsForPlan(planId);
   const run = await agentStore.getRun(runId);
   const goal = await agentStore.getGoal(run.goal_id);
+  const allowedTools = await resolveAllowedTools(goal.workspace_id, goal.source_channel_id || null);
 
   if (steps.length === 0) {
     return { success: false, summary: 'Plan has no steps to mutate' };
@@ -120,6 +122,13 @@ Generate the mutations as JSON.`,
       } else if (mut.action === 'modify' && idx !== undefined && idx >= 0 && idx < steps.length) {
         const step = steps[idx];
         if (step.status === 'pending') {
+          if (mut.newToolName) {
+            const { tool, deniedByPolicy } = toolsRegistry.getScoped(mut.newToolName, allowedTools);
+            if (deniedByPolicy || !tool) {
+              console.warn(`[PlanMutation] Skipping modify action: tool "${mut.newToolName}" is prohibited by policy or unknown.`);
+              continue;
+            }
+          }
           const newInput = { ...(step.input as any), ...mut.newInput };
           if (mut.newTitle) newInput.title = mut.newTitle;
           if (mut.newToolName) newInput.toolName = mut.newToolName;
@@ -130,6 +139,14 @@ Generate the mutations as JSON.`,
       } else if (mut.action === 'replace' && idx !== undefined && idx >= 0 && idx < steps.length) {
         const step = steps[idx];
         if (step.status === 'pending') {
+          if (mut.newToolName) {
+            const { tool, deniedByPolicy } = toolsRegistry.getScoped(mut.newToolName, allowedTools);
+            if (deniedByPolicy || !tool) {
+              console.warn(`[PlanMutation] Skipping replace action: tool "${mut.newToolName}" is prohibited by policy or unknown.`);
+              continue;
+            }
+            if (tool.riskLevel === 'external_write') newExternalWriteSteps++;
+          }
           await agentStore.updateStepStatus(step.id, 'skipped', { output: { reason: `Replaced by plan mutation: ${mut.reason}` } });
           // Insert the replacement as a new step
           await agentStore.createStep({
@@ -144,11 +161,17 @@ Generate the mutations as JSON.`,
               ...mut.newInput
             }
           });
-          const tool = toolsRegistry.get(mut.newToolName);
-          if (tool?.riskLevel === 'external_write') newExternalWriteSteps++;
           applied++;
         }
       } else if (mut.action === 'add') {
+        if (mut.newToolName) {
+          const { tool, deniedByPolicy } = toolsRegistry.getScoped(mut.newToolName, allowedTools);
+          if (deniedByPolicy || !tool) {
+            console.warn(`[PlanMutation] Skipping add action: tool "${mut.newToolName}" is prohibited by policy or unknown.`);
+            continue;
+          }
+          if (tool.riskLevel === 'external_write') newExternalWriteSteps++;
+        }
         const maxOrder = steps.reduce((max, s) => Math.max(max, s.order_index), 0);
         await agentStore.createStep({
           run_id: runId,
@@ -162,8 +185,6 @@ Generate the mutations as JSON.`,
             ...mut.newInput
           }
         });
-        const tool = toolsRegistry.get(mut.newToolName);
-        if (tool?.riskLevel === 'external_write') newExternalWriteSteps++;
         applied++;
       }
     }

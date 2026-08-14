@@ -12,7 +12,8 @@ export async function createPlan(
   originalInstruction: string,
   selectedModel: string,
   contextBlock?: string,
-  attachments?: AgentAttachment[]
+  attachments?: AgentAttachment[],
+  allowedTools: readonly string[] | null = null
 ): Promise<AgentPlanDraft> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -44,7 +45,7 @@ export async function createPlan(
   };
 
   // Build the tool catalogue dynamically from the registry
-  const allTools = toolsRegistry.getAll();
+  const allTools = toolsRegistry.getAllowed(allowedTools);
   const toolDescriptions = allTools
     .map(t => `- ${t.name} (risk: ${t.riskLevel}) — ${t.description}`)
     .join('\n');
@@ -95,7 +96,9 @@ Planning rules:
 
     if (responseText) {
       const raw = JSON.parse(responseText) as AgentPlanDraft;
-      const { plan, redactedTools } = normalizePlanDraft(raw, toolsRegistry);
+      const { plan, redactedTools } = normalizePlanDraft(raw, {
+        get: (name: string) => toolsRegistry.getScoped(name, allowedTools).tool
+      });
       if (redactedTools.length > 0) {
         slog('planner', 'tools_redacted', { tools: redactedTools });
       }

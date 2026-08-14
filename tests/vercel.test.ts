@@ -14,7 +14,8 @@ vi.mock('../src/server/agent/scheduler.js', () => ({
 }));
 
 vi.mock('../src/server/storage/db.js', () => ({
-  isDbAvailable: vi.fn().mockResolvedValue(true)
+  isDbAvailable: vi.fn().mockResolvedValue(true),
+  query: vi.fn().mockResolvedValue([])
 }));
 
 vi.mock('../src/server/state.js', () => ({

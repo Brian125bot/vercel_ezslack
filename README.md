@@ -633,7 +633,24 @@ npm run test:coverage # With coverage report
 | `GET` | `/api/agent/memory` | Search memory (`?workspace_id` required) |
 | `GET` | `/api/agent/audit` | Audit events (`?runId` required) |
 | `POST` | `/api/agent/approvals/:id/resolve` | Dashboard approval resolution |
+| `GET` | `/api/agent/tool-policy?workspace_id=...` | List workspace and channel tool policy rows |
+| `PUT` | `/api/agent/tool-policy` | Upsert a tool policy row: `{ workspace_id, channel_id?, profile }` |
+| `DELETE` | `/api/agent/tool-policy/:id` | Delete a tool policy row |
 | `POST` | `/api/slack/test` | Pipeline simulator (test webhook) |
+
+### Tool Policy Profiles
+
+Tool policies are opt-in. If no `tool_policies` row exists for a workspace or channel, the agent sees all registered tools exactly as before.
+
+Policy resolution uses this precedence:
+
+1. If `channel_id` is present on the incoming goal, check the channel row first: `workspace_id = $1 AND channel_id = $2`.
+2. If that channel row exists, it is final, including `profile: "unrestricted"`.
+3. If no channel row exists, check the workspace row: `workspace_id = $1 AND channel_id IS NULL`.
+4. If no row exists at either level, the run is unrestricted.
+5. If any matched row contains an unknown `profile`, the run is denied all tools and logs an error.
+
+Valid profiles are `unrestricted`, `coding`, `research`, `messaging`, and `minimal`. Workspace-level rows store `channel_id` as SQL `NULL`; an empty string is rejected by the API.
 
 ---
 
