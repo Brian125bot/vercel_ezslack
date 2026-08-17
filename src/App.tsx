@@ -505,7 +505,7 @@ export default function App() {
                 Slack AI Agent <span className="font-mono text-xs px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full font-semibold border border-indigo-200">Express & Gemini</span>
               </h1>
               <p className="text-xs text-slate-500 font-sans">
-                Highly scalable serverless Slack backend optimized for Google Cloud Run
+                Highly scalable serverless Slack backend optimized for Vercel
               </p>
             </div>
           </div>
