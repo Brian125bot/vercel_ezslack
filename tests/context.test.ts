@@ -123,7 +123,7 @@ describe('context.ts', () => {
 
     const ctx = await assembleContext(goal, run);
     expect(ctx.threadHistory.length).toBe(13); // keepFirst(2) + 1 summary + keepLast(10)
-    expect(ctx.threadHistory[2].role).toBe('system');
+    expect(ctx.threadHistory[2].role).toBe('user');
     expect(ctx.threadHistory[2].summary).toBe(true);
     expect(ctx.threadHistory[2].text).toContain('Capitalizedword');
   });

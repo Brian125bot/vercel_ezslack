@@ -16,7 +16,7 @@
 import { agentStore } from '../storage/agentStore.js';
 import type { AgentRun, AgentGoal } from '../storage/types.js';
 import type { ToolExecutionContext } from './types.js';
-import { geminiAgentStep } from './geminiClient.js';
+import { geminiAgentStep, GeminiCallError } from './geminiClient.js';
 import { resolveModel } from './models.js';
 import { toolsRegistry } from '../tools/registry.js';
 import { checkPolicy } from './policy.js';
@@ -92,6 +92,19 @@ export async function runAgentLoop(
   let contents: any[];
   if (Array.isArray(run.agent_messages) && run.agent_messages.length > 0) {
     contents = run.agent_messages;
+    // Guard: Gemini requires the conversation to end with a user turn. When a
+    // run yields mid-tool-execution (approval or wall-clock), the persisted
+    // contents can end with the model's function-call turn but no corresponding
+    // user functionResponse turn. Strip the trailing model turn so the next
+    // Gemini call receives a valid request.
+    const lastTurn = contents[contents.length - 1];
+    if (lastTurn?.role === 'model') {
+      slog('agent_loop', 'resume_stripped_trailing_model_turn', {
+        run_id: run.id,
+        existing_turns: contents.length
+      });
+      contents = contents.slice(0, -1);
+    }
     slog('agent_loop', 'resume', { run_id: run.id, existing_turns: contents.length });
   } else {
     const planningCtx = await assembleContext(goal, run);
@@ -134,6 +147,22 @@ export async function runAgentLoop(
         outcome = { status: 'yield', reason: 'wall_clock', messages: contents };
         break;
       }
+      // Defense-in-depth: if contents somehow still ends with a model turn
+      // (the P0 fixes above should prevent this), yield gracefully instead of
+      // letting the 400 kill the run.
+      if (err instanceof GeminiCallError && err.isModelTurnError) {
+        slog('agent_loop', 'model_turn_error_recovery', {
+          run_id: run.id,
+          turns: contents.length
+        });
+        // Strip the trailing model turn so the persisted contents are valid.
+        if (contents.length > 0 && contents[contents.length - 1].role === 'model') {
+          contents = contents.slice(0, -1);
+        }
+        await agentStore.updateRunMessages(run.id, contents);
+        outcome = { status: 'yield', reason: 'wall_clock', messages: contents };
+        break;
+      }
       throw err;
     }
 
@@ -143,31 +172,29 @@ export async function runAgentLoop(
     }
 
     // 4) Tool calls → execute each, persist, append functionResponse, continue.
+    //    The model turn and user functionResponse turn are always pushed together
+    //    BEFORE any yield/break so that persisted contents never end with a
+    //    model turn (Gemini requires conversations to end with a user turn).
     if (response.functionCalls && response.functionCalls.length > 0) {
-      // Record the model's tool-request turn so the next generateContent sees it.
-      // Use raw `parts` from the API response to preserve Part-level fields
-      // such as thoughtSignature, which the API now requires on functionCall parts.
-      contents.push({
-        role: 'model',
-        parts: response.parts || response.functionCalls.map((fc) => ({ functionCall: { name: fc.name, args: fc.args } }))
-      });
-
       const responseParts: any[] = [];
+      let shouldBreak = false;
+
       for (const fc of response.functionCalls) {
         if (toolCallsMade >= MAX_TOOL_CALLS_PER_RUN) {
           outcome = { status: 'capped', reason: `Exceeded MAX_TOOL_CALLS_PER_RUN (${MAX_TOOL_CALLS_PER_RUN})` };
+          shouldBreak = true;
           break;
         }
         if (nearDeadline(ctx.deadlineMs)) {
           outcome = { status: 'yield', reason: 'wall_clock', messages: contents };
+          shouldBreak = true;
           break;
         }
 
         const toolResult = await executeOneToolCall(run, goal, planId!, fc.name, fc.args, ctx.execContext, ++stepOrder);
-        // A tool call that needed approval yields the whole run.
         if (toolResult.kind === 'approval') {
-          await agentStore.updateRunMessages(run.id, contents);
           outcome = { status: 'yield', reason: 'approval', messages: contents };
+          shouldBreak = true;
           break;
         }
         if (fc.name === 'slack.replyInThread') slackReplyPosted = true;
@@ -176,11 +203,18 @@ export async function runAgentLoop(
           functionResponse: { name: fc.name, response: toolResult.response }
         });
       }
-      if (outcome) break;
 
+      // Push model turn + user functionResponse turn together. This guarantees
+      // the persisted contents always ends with a user turn, preventing the
+      // Gemini "Requests ending with a model turn are not supported" 400 error.
+      contents.push({
+        role: 'model',
+        parts: response.parts || response.functionCalls.map((fc) => ({ functionCall: { name: fc.name, args: fc.args } }))
+      });
       contents.push({ role: 'user', parts: responseParts });
-      // Persist progress so a re-queue resumes from here, not from scratch.
       await agentStore.updateRunMessages(run.id, contents);
+
+      if (shouldBreak) break;
       continue;
     }
 

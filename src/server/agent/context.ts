@@ -74,7 +74,7 @@ export function compactThreadHistory(messages: any[]): any[] {
 
   return [
     ...messages.slice(0, keepFirst),
-    { role: 'system', text: `[Thread summary: ${summary}]`, summary: true },
+    { role: 'user', text: `[Thread summary: ${summary}]`, summary: true },
     ...messages.slice(-keepLast)
   ];
 }

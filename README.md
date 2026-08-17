@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-28%20files%20%7C%20355%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-34%20files%20%7C%20420%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -165,6 +165,7 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 | HTTPS redirect + HSTS | Production-only middleware redirects HTTP→HTTPS when `x-forwarded-proto` is `http`; `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` |
 | Semantic message deduplication via Jaccard similarity | Dual-strategy dedup (exact SHA-256 hash + bigram Jaccard similarity) prevents near-duplicate Slack replies; configurable threshold, window size, and TTL |
 | ReAct loop final answer persistence | Final text answers are persisted as a `succeeded` step so the semantic verifier sees the delivered result, preventing infinite replan/re-enqueue storms |
+| ReAct loop model-turn safety guard | Persisted `contents[]` is guaranteed to never end with a `model` turn: on resume, trailing model turns are stripped; during execution, `model` + `functionResponse` turns are always pushed atomically before any yield/break; the catch block auto-recovers 400 model-turn errors from Gemini |
 
 ---
 
@@ -598,7 +599,7 @@ npm run test:coverage # With coverage report
 | Policy Gate | `tests/policy.test.ts` | 7 | Risk level evaluation, approval requirement, policy decisions |
 | Orchestrator + Planner | `tests/orchestrator-planner.test.ts` | 7 | Pipeline dispatch, plan mutation wiring |
 | Agent Loop (Closed) | `tests/loop.test.ts` | 6 | Full closed-loop: plan→execute→verify→finalize |
-| ReAct Agent Loop | `tests/agent-loop.test.ts` | 6 | runAgentLoop with tool calls, streaming yields, deadline, turn cap |
+| ReAct Agent Loop | `tests/agent-loop.test.ts` | 11 | runAgentLoop with tool calls, streaming yields, deadline, turn cap, model-turn resume guard, catch-block recovery |
 | Finalize | `tests/finalize.test.ts` | 6 | Run/goal status finalization, Slack reporting |
 | Tool Registry | `tests/registry.test.ts` | 5 | Adapter registration, tool catalog freshness |
 | Debug Mock | `tests/debug-mock.test.ts` | 1 | Simulated environment smoke test |

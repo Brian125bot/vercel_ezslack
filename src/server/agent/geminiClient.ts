@@ -14,6 +14,11 @@ export class GeminiCallError extends Error {
     super(message);
     this.name = 'GeminiCallError';
   }
+
+  /** True when the error is caused by a conversation ending with a model turn. */
+  get isModelTurnError(): boolean {
+    return this.status === 400 && /model turn/i.test(this.message);
+  }
 }
 
 type GeminiPart =
