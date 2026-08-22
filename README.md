@@ -543,6 +543,8 @@ PostgreSQL with 12 idempotent migrations (v1–v12). All DDL uses `IF NOT EXISTS
 
 Migrations are defined in `src/server/storage/schema.ts` and executed by `src/server/storage/migrations.ts`. The system uses a `schema_migrations` table to track applied versions. Running migrations multiple times is always safe.
 
+A shared schema-readiness gate in `src/server/storage/readiness.ts` controls when durable work may begin. Concurrent requests in the same warm process share one migration attempt. A successful attempt stays ready for that process; a failed attempt is recorded, logged with database URLs redacted, and is **not** permanently cached, so a later request can retry safely. Local/container startup waits for the gate before listening. In Vercel, protected API routes, the workflow function, and the cron function return `503 Service Unavailable` rather than executing against an unprepared schema.
+
 ---
 
 ## ⚙️ Worker & Queue
@@ -557,8 +559,16 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 | **Atomic Run Claiming** | `claimQueuedRunById` atomically transitions a run from `queued` to `running`. Duplicate concurrent invocations for the same `runId` receive `null` and exit immediately, preventing the "concurrent-worker storm" bug. |
 | **Scheduling** | Daily Vercel Cron (`0 9 * * *`) plus on-demand maintenance on every workflow bootstrap; upgrade to Pro and set `*/15 * * * *` in `vercel.json` for 15-minute idle coverage |
 | **Stale Recovery** | `runSystemMaintenance()` (recoverStaleClaims + reapExpiredApprovals + dedup + trigger poll) on workflow bootstrap and daily cron |
+| **Schema readiness** | The shared readiness gate completes idempotent migrations before protected API, workflow, or cron work. A failure returns retryable `503` and prevents downstream agent/state operations. |
 | **Timeout Guard** | Cooperative wall-clock check (configurable `RUN_TIMEOUT_MS`, default 45s) before plan creation, each step, and verification — gracefully re-queues instead of hard-terminating on Vercel's serverless timeout |
 | **Security** | Workflow endpoint secured via Vercel Automation Bypass secret for preview deployments; cron endpoint secured via `CRON_SECRET` |
+
+### Health and Readiness
+
+| Endpoint | Meaning | Database behavior |
+|----------|---------|-------------------|
+| `GET /api/health` | **Liveness.** The process can receive and answer HTTP requests. | Does not contact the database or run migrations. It remains available while the schema is unavailable. |
+| `GET /api/readiness` | **Readiness.** Durable agent work can safely use the database schema. | Runs or joins the shared readiness attempt. Returns `200` only after success and `503` with a non-sensitive state payload after failure. |
 
 *Note: The old `FOR UPDATE SKIP LOCKED` logic remains as a concurrency fallback for synchronous paths, but background execution and polling are entirely driven by Vercel serverless functions.*
 

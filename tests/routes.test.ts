@@ -18,6 +18,8 @@ const {
   isDbAvailable,
   runAgentPipeline,
   Semaphore,
+  ensureSchemaReady,
+  getSchemaReadiness,
 } = vi.hoisted(() => ({
   selectedModel: 'gemini-3.1-flash-lite',
   setSelectedModel: vi.fn(),
@@ -45,6 +47,8 @@ const {
   isDbAvailable: vi.fn().mockResolvedValue(true),
   runAgentPipeline: vi.fn().mockResolvedValue({ status: 'success', message: 'ok' }),
   Semaphore: class { acquire() {} release() {} },
+  ensureSchemaReady: vi.fn().mockResolvedValue(undefined),
+  getSchemaReadiness: vi.fn().mockReturnValue({ state: 'ready', ready: true, lastFailureAt: null }),
 }));
 
 vi.mock('../src/server/auth.js', () => ({
@@ -75,6 +79,11 @@ vi.mock('../src/server/agent/intent.js', () => ({
 vi.mock('../src/server/storage/agentStore.js', () => ({ agentStore }));
 
 vi.mock('../src/server/storage/db.js', () => ({ isDbAvailable }));
+
+vi.mock('../src/server/storage/readiness.js', () => ({
+  ensureSchemaReady,
+  getSchemaReadiness,
+}));
 
 vi.mock('../src/server/agent/orchestrator.js', () => ({ runAgentPipeline }));
 
@@ -126,6 +135,54 @@ describe('Dashboard routes — Gemini 3.7 Flash support', () => {
     delete process.env.DATABASE_URL;
     delete process.env.CLOUD_SQL_CONNECTION_NAME;
     delete process.env.SQL_HOST;
+    ensureSchemaReady.mockResolvedValue(undefined);
+    getSchemaReadiness.mockReturnValue({ state: 'ready', ready: true, lastFailureAt: null });
+  });
+
+  it('GET /api/health remains a liveness check without schema work', async () => {
+    const { router } = await import('../src/server/routes.js');
+    const handler = findRoute(router, 'GET', '/health');
+    const req = mockReq();
+    const res = mockRes();
+
+    await handler(req, res);
+
+    expect(ensureSchemaReady).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ status: 'ok' }));
+  });
+
+  it('GET /api/readiness reports ready only after schema preparation succeeds', async () => {
+    const { router } = await import('../src/server/routes.js');
+    const handler = findRoute(router, 'GET', '/readiness');
+    const req = mockReq();
+    const res = mockRes();
+
+    await handler(req, res);
+
+    expect(ensureSchemaReady).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      status: 'ready',
+      schema: { state: 'ready', ready: true, lastFailureAt: null },
+    });
+  });
+
+  it('GET /api/readiness reports a retryable unavailable state after a migration failure', async () => {
+    ensureSchemaReady.mockRejectedValueOnce(new Error('migration failed'));
+    getSchemaReadiness.mockReturnValueOnce({ state: 'failed', ready: false, lastFailureAt: '2026-08-22T00:00:00.000Z' });
+    const { router } = await import('../src/server/routes.js');
+    const handler = findRoute(router, 'GET', '/readiness');
+    const req = mockReq();
+    const res = mockRes();
+
+    await handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({
+      status: 'not_ready',
+      schema: { state: 'failed', ready: false, lastFailureAt: '2026-08-22T00:00:00.000Z' },
+    });
   });
 
   it('GET /api/status includes gemini-3.7-flash in availableModels with matching name and description', async () => {

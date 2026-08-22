@@ -6,7 +6,7 @@ import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { router as apiRoutes } from "./src/server/routes.js";
-import { runMigrations } from "./src/server/storage/migrations.js";
+import { ensureSchemaReady } from "./src/server/storage/readiness.js";
 import { closeDb } from "./src/server/storage/db.js";
 import { KvRateLimitStore } from "./src/server/rateLimitStore.js";
 import { validateEnv } from "./src/server/env.js";
@@ -123,20 +123,26 @@ app.use(express.urlencoded({
   }
 }));
 
-// Lazy migration runner for Vercel serverless environment
-let vercelMigrationsPromise: Promise<void> | null = null;
-app.use((req, res, next) => {
-  if (process.env.VERCEL === '1' && !vercelMigrationsPromise && process.env.DATABASE_URL) {
-    vercelMigrationsPromise = runMigrations().catch(err => {
-      console.error('[Vercel Boot] Lazy database migrations failed:', err);
-      vercelMigrationsPromise = null; // Reset promise to retry on next request
-    });
+// Liveness must always be able to report that this process can respond. The
+// readiness endpoint deliberately performs the gate itself so it can distinguish
+// an uninitialized or failed schema from a healthy durable-state service.
+const readinessBypassPaths = new Set(['/health', '/readiness']);
+
+// Every other API route is fail-closed: the request reaches route and agent code
+// only after the shared schema gate has completed successfully. Concurrent cold
+// start requests share one in-process migration attempt in readiness.ts.
+app.use('/api', async (req, res, next) => {
+  if (readinessBypassPaths.has(req.path)) {
+    return next();
   }
 
-  if (vercelMigrationsPromise) {
-    vercelMigrationsPromise.then(() => next()).catch(() => next());
-  } else {
-    next();
+  try {
+    await ensureSchemaReady();
+    return next();
+  } catch {
+    return res.status(503).json({
+      error: 'Service temporarily unavailable while database schema is preparing'
+    });
   }
 });
 
@@ -152,15 +158,9 @@ async function initServer() {
   // including Vercel, preventing silent security failures.
   validateEnv();
 
-  try {
-    if (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) {
-      await runMigrations();
-    } else {
-      console.log('No SQL configuration found (DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST). Skipping database migrations.');
-    }
-  } catch (err) {
-    console.error('Failed to run database migrations:', err);
-  }
+  // A standalone process is not allowed to begin serving durable routes until
+  // its idempotent schema migrations complete successfully.
+  await ensureSchemaReady();
 
   if (process.env.NODE_ENV !== "production") {
     console.log(`[Vite Dev] Hosting express full-stack server with Vite middleware mode...`);
@@ -187,8 +187,9 @@ async function initServer() {
 }
 
 if (process.env.VERCEL !== '1') {
-  initServer().catch((err) => {
-    console.error('[FATAL] Server startup failed:', err);
+  initServer().catch(() => {
+    // The readiness gate has already emitted a sanitized migration failure.
+    console.error('[FATAL] Server startup failed.');
     process.exit(1);
   });
 } else {

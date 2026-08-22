@@ -3,6 +3,7 @@ import { classifyIntent } from '../../src/server/agent/intent.js';
 import { runSystemMaintenance } from '../../src/server/agent/maintenance.js';
 import { runAgentPipeline } from '../../src/server/agent/orchestrator.js';
 import { isDbAvailable } from '../../src/server/storage/db.js';
+import { ensureSchemaReady } from '../../src/server/storage/readiness.js';
 import { agentStore } from '../../src/server/storage/agentStore.js';
 import { Semaphore } from '../../src/server/agent/semaphore.js';
 import { createIntentHash, selectedModel, getSelectedModel, updateLog, setIntentDedup, markIntentComplete } from '../../src/server/state.js';
@@ -21,9 +22,18 @@ function confidenceToNumber(c: string): number {
 
 // Vercel Workflows endpoint for agent execution
 export default async function handler(req: any, res: any) {
-if (req.method !== 'POST') {
+	if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
+
+  try {
+    await ensureSchemaReady();
+  } catch {
+    return res.status(503).json({
+      error: 'Service temporarily unavailable while database schema is preparing'
+    });
+  }
+
   const startTime = Date.now();
   // Resolve the user's selected model from DB so cold starts use the correct model
   await getSelectedModel();

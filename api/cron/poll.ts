@@ -1,4 +1,5 @@
 import { runSystemMaintenance } from '../../src/server/agent/maintenance.js';
+import { ensureSchemaReady } from '../../src/server/storage/readiness.js';
 
 function isCronAuthorized(authHeader: string | undefined): boolean {
   const cronSecret = process.env.CRON_SECRET;
@@ -19,6 +20,14 @@ export default async function handler(req: any, res: any) {
 
   if (!isCronAuthorized(authHeader)) {
     return res.status(401).json({ error: 'Unauthorized cron request' });
+  }
+
+  try {
+    await ensureSchemaReady();
+  } catch {
+    return res.status(503).json({
+      error: 'Service temporarily unavailable while database schema is preparing'
+    });
   }
 
   console.log('[Vercel Cron] Starting maintenance cycle...');
