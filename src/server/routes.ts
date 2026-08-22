@@ -8,6 +8,7 @@ import { classifyIntent } from './agent/intent.js';
 import { SlackEventLog } from '../types.js';
 import { agentStore } from './storage/agentStore.js';
 import { isDbAvailable } from './storage/db.js';
+import { ensureSchemaReady, getSchemaReadiness } from './storage/readiness.js';
 import { runAgentPipeline } from './agent/orchestrator.js';
 import { Semaphore } from './agent/semaphore.js';
 import { ALLOWED_MODELS } from './agent/models.js';
@@ -298,9 +299,19 @@ router.post('/slack/test', requireDashboardAuth, async (req: any, res: any) => {
   }
 });
 
-// ── W4-D: Health check endpoint (no auth) ──
+// ── Liveness endpoint (no auth, no database work) ──
 router.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
+// ── Readiness endpoint (no auth, verifies durable schema state) ──
+router.get('/readiness', async (_req, res) => {
+  try {
+    await ensureSchemaReady();
+    return res.status(200).json({ status: 'ready', schema: getSchemaReadiness() });
+  } catch {
+    return res.status(503).json({ status: 'not_ready', schema: getSchemaReadiness() });
+  }
 });
 
 // ── W3-C: Slack interactivity endpoint (Block Kit button callbacks) ──

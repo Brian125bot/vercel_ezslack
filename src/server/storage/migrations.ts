@@ -1,5 +1,11 @@
 import { getAdminDbPool } from './db.js';
 import { migrations } from './schema.js';
+import { sanitizeString } from '../agent/sanitize.js';
+
+function formatMigrationError(error: unknown): string {
+  const message = error instanceof Error ? error.message : 'Unknown migration failure';
+  return sanitizeString(message).replace(/postgres(?:ql)?:\/\/[^\s]+/gi, '[REDACTED_DATABASE_URL]');
+}
 
 export async function runMigrations() {
   console.log('Running database migrations with Admin Pool...');
@@ -41,7 +47,7 @@ export async function runMigrations() {
     console.log('Database migrations completed.');
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Error in runMigrations transaction:', error);
+    console.error(`Error in runMigrations transaction: ${formatMigrationError(error)}`);
     throw error;
   } finally {
     client.release();

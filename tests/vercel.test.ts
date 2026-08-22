@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { runMigrations } from '../src/server/storage/migrations.js';
+import { ensureSchemaReady } from '../src/server/storage/readiness.js';
 import { pollScheduledTriggers } from '../src/server/agent/scheduler.js';
 
 // ---- Mocks ----
 vi.mock('../src/server/storage/migrations.js', () => ({
   runMigrations: vi.fn().mockResolvedValue(undefined)
+}));
+
+vi.mock('../src/server/storage/readiness.js', () => ({
+  ensureSchemaReady: vi.fn().mockResolvedValue(undefined),
+  getSchemaReadiness: vi.fn().mockReturnValue({ state: 'ready', ready: true, lastFailureAt: null }),
 }));
 
 vi.mock('../src/server/agent/scheduler.js', () => ({
@@ -92,45 +97,55 @@ describe('Vercel Migration Integration Tests', () => {
     vi.unstubAllGlobals();
   });
 
-  describe('1. Lazy Migration Middleware in api/index.ts', () => {
+  describe('1. Schema Readiness Middleware in api/index.ts', () => {
     // Helper to get the migration middleware from the Express app stack
     async function getMiddleware() {
       const { default: apiApp } = await import('../api/index.js');
       const stack = (apiApp as any)._router?.stack || [];
-      // Robustly find the lazy migration middleware by checking the function source code
+      // Find the fail-closed schema-readiness middleware without relying on
+      // Express stack offsets that change with security middleware.
       const layer = stack.find((s: any) => 
-        s.handle && 
-        s.handle.length === 3 && 
-        s.handle.toString().includes('runMigrations')
+        s.handle &&
+        s.handle.length === 3 &&
+        s.handle.toString().includes('ensureSchemaReady')
       );
       return layer ? layer.handle : null;
     }
 
-    it('does not trigger migrations if DATABASE_URL is missing', async () => {
-      // DATABASE_URL is set in beforeEach so server.ts imports successfully;
-      // delete it before invoking the middleware to test the "not configured" path
+    it('bypasses schema work for the lightweight liveness endpoint', async () => {
       const middleware = await getMiddleware();
-      expect(middleware).toBeTruthy();
-      delete process.env.DATABASE_URL;
-
-      const mockReq = { ip: '127.0.0.1', headers: {}, get: vi.fn().mockReturnValue('') };
-      const mockRes = {};
+      const mockReq = { path: '/health', ip: '127.0.0.1', headers: {}, get: vi.fn().mockReturnValue('') };
+      const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn() };
       const next = vi.fn();
 
       await middleware(mockReq as any, mockRes as any, next);
 
-      expect(runMigrations).not.toHaveBeenCalled();
-      expect(next).toHaveBeenCalled();
+      expect(ensureSchemaReady).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalledTimes(1);
     });
 
-    it('triggers migrations exactly once even under concurrent requests when DATABASE_URL is set', async () => {
+    it('allows a protected request to continue after schema readiness succeeds', async () => {
+      const middleware = await getMiddleware();
+      expect(middleware).toBeTruthy();
+
+      const mockReq = { path: '/status', ip: '127.0.0.1', headers: {}, get: vi.fn().mockReturnValue('') };
+      const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+      const next = vi.fn();
+
+      await middleware(mockReq as any, mockRes as any, next);
+
+      expect(ensureSchemaReady).toHaveBeenCalledTimes(1);
+      expect(next).toHaveBeenCalledTimes(1);
+    });
+
+    it('invokes the readiness gate for concurrent protected requests', async () => {
       process.env.DATABASE_URL = 'postgres://test:test@localhost:5432/test';
       const middleware = await getMiddleware();
       expect(middleware).toBeTruthy();
 
-      const mockReq1 = { ip: '127.0.0.1', headers: {}, get: vi.fn().mockReturnValue('') };
-      const mockReq2 = { ip: '127.0.0.2', headers: {}, get: vi.fn().mockReturnValue('') };
-      const mockReq3 = { ip: '127.0.0.3', headers: {}, get: vi.fn().mockReturnValue('') };
+      const mockReq1 = { path: '/status', ip: '127.0.0.1', headers: {}, get: vi.fn().mockReturnValue('') };
+      const mockReq2 = { path: '/status', ip: '127.0.0.2', headers: {}, get: vi.fn().mockReturnValue('') };
+      const mockReq3 = { path: '/status', ip: '127.0.0.3', headers: {}, get: vi.fn().mockReturnValue('') };
       
       const mockRes = {};
       const next1 = vi.fn();
@@ -144,10 +159,26 @@ describe('Vercel Migration Integration Tests', () => {
         middleware(mockReq3 as any, mockRes as any, next3)
       ]);
 
-      expect(runMigrations).toHaveBeenCalledTimes(1);
+      expect(ensureSchemaReady).toHaveBeenCalledTimes(3);
       expect(next1).toHaveBeenCalled();
       expect(next2).toHaveBeenCalled();
       expect(next3).toHaveBeenCalled();
+    });
+
+    it('returns 503 and does not invoke downstream routing when schema readiness fails', async () => {
+      vi.mocked(ensureSchemaReady).mockRejectedValueOnce(new Error('migration unavailable'));
+      const middleware = await getMiddleware();
+      const mockReq = { path: '/status', ip: '127.0.0.1', headers: {}, get: vi.fn().mockReturnValue('') };
+      const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+      const next = vi.fn();
+
+      await middleware(mockReq as any, mockRes as any, next);
+
+      expect(mockRes.status).toHaveBeenCalledWith(503);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        error: 'Service temporarily unavailable while database schema is preparing'
+      });
+      expect(next).not.toHaveBeenCalled();
     });
   });
 
@@ -204,6 +235,22 @@ describe('Vercel Migration Integration Tests', () => {
 
       expect(mockRes.status).toHaveBeenCalledWith(401);
       expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Unauthorized cron request' }));
+      expect(pollScheduledTriggers).not.toHaveBeenCalled();
+    });
+
+    it('returns 503 and skips maintenance when schema readiness fails', async () => {
+      process.env.CRON_SECRET = 'super-secret-cron-key';
+      vi.mocked(ensureSchemaReady).mockRejectedValueOnce(new Error('migration unavailable'));
+      const { default: cronHandler } = await import('../api/cron/poll.js');
+      const mockReq = { headers: { authorization: 'Bearer super-secret-cron-key' } };
+      const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+
+      await cronHandler(mockReq as any, mockRes as any);
+
+      expect(mockRes.status).toHaveBeenCalledWith(503);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        error: 'Service temporarily unavailable while database schema is preparing'
+      });
       expect(pollScheduledTriggers).not.toHaveBeenCalled();
     });
 
@@ -340,7 +387,33 @@ describe('Vercel Migration Integration Tests', () => {
     });
   });
 
-  describe('4. Vercel Workflow Handler - Model Selection (Fix 1)', () => {
+  describe('4. Vercel Workflow Handler - Schema Readiness and Model Selection', () => {
+    it('returns 503 before model resolution or agent work when schema readiness fails', async () => {
+      vi.mocked(ensureSchemaReady).mockRejectedValueOnce(new Error('migration unavailable'));
+      const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
+      const { getSelectedModel } = await import('../src/server/state.js');
+      const { runAgentPipeline } = await import('../src/server/agent/orchestrator.js');
+      const { agentStore } = await import('../src/server/storage/agentStore.js');
+      vi.clearAllMocks();
+
+      const mockReq = {
+        method: 'POST',
+        body: { runId: 'run-readiness-failure' },
+        headers: {}
+      };
+      const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn(), send: vi.fn() };
+
+      await workflowHandler(mockReq as any, mockRes as any);
+
+      expect(mockRes.status).toHaveBeenCalledWith(503);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        error: 'Service temporarily unavailable while database schema is preparing'
+      });
+      expect(getSelectedModel).not.toHaveBeenCalled();
+      expect(runAgentPipeline).not.toHaveBeenCalled();
+      expect(agentStore.claimQueuedRunById).not.toHaveBeenCalled();
+    });
+
     it('calls getSelectedModel during handler bootstrap to resolve user model', async () => {
       // Import agentRun handler — its module-level imports trigger getSelectedModel mock
       const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
