@@ -2,9 +2,10 @@ const PLACEHOLDER_PATTERNS = [
   'MY_GEMINI_API_KEY', 'xoxb-myslackbottoken',
   'my_slack_signing_secret', 'MY_SIGNING_SECRET',
   'my_dashboard_password', 'changeme', 'placeholder',
+  'workflow_internal_secret_placeholder', 'my_workflow_internal_secret',
 ];
 
-function isPlaceholder(val: string): boolean {
+export function isPlaceholder(val: string): boolean {
   const lower = val.toLowerCase();
   return PLACEHOLDER_PATTERNS.some(p => lower.includes(p.toLowerCase()));
 }
@@ -14,6 +15,7 @@ interface CriticalVars {
   SLACK_BOT_TOKEN: string;
   SLACK_SIGNING_SECRET: string;
   DASHBOARD_PASSWORD: string;
+  WORKFLOW_INTERNAL_SECRET?: string;
   DATABASE_URL?: string;
   CLOUD_SQL_CONNECTION_NAME?: string;
   SQL_HOST?: string;
@@ -31,6 +33,7 @@ function readCriticalVars(): CriticalVars {
     SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN?.trim() || '',
     SLACK_SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET?.trim() || '',
     DASHBOARD_PASSWORD: process.env.DASHBOARD_PASSWORD?.trim() || '',
+    WORKFLOW_INTERNAL_SECRET: process.env.WORKFLOW_INTERNAL_SECRET?.trim() || undefined,
     DATABASE_URL: process.env.DATABASE_URL?.trim() || undefined,
     CLOUD_SQL_CONNECTION_NAME: process.env.CLOUD_SQL_CONNECTION_NAME?.trim() || undefined,
     SQL_HOST: process.env.SQL_HOST?.trim() || undefined,
@@ -38,7 +41,7 @@ function readCriticalVars(): CriticalVars {
   };
 }
 
-function checkVar(name: string, value: string): MissingVar | null {
+function checkVar(name: string, value?: string): MissingVar | null {
   if (!value) return { name, reason: 'missing' };
   if (isPlaceholder(value)) return { name, reason: 'placeholder' };
   return null;
@@ -54,9 +57,10 @@ const OPTIONAL_WARN_VARS: Array<{ key: string; desc: string }> = [
 export function validateEnv(): void {
   const vars = readCriticalVars();
   const isProduction = process.env.NODE_ENV === 'production';
+  const isVercel = process.env.VERCEL === '1';
   const missing: MissingVar[] = [];
 
-  const check = (name: string, value: string) => {
+  const check = (name: string, value?: string) => {
     const result = checkVar(name, value);
     if (result) missing.push(result);
   };
@@ -67,6 +71,11 @@ export function validateEnv(): void {
   check('GEMINI_API_KEY', vars.GEMINI_API_KEY);
   check('SLACK_BOT_TOKEN', vars.SLACK_BOT_TOKEN);
   check('SLACK_SIGNING_SECRET', vars.SLACK_SIGNING_SECRET);
+
+  // WORKFLOW_INTERNAL_SECRET is required in production and whenever VERCEL=1
+  if (isProduction || isVercel) {
+    check('WORKFLOW_INTERNAL_SECRET', vars.WORKFLOW_INTERNAL_SECRET);
+  }
 
   // DASHBOARD_PASSWORD: warn-only everywhere. Open-access dev mode is allowed,
   // but we surface a security warning so operators are not caught off guard.
@@ -110,6 +119,7 @@ export function validateEnv(): void {
       'GEMINI_API_KEY': 'AI agent backend (required for agent logic)',
       'SLACK_BOT_TOKEN': 'Slack bot authentication (required for Slack integration)',
       'SLACK_SIGNING_SECRET': 'Slack request verification (required for request security)',
+      'WORKFLOW_INTERNAL_SECRET': 'Internal workflow authentication (required for internal endpoint execution)',
       'DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST': 'Database connection (required for durable state)',
       'APP_URL': 'Application URL (required for webhook callbacks)',
     };

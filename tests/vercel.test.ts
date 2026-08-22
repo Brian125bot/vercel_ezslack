@@ -80,6 +80,7 @@ describe('Vercel Migration Integration Tests', () => {
       GEMINI_API_KEY: 'test-ai-key',
       SLACK_BOT_TOKEN: 'xoxb-real-token',
       SLACK_SIGNING_SECRET: 'real-signing-secret',
+      WORKFLOW_INTERNAL_SECRET: 'real-workflow-secret',
       DASHBOARD_PASSWORD: 'strong-password',
       DATABASE_URL: 'postgres://user:pass@host:5432/db',
       APP_URL: 'https://example.com',
@@ -262,7 +263,10 @@ describe('Vercel Migration Integration Tests', () => {
         'https://my-app.vercel.app/api/workflows/agentRun',
         expect.objectContaining({
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer real-workflow-secret'
+          }),
           body: JSON.stringify({ runId: 'run-123', logItemId: 'log-456' })
         })
       );
@@ -357,7 +361,9 @@ describe('Vercel Migration Integration Tests', () => {
           workspaceId: 'T001',
         },
         get: vi.fn().mockReturnValue(''),
-        headers: {}
+        headers: {
+          authorization: 'Bearer real-workflow-secret'
+        }
       };
       const mockRes = {
         status: vi.fn().mockReturnThis(),
@@ -454,7 +460,14 @@ describe('Vercel Migration Integration Tests', () => {
       (agentStore.claimQueuedRunById as any).mockResolvedValueOnce(null);
 
       const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
-      const mockReq = { method: 'POST', body: { runId: 'run-already-claimed' }, get: vi.fn().mockReturnValue(''), headers: {} };
+      const mockReq = {
+        method: 'POST',
+        body: { runId: 'run-already-claimed' },
+        get: vi.fn().mockReturnValue(''),
+        headers: {
+          authorization: 'Bearer real-workflow-secret'
+        }
+      };
       const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn(), send: vi.fn() };
 
       await workflowHandler(mockReq as any, mockRes as any);
