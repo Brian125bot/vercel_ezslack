@@ -8,6 +8,10 @@ import { Semaphore } from '../../src/server/agent/semaphore.js';
 import { createIntentHash, selectedModel, getSelectedModel, updateLog, setIntentDedup, markIntentComplete } from '../../src/server/state.js';
 import { processSlackFiles } from '../../src/server/agent/attachments.js';
 import { isRedisConfigured } from '../../src/server/redis.js';
+import {
+  isWorkflowInternalRequestAuthorized,
+  isWorkflowInternalSecretConfigured
+} from '../../src/server/workflowAuth.js';
 import crypto from 'crypto';
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
@@ -21,9 +25,22 @@ function confidenceToNumber(c: string): number {
 
 // Vercel Workflows endpoint for agent execution
 export default async function handler(req: any, res: any) {
-if (req.method !== 'POST') {
+  if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
+
+  // This is an internal worker endpoint. Slack signatures are verified at
+  // /api/slack/events before it creates this handoff; never trust body fields
+  // such as signatureVerified as proof that a caller is Slack.
+  if (!isWorkflowInternalSecretConfigured()) {
+    console.error('[Vercel Workflow] WORKFLOW_INTERNAL_SECRET is not configured');
+    return res.status(503).json({ error: 'Workflow authorization is not configured' });
+  }
+
+  if (!isWorkflowInternalRequestAuthorized(req.headers?.authorization)) {
+    return res.status(401).json({ error: 'Unauthorized workflow request' });
+  }
+
   const startTime = Date.now();
   // Resolve the user's selected model from DB so cold starts use the correct model
   await getSelectedModel();
@@ -33,7 +50,7 @@ if (req.method !== 'POST') {
   } catch { /* non-blocking */ }
   try {
     const body = req.body || {};
-    const { event, eventId, signatureVerified, workspaceId, runId, logItemId } = body;
+    const { event, eventId, workspaceId, runId, logItemId } = body;
 
     // Handle deferred/subsequent runId triggers
     if (runId) {
@@ -61,7 +78,11 @@ if (req.method !== 'POST') {
       }
       return res.status(200).json({ success: true });
     }
-    // Otherwise, handle initial Slack event orchestration
+    // Otherwise, handle the Slack event handed off by the authenticated ingress route.
+    if (!event || typeof event !== 'object' || !workspaceId) {
+      return res.status(400).json({ error: 'Missing event or workspaceId' });
+    }
+
     console.log(`[Vercel Workflow] Initiated background pipeline for ID: ${eventId}`);
 
     // Intent-based deduplication — only when Redis is available
@@ -128,7 +149,9 @@ if (req.method !== 'POST') {
         messageTs: event.ts,
         threadTs: threadTsTarget,
         selectedModel,
-        signatureValid: signatureVerified,
+        // The authenticated ingress route verified Slack's signature before this
+        // trusted server-to-server handoff. This is not derived from request body.
+        signatureValid: true,
         sourceType: 'slack',
         dbAvailable,
         intentResult,

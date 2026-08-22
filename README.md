@@ -3,7 +3,7 @@
 [![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-34%20files%20%7C%20420%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-34%20files%20%7C%20427%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -80,7 +80,7 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 │       │                        Dedup (event_id + client_msg_id + intent)│
 │       │                        ACK 200 OK (<15ms)                        │
 │       │                                                                  │
-│       └─── triggerWorkflow() ────► Intent Classifier                     │
+│       └─── authenticated internal handoff ────► Intent Classifier        │
 │                                   │                                      │
 │               ┌──────────────────┼────────────────────────┐              │
 │               │                  │                          │             │
@@ -161,6 +161,7 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 | Bot mention stripping on `app_mention` events | Passes clean text to LLM (no `<@BOTID>` prefix confusion) |
 | Configurable date/timezone context | `AGENT_TIMEZONE` + `AGENT_INCLUDE_DATETIME` for time-aware agent behavior |
 | Fail-fast env validation at boot | Catches missing/placeholder secrets before `app.listen()`, not on first user request |
+| Internal workflow authorization | Requires a separate server-to-server bearer secret before the workflow can access models, maintenance, or durable state |
 | Content Security Policy (CSP) | `default-src 'self'` + restrictive directives prevent XSS via `dangerouslySetInnerHTML` rendering of Slack/AI content |
 | HTTPS redirect + HSTS | Production-only middleware redirects HTTP→HTTPS when `x-forwarded-proto` is `http`; `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` |
 | Semantic message deduplication via Jaccard similarity | Dual-strategy dedup (exact SHA-256 hash + bigram Jaccard similarity) prevents near-duplicate Slack replies; configurable threshold, window size, and TTL |
@@ -493,7 +494,8 @@ Environment variables are validated at boot in `src/server/env.ts`. The check ru
 - **Dashboard password** (all environments): `DASHBOARD_PASSWORD` — always warns if unset or placeholder; never hard-fails. Dashboard runs without auth (open access) when unset. Placeholder values are also warned, not fatal.
 - **Database** (all environments): `DATABASE_URL`, `CLOUD_SQL_CONNECTION_NAME`, or `SQL_HOST` — at least one is required on all platforms (including Vercel). Missing/unconfigured database vars prevent startup.
 - **`APP_URL`** (production only, required): webhook callbacks use localhost fallback in dev
-- **Placeholder detection**: case-insensitive match against a blocklist (`MY_GEMINI_API_KEY`, `xoxb-myslackbottoken`, `my_slack_signing_secret`, `changeme`, `placeholder`, etc.) prevents accidental deployment with example values
+- **`WORKFLOW_INTERNAL_SECRET`** (production and Vercel, required): authenticates trusted server-to-server calls to `/api/workflows/agentRun`; it must be a unique, high-entropy value and is distinct from deployment-protection bypass credentials
+- **Placeholder detection**: case-insensitive match against a blocklist (`MY_GEMINI_API_KEY`, `xoxb-myslackbottoken`, `my_slack_signing_secret`, `my_workflow_internal_secret`, `changeme`, `placeholder`, etc.) prevents accidental deployment with example values
 - **`VERCEL=1`**: validation is enforced on all platforms including Vercel (bypass removed)
 - **External adapter vars** (`TAVILY_API_KEY`, `GITHUB_TOKEN`, `EMAIL_WEBHOOK_URL`, `SANDBOX_API_KEY`): warned but never block boot
 
@@ -558,7 +560,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 | **Scheduling** | Daily Vercel Cron (`0 9 * * *`) plus on-demand maintenance on every workflow bootstrap; upgrade to Pro and set `*/15 * * * *` in `vercel.json` for 15-minute idle coverage |
 | **Stale Recovery** | `runSystemMaintenance()` (recoverStaleClaims + reapExpiredApprovals + dedup + trigger poll) on workflow bootstrap and daily cron |
 | **Timeout Guard** | Cooperative wall-clock check (configurable `RUN_TIMEOUT_MS`, default 45s) before plan creation, each step, and verification — gracefully re-queues instead of hard-terminating on Vercel's serverless timeout |
-| **Security** | Workflow endpoint secured via Vercel Automation Bypass secret for preview deployments; cron endpoint secured via `CRON_SECRET` |
+| **Security** | `/api/workflows/agentRun` requires `Authorization: Bearer ${WORKFLOW_INTERNAL_SECRET}` for every caller. A missing workflow secret yields `503`; a missing or invalid bearer credential yields `401` before maintenance, database, model, or agent work begins. `VERCEL_AUTOMATION_BYPASS_SECRET` only bypasses Vercel preview deployment protection and is not application authorization. The cron endpoint is separately secured by `CRON_SECRET`. |
 
 *Note: The old `FOR UPDATE SKIP LOCKED` logic remains as a concurrency fallback for synchronous paths, but background execution and polling are entirely driven by Vercel serverless functions.*
 
@@ -566,7 +568,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-28 test files, 355 test cases. Run with:
+34 test files, 427 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -576,15 +578,15 @@ npm run test:coverage # With coverage report
 
 | Suite | File | Tests | Coverage |
 |-------|------|:-----:|----------|
-| Env Validation | `tests/env.test.ts` | 31 | Missing/empty/placeholder vars, DB variants, VERCEL guard, APP_URL, adapter warnings, DASHBOARD_PASSWORD dev/prod split, DB/APP_URL placeholder detection, no value leaks |
-| Security Headers | `tests/security-headers.test.ts` | 12 | CSP directives, HSTS, X-Frame-Options, nosniff, HTTPS redirect |
+| Env Validation | `tests/env.test.ts` | 34 | Missing/empty/placeholder vars, DB variants, VERCEL guard, `APP_URL`, `WORKFLOW_INTERNAL_SECRET`, adapter warnings, dashboard-password behavior, and no value leaks |
+| Security Headers | `tests/security-headers.test.ts` | 12 | CSP directives, HSTS, X-Frame-Options, nosniff, HTTPS redirect, and secure bootstrap configuration |
 | Agent Handlers | `tests/handlers.test.ts` | 27 | direct reply, durable task, status query, approval response, cancel/update |
 | Agent Extras | `tests/agent-extra.test.ts` | 23 | Plan mutation, intent ensure, pipeline dispatch, semaphore |
 | State Management | `tests/state.test.ts` | 15 | Thread memory, dedup sets, intent hash, LRU eviction |
 | Context Assembly | `tests/context.test.ts` | 14 | Thread history compaction, memory formatting, date/time context |
 | Intent Classification | `tests/intent.test.ts` | 13 | Heuristic rules, LLM fallback, category dispatch |
 | Attachment Conversion | `tests/attachments.test.ts` | 13 | Slack file download, size/count limits, MIME types, inlineData parts |
-| Vercel Integration | `tests/vercel.test.ts` | 14 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard |
+| Vercel Integration | `tests/vercel.test.ts` | 19 | Lazy migrations, cron auth, authenticated workflow dispatch, invalid/missing-secret rejection, retry, timeout guard, and atomic run claiming |
 | Auth Lockout | `tests/auth.test.ts` | 11 | Redis distributed lockout, in-memory fallback, audit safety |
 | Approval Scope Creep | `tests/approval-scope-creep.test.ts` | 4 | Single-use consumption, plan-version scoping, mutation bump |
 | System Maintenance | `tests/maintenance.test.ts` | 5 | Centralized maintenance: stale claims, approval expiry, dedup cleanup, trigger polling |
@@ -763,15 +765,16 @@ npm run test:coverage # With coverage report
 
 ### Required (validated at boot)
 
-Three are required in all environments; `DASHBOARD_PASSWORD` is warn-only everywhere (open access when unset):
+`GEMINI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, and a database connection source are validated in every environment. `APP_URL` is required in production. `WORKFLOW_INTERNAL_SECRET` is required in production and whenever `VERCEL=1`. `DASHBOARD_PASSWORD` remains warn-only (open access when unset):
 
 | Variable | Description |
 |----------|-------------|
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `SLACK_BOT_TOKEN` | Slack Bot User OAuth Token (`xoxb-...`) |
 | `SLACK_SIGNING_SECRET` | Slack app signing secret (HMAC verification) |
-| `DASHBOARD_PASSWORD` | Password for the admin dashboard (production-required) |
+| `DASHBOARD_PASSWORD` | Warn-only password for the admin dashboard; if unset, the dashboard is open. |
 | `APP_URL` | Base URL of your deployed application (production-required for webhook callbacks) |
+| `WORKFLOW_INTERNAL_SECRET` | High-entropy secret for trusted server-to-server workflow calls. Required in production and on Vercel; never expose it to the client. |
 
 ### Database (at least one required — all platforms including Vercel)
 
@@ -815,6 +818,7 @@ Three are required in all environments; `DASHBOARD_PASSWORD` is warn-only everyw
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `WORKFLOW_INTERNAL_SECRET` | — | **Required in production and on Vercel.** Separate high-entropy bearer secret for `/api/workflows/agentRun`; use the same value for every trusted in-app caller. |
 | `CRON_SECRET` | — | **Required on Vercel.** Bearer token for `/api/cron/poll` authentication (set in Vercel Project Settings) |
 | `RUN_TIMEOUT_MS` | `45000` | Soft wall-clock limit for `runLoop()` (graceful re-queue) |
 | `DIRECT_REPLY_CONCURRENCY` | `5` | Max concurrent direct-reply Gemini calls |
@@ -876,7 +880,10 @@ Set the following variables in your Vercel Project Settings:
 - `GEMINI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DASHBOARD_PASSWORD`
 - `DATABASE_URL` (points to Vercel Postgres / Neon)
 - `CRON_SECRET` (matching Vercel's Cron security configuration)
+- `WORKFLOW_INTERNAL_SECRET` (a unique high-entropy value; configure the same value in every trusted deployment environment)
 - `APP_URL` (your deployed Vercel project domain URL, e.g. `https://your-project.vercel.app`)
+
+`WORKFLOW_INTERNAL_SECRET` is application-level authentication for the workflow function. Do not substitute `VERCEL_AUTOMATION_BYPASS_SECRET`: that Vercel-provided value only bypasses preview deployment protection. Rotate the workflow secret by deploying the new value to all trusted callers and workflow functions together; do not expose it through the dashboard, client bundle, logs, or Slack payloads.
 
 ### Lifecycle
 

@@ -30,6 +30,7 @@ describe('validateEnv', () => {
     process.env.DASHBOARD_PASSWORD = 'strong-password';
     process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
     process.env.APP_URL = 'https://example.com';
+    process.env.WORKFLOW_INTERNAL_SECRET = 'test-workflow-internal-secret';
   }
 
   // ── Critical: missing vars ──────────────────────────────────────────────
@@ -288,6 +289,36 @@ describe('validateEnv', () => {
     expect(exitSpy).not.toHaveBeenCalled();
   });
 
+  // ── Critical: internal workflow authentication ──────────────────────────
+
+  it('rejects missing WORKFLOW_INTERNAL_SECRET in production', async () => {
+    setAllVars();
+    process.env.NODE_ENV = 'production';
+    delete process.env.WORKFLOW_INTERNAL_SECRET;
+    const { validateEnv } = await import('../src/server/env.js');
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('WORKFLOW_INTERNAL_SECRET'));
+  });
+
+  it('rejects a placeholder WORKFLOW_INTERNAL_SECRET in production', async () => {
+    setAllVars();
+    process.env.NODE_ENV = 'production';
+    process.env.WORKFLOW_INTERNAL_SECRET = 'my_workflow_internal_secret';
+    const { validateEnv } = await import('../src/server/env.js');
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('placeholder'));
+  });
+
+  it('rejects missing WORKFLOW_INTERNAL_SECRET on Vercel regardless of NODE_ENV', async () => {
+    setAllVars();
+    process.env.VERCEL = '1';
+    process.env.NODE_ENV = 'development';
+    delete process.env.WORKFLOW_INTERNAL_SECRET;
+    const { validateEnv } = await import('../src/server/env.js');
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('WORKFLOW_INTERNAL_SECRET'));
+  });
+
   // ── Vercel guard ────────────────────────────────────────────────────────
 
   it('enforces validation on Vercel deployments (VERCEL=1)', async () => {
@@ -297,6 +328,7 @@ describe('validateEnv', () => {
     delete process.env.SLACK_SIGNING_SECRET;
     delete process.env.DASHBOARD_PASSWORD;
     delete process.env.DATABASE_URL;
+    delete process.env.WORKFLOW_INTERNAL_SECRET;
     const { validateEnv } = await import('../src/server/env.js');
     expect(() => validateEnv()).toThrow('process.exit(1)');
     expect(exitSpy).toHaveBeenCalledWith(1);
@@ -333,6 +365,7 @@ describe('validateEnv', () => {
     process.env.GEMINI_API_KEY = 'super-secret-key-12345';
     process.env.DASHBOARD_PASSWORD = 'p@ssw0rd!';
     process.env.SLACK_BOT_TOKEN = 'xoxb-top-secret-token';
+    process.env.WORKFLOW_INTERNAL_SECRET = 'workflow-secret-do-not-log';
     const { validateEnv } = await import('../src/server/env.js');
     expect(() => validateEnv()).not.toThrow();
     for (const call of errorSpy.mock.calls) {
@@ -340,12 +373,14 @@ describe('validateEnv', () => {
       expect(msg).not.toContain('super-secret-key-12345');
       expect(msg).not.toContain('p@ssw0rd!');
       expect(msg).not.toContain('xoxb-top-secret-token');
+      expect(msg).not.toContain('workflow-secret-do-not-log');
     }
     for (const call of warnSpy.mock.calls) {
       const msg = call[0] as string;
       expect(msg).not.toContain('super-secret-key-12345');
       expect(msg).not.toContain('p@ssw0rd!');
       expect(msg).not.toContain('xoxb-top-secret-token');
+      expect(msg).not.toContain('workflow-secret-do-not-log');
     }
   });
 });

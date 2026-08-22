@@ -20,6 +20,7 @@ describe('default (development) security headers', () => {
     process.env.DASHBOARD_PASSWORD = 'strong-password';
     process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
     process.env.APP_URL = 'https://example.com';
+    process.env.WORKFLOW_INTERNAL_SECRET = 'test-workflow-internal-secret';
     vi.resetModules();
     const mod = await import('../server.js');
     const app: Express = mod.default;
@@ -92,6 +93,7 @@ describe('production security headers', () => {
     process.env.DASHBOARD_PASSWORD = 'strong-password';
     process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
     process.env.APP_URL = 'https://example.com';
+    process.env.WORKFLOW_INTERNAL_SECRET = 'test-workflow-internal-secret';
     vi.resetModules();
     const mod = await import('../server.js');
     const app: Express = mod.default;
@@ -132,6 +134,7 @@ describe('HTTPS redirect (production)', () => {
     process.env.DASHBOARD_PASSWORD = 'strong-password';
     process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
     process.env.APP_URL = 'https://example.com';
+    process.env.WORKFLOW_INTERNAL_SECRET = 'test-workflow-internal-secret';
     delete process.env.DISABLE_HTTPS_REDIRECT;
     vi.resetModules();
     const mod = await import('../server.js');

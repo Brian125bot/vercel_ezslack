@@ -11,6 +11,7 @@ import { isDbAvailable } from './storage/db.js';
 import { runAgentPipeline } from './agent/orchestrator.js';
 import { Semaphore } from './agent/semaphore.js';
 import { ALLOWED_MODELS } from './agent/models.js';
+import { getWorkflowInternalAuthHeaders } from './workflowAuth.js';
 
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
@@ -493,7 +494,6 @@ router.post('/slack/events', async (req: any, res: any) => {
     const runPayload = {
       event,
       eventId,
-      signatureVerified,
       workspaceId: req.body?.team_id || 'T_UNKNOWN',
       logItemId: logItem.id,
     };
@@ -505,7 +505,8 @@ router.post('/slack/events', async (req: any, res: any) => {
         const workflowUrl = `${protocol}://${host}/api/workflows/agentRun`;
 
         const headers: Record<string, string> = {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...getWorkflowInternalAuthHeaders()
         };
 
         // Support Vercel Deployment Protection bypass for preview testing
