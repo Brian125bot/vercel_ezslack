@@ -1,7 +1,7 @@
 const PLACEHOLDER_PATTERNS = [
   'MY_GEMINI_API_KEY', 'xoxb-myslackbottoken',
   'my_slack_signing_secret', 'MY_SIGNING_SECRET',
-  'my_dashboard_password', 'changeme', 'placeholder',
+  'my_dashboard_password', 'my_workflow_internal_secret', 'changeme', 'placeholder',
 ];
 
 function isPlaceholder(val: string): boolean {
@@ -18,6 +18,7 @@ interface CriticalVars {
   CLOUD_SQL_CONNECTION_NAME?: string;
   SQL_HOST?: string;
   APP_URL?: string;
+  WORKFLOW_INTERNAL_SECRET?: string;
 }
 
 interface MissingVar {
@@ -35,6 +36,7 @@ function readCriticalVars(): CriticalVars {
     CLOUD_SQL_CONNECTION_NAME: process.env.CLOUD_SQL_CONNECTION_NAME?.trim() || undefined,
     SQL_HOST: process.env.SQL_HOST?.trim() || undefined,
     APP_URL: process.env.APP_URL?.trim() || undefined,
+    WORKFLOW_INTERNAL_SECRET: process.env.WORKFLOW_INTERNAL_SECRET?.trim() || undefined,
   };
 }
 
@@ -105,6 +107,12 @@ export function validateEnv(): void {
     }
   }
 
+  // The worker can be reached directly as a Vercel function, so a deployment
+  // must not start unless trusted server-to-server calls can be authenticated.
+  if (isProduction || process.env.VERCEL === '1') {
+    check('WORKFLOW_INTERNAL_SECRET', vars.WORKFLOW_INTERNAL_SECRET || '');
+  }
+
   if (missing.length > 0) {
     const varDescriptions: Record<string, string> = {
       'GEMINI_API_KEY': 'AI agent backend (required for agent logic)',
@@ -112,6 +120,7 @@ export function validateEnv(): void {
       'SLACK_SIGNING_SECRET': 'Slack request verification (required for request security)',
       'DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST': 'Database connection (required for durable state)',
       'APP_URL': 'Application URL (required for webhook callbacks)',
+      'WORKFLOW_INTERNAL_SECRET': 'Internal authorization for /api/workflows/agentRun',
     };
 
     for (const { name, reason } of missing) {

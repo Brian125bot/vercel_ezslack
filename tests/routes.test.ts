@@ -173,4 +173,43 @@ describe('Dashboard routes — Gemini 3.7 Flash support', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(setSelectedModel).not.toHaveBeenCalled();
   });
+
+  it('POST /api/slack/events forwards the internal workflow credential after signature verification', async () => {
+    process.env.WORKFLOW_INTERNAL_SECRET = 'route-workflow-internal-secret';
+    process.env.APP_URL = 'https://example.com';
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response('OK', { status: 200 }));
+
+    const { router } = await import('../src/server/routes.js');
+    const handler = findRoute(router, 'POST', '/slack/events');
+    const req = mockReq({
+      body: {
+        team_id: 'T001',
+        event_id: 'evt-workflow-auth',
+        event: {
+          type: 'message',
+          channel: 'C001',
+          user: 'U001',
+          text: 'hello',
+          ts: '123.456'
+        }
+      },
+      get: vi.fn().mockReturnValue('example.com')
+    });
+    const res = mockRes();
+
+    await handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://example.com/api/workflows/agentRun',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer route-workflow-internal-secret'
+        })
+      })
+    );
+    fetchSpy.mockRestore();
+  });
 });

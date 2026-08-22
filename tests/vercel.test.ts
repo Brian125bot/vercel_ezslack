@@ -83,6 +83,7 @@ describe('Vercel Migration Integration Tests', () => {
       DASHBOARD_PASSWORD: 'strong-password',
       DATABASE_URL: 'postgres://user:pass@host:5432/db',
       APP_URL: 'https://example.com',
+      WORKFLOW_INTERNAL_SECRET: 'test-workflow-internal-secret',
     };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }))));
   });
@@ -262,7 +263,10 @@ describe('Vercel Migration Integration Tests', () => {
         'https://my-app.vercel.app/api/workflows/agentRun',
         expect.objectContaining({
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer test-workflow-internal-secret'
+          },
           body: JSON.stringify({ runId: 'run-123', logItemId: 'log-456' })
         })
       );
@@ -340,7 +344,81 @@ describe('Vercel Migration Integration Tests', () => {
     });
   });
 
-  describe('4. Vercel Workflow Handler - Model Selection (Fix 1)', () => {
+  describe('4. Vercel Workflow Internal Authentication', () => {
+    const createResponse = () => ({
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+      send: vi.fn(),
+    });
+
+    it('rejects a request with no internal credential before any agent work begins', async () => {
+      const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
+      const { getSelectedModel } = await import('../src/server/state.js');
+      const { runAgentPipeline } = await import('../src/server/agent/orchestrator.js');
+      const { agentStore } = await import('../src/server/storage/agentStore.js');
+      vi.clearAllMocks();
+
+      const mockReq = {
+        method: 'POST',
+        body: {
+          event: { text: 'hello', channel: 'C123', user: 'U123', ts: '123.456', type: 'message' },
+          eventId: 'evt-unauthorized',
+          workspaceId: 'T001'
+        },
+        headers: {}
+      };
+      const mockRes = createResponse();
+
+      await workflowHandler(mockReq as any, mockRes as any);
+
+      expect(mockRes.status).toHaveBeenCalledWith(401);
+      expect(mockRes.json).toHaveBeenCalledWith({ error: 'Unauthorized workflow request' });
+      expect(getSelectedModel).not.toHaveBeenCalled();
+      expect(runAgentPipeline).not.toHaveBeenCalled();
+      expect(agentStore.claimQueuedRunById).not.toHaveBeenCalled();
+    });
+
+    it('returns 503 when the workflow secret is not configured', async () => {
+      delete process.env.WORKFLOW_INTERNAL_SECRET;
+      const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
+      const { getSelectedModel } = await import('../src/server/state.js');
+      vi.clearAllMocks();
+
+      const mockReq = {
+        method: 'POST',
+        body: { runId: 'run-missing-secret' },
+        headers: { authorization: 'Bearer any-value' }
+      };
+      const mockRes = createResponse();
+
+      await workflowHandler(mockReq as any, mockRes as any);
+
+      expect(mockRes.status).toHaveBeenCalledWith(503);
+      expect(mockRes.json).toHaveBeenCalledWith({ error: 'Workflow authorization is not configured' });
+      expect(getSelectedModel).not.toHaveBeenCalled();
+    });
+
+    it('rejects a request with an invalid internal credential', async () => {
+      const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
+      const { getSelectedModel } = await import('../src/server/state.js');
+      vi.clearAllMocks();
+
+      const mockReq = {
+        method: 'POST',
+        body: { runId: 'run-invalid-secret' },
+        headers: { authorization: 'Bearer invalid-workflow-secret' }
+      };
+      const mockRes = createResponse();
+
+      await workflowHandler(mockReq as any, mockRes as any);
+
+      expect(mockRes.status).toHaveBeenCalledWith(401);
+      expect(mockRes.json).toHaveBeenCalledWith({ error: 'Unauthorized workflow request' });
+      expect(getSelectedModel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('5. Vercel Workflow Handler - Model Selection (Fix 1)', () => {
     it('calls getSelectedModel during handler bootstrap to resolve user model', async () => {
       // Import agentRun handler — its module-level imports trigger getSelectedModel mock
       const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
@@ -357,7 +435,7 @@ describe('Vercel Migration Integration Tests', () => {
           workspaceId: 'T001',
         },
         get: vi.fn().mockReturnValue(''),
-        headers: {}
+        headers: { authorization: 'Bearer test-workflow-internal-secret' }
       };
       const mockRes = {
         status: vi.fn().mockReturnThis(),
@@ -372,7 +450,7 @@ describe('Vercel Migration Integration Tests', () => {
     });
   });
 
-  describe('5. Closed-Loop Worker - Timeout Guard (Fix 5)', () => {
+  describe('6. Closed-Loop Worker - Timeout Guard (Fix 5)', () => {
     beforeEach(() => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }))));
     });
@@ -448,13 +526,18 @@ describe('Vercel Migration Integration Tests', () => {
     });
   });
 
-  describe('6. Atomic Run Claim (Fix: concurrent worker storm)', () => {
+  describe('7. Atomic Run Claim (Fix: concurrent worker storm)', () => {
     it('returns 200 without invoking runLoop when the run is already claimed', async () => {
       const { agentStore } = await import('../src/server/storage/agentStore.js');
       (agentStore.claimQueuedRunById as any).mockResolvedValueOnce(null);
 
       const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
-      const mockReq = { method: 'POST', body: { runId: 'run-already-claimed' }, get: vi.fn().mockReturnValue(''), headers: {} };
+      const mockReq = {
+        method: 'POST',
+        body: { runId: 'run-already-claimed' },
+        get: vi.fn().mockReturnValue(''),
+        headers: { authorization: 'Bearer test-workflow-internal-secret' }
+      };
       const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn(), send: vi.fn() };
 
       await workflowHandler(mockReq as any, mockRes as any);
