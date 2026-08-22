@@ -11,7 +11,6 @@ import { isDbAvailable } from './storage/db.js';
 import { runAgentPipeline } from './agent/orchestrator.js';
 import { Semaphore } from './agent/semaphore.js';
 import { ALLOWED_MODELS } from './agent/models.js';
-import { getWorkflowInternalSecret } from './workflowAuth.js';
 
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
@@ -509,11 +508,6 @@ router.post('/slack/events', async (req: any, res: any) => {
           'Content-Type': 'application/json'
         };
 
-        const workflowSecret = getWorkflowInternalSecret();
-        if (workflowSecret) {
-          headers['Authorization'] = `Bearer ${workflowSecret}`;
-        }
-
         // Support Vercel Deployment Protection bypass for preview testing
         const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
         if (bypassSecret) {
@@ -543,3 +537,5 @@ router.post('/slack/events', async (req: any, res: any) => {
     res.status(400).send(`Exception caught: ${syncErr.message || String(syncErr)}`);
   }
 });
+
+
