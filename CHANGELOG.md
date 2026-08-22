@@ -6,17 +6,6 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
-* **Dedicated Internal Secret Authentication for `/api/workflows/agentRun`.** Converted the `/api/workflows/agentRun` background execution endpoint into an internal-only endpoint. Requests must present a valid internal secret in `Authorization: Bearer <WORKFLOW_INTERNAL_SECRET>`. Slack signature verification remains strictly at the `/api/slack/events` ingress boundary, and `signatureVerified` in the request body is no longer treated as an authorization assertion.
-* **Constant-Time Secret Comparison.** Implemented constant-time secret comparison via `crypto.timingSafeEqual` over SHA-256 digests in `src/server/workflowAuth.ts`, handling variable input lengths safely without timing side channels or logging secret values.
-* **Environment Secret Enforcement.** Added `WORKFLOW_INTERNAL_SECRET` validation in `src/server/env.ts` requiring a valid non-placeholder secret in production and on Vercel deployments (`VERCEL=1`). In local development/testing, an explicit fallback secret is permitted only when `WORKFLOW_INTERNAL_SECRET` is unset and neither production nor Vercel environments are active. Added a non-secret placeholder and setup instructions to `.env.example`.
-* **Internal Callers Updated.** Updated `src/server/routes.ts` (`POST /api/slack/events`) and `src/server/agent/taskClient.ts` (`enqueueRunTask`) to attach `Authorization: Bearer <WORKFLOW_INTERNAL_SECRET>` when invoking the workflow endpoint, while preserving any optional Vercel deployment protection bypass headers.
-
-### Added
-
-* **Comprehensive Internal Workflow Authentication Tests.** Added `tests/workflowAuth.test.ts` to verify unauthenticated/unauthorized request rejection before maintenance/DB/pipeline operations, correct Bearer token authentication for initial events and durable `runId` claims, caller header propagation, and `validateEnv` production/Vercel secret rejection.
-
-### Security
-
 * **SSRF Guard for `web.fetch`.** Implemented a comprehensive shared SSRF protection module `src/server/ssrfGuard.ts` and integrated it into the `web.fetch` tool. The guard validates all requested URLs, parses the hostnames, resolves all IP addresses (using Node's native `dns` module), and blocks any requests containing private, reserved, loopback, or multicast IPv4 and IPv6 network ranges, specifically protecting cloud metadata addresses like `169.254.169.254`. It also extracts and inspects the embedded IPv4 address for IPv4-mapped/translated IPv6 addresses (`::ffff:a.b.c.d/96` and `64:ff9b::/96`), prevents open-redirect bypasses by forcing `redirect: 'manual'` during `fetch` and validating every hop in redirect chains, and fails closed if DNS resolution fails.
   * *Residual Limitation:* This implementation closes direct-IP-targeting and redirect-based bypass. It does NOT provide full DNS-rebinding defense (pinning the TCP connection to a pre-validated IP via a custom `undici` dispatcher). DNS-rebinding remains a known, deliberately deferred residual limitation.
 * **Requester and Admin Authorization for Slack Interactivity Approvals.** Secured the `/api/slack/interactivity` button-click resolution path. Interactive action payloads (Approve/Reject) on Block Kit messages are now strictly verified to ensure only the original requester (`requested_from_user_id` stored during approval creation) or authorized Slack administrators (configured via the comma-separated `SLACK_APPROVAL_ADMIN_IDS` environment variable) can resolve a pending request. Unauthorized attempts are ignored, keeping the request pending, and trigger an ephemeral warning to the interacting user while appending an `approval.unauthorized_attempt` audit event to the store.
@@ -42,11 +31,620 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 * **Semantic message deduplication for Slack AI Agent.** `src/server/agent/dedup.ts` implements dual-strategy deduplication: exact SHA-256 hash matching for instant detection, plus Jaccard similarity over FNV-1a 32-bit bigram hashes for catching near-duplicate paraphrased messages. Fingerprints are stored in Redis with configurable TTL, falling back to an in-memory LRU `Map`. Integrated into `slack.replyInThread` so near-duplicate Slack replies are suppressed automatically. New environment variables: `SLACK_DEDUP_SIMILARITY_THRESHOLD` (0.75), `SLACK_DEDUP_WINDOW_SIZE` (5), `SLACK_DEDUP_TTL_SECONDS` (300).
-* **Self-host Dockerfile.** New `Dockerfile` provides a minimal, non-root production container.
-* **Expanded Gemini model support.** Added `gemini-3.6-flash` and `gemini-3.5-flash-lite` to the allowed models list in `src/server/agent/models.ts`.
+* **Self-host Dockerfile.** New `Dockerfile` provides a multi-stage Node 22 Alpine build producing a minimal, non-root production container. Also adds `.dockerignore` for clean build context.
+* **Expanded Gemini model support.** Added `gemini-3.6-flash` and `gemini-3.5-flash-lite` to the allowed models list in `src/server/agent/models.ts`, with accurate context window sizing (1M tokens for most Flash models, 128K for Flash-lite).
 
 ### Fixed
 
-* **`classifyCancelVsUpdate` false-positive on hyphenated compounds.** Excluded hyphen-adjacent matches from cancel word boundaries.
-* **`durable_task` heuristic precision improvements.** Ambiguous bare-word matching restricted to task-oriented phrases.
-* **ReAct loop final answer persistence regression.** Persisted final text answer as a `succeeded` step and logged audit event.
+* **`classifyCancelVsUpdate` false-positive on hyphenated compounds.** Excluded hyphen-adjacent matches (e.g. "front-end", "back-end", "non-stop") from cancel word boundaries to prevent false cancellations.
+* **`durable_task` heuristic precision improvements.** Ambiguous bare-word matching is now restricted to task-oriented phrases or explicit word boundaries to prevent false matches inside words like "trackable" or on common verbs like "watch" and "create".
+* **ReAct loop final answer persistence regression.** The final text answer from the ReAct loop is now persisted as a `succeeded` step titled "Final answer" with `output: { generated: "..." }`, and an `agent_loop.final_answer` audit event is logged. This prevents the semantic verifier from reporting "not satisfied" and triggering infinite replan/re-enqueue storms.
+* **Rapid dashboard authentication request fix.** Dashboard auth endpoints now handle rapid concurrent requests without failure.
+* **Rate limiter revert.** Reverted the KV degradation fail-visible change that caused rate limit store failures under high load.
+
+### 🧪 Test Results
+
+* 355 tests across 28 files — all passing.
+* `tsc --noEmit` — clean.
+
+## [7.3.0] - Redis Distributed Auth Lockout, Approval Scope Creep Hardening, Vercel Analytics - 2026-07-17
+
+### Security
+
+* **Distributed brute-force lockout via Redis.** Moved dashboard `requireDashboardAuth` IP lockout from an in-memory `Map` (per-instance, reset on cold start) to Redis — the failure counter and lockout state is now shared across all serverless instances. When Redis is configured, `recordAuthFailure()` atomically creates/INCRs a counter with a 15-minute TTL anchored to the first failure. `lockoutAuth()` sets a separate lockout key. On every request, `isAuthLockedOut()` checks the Redis TTL. The in-memory `Map` is retained as a development fallback when Redis is unavailable.
+* **Stale local counter cannot re-lock after shared window resets.** When Redis is available, the code trusts the Redis fail count (which decays with its 15-minute TTL) as the source of truth. If the shared window has expired, the in-memory `Map` (which does not decay) can no longer re-lock a legitimate admin. Only when `recordAuthFailure` returns 0 (Redis unavailable) does the local count take over.
+* **Vercel Web Analytics enabled.** Added `@vercel/analytics` (`v2.0.1`) and `<Analytics />` to the React dashboard, enabling page-view tracking on Vercel deployments.
+
+### Added
+
+* `src/server/redis.ts` — `recordAuthFailure()`, `isAuthLockedOut()`, `lockoutAuth()`, `resetAuthFailures()` helpers for distributed auth lockout with automatic TTL management.
+* `src/server/storage/agentStore.ts` — `bumpPlanVersion()` bumps `agent_plans.version` when plan mutation introduces new `external_write` steps, invalidating stale plan-level approvals from a previous version.
+* `src/server/agent/types.ts` — `ToolExecutionContext.planApprovalId` field populated by the loop so `executor.ts` can consume the correct plan-level approval.
+* `tests/auth.test.ts` — 11 tests covering Redis-based lockout (threshold, lockout, short-circuit, distributed cross-instance, stale-local-counter test, Redis-down fallback, audit logging safety).
+* `tests/approval-scope-creep.test.ts` — 4 tests covering single-use consumption, already-consumed re-gate, plan-version scoping, and mutation bump.
+
+### Changed
+
+* **Approval consumption moved from `loop.ts` to `executor.ts`.** Previously the loop consumed the plan approval *after* executing an `external_write` step. Now `executor.ts` atomically checks `consumeApproval()` at step-execution time — if the approval was already consumed (e.g. by a prior step, prior resume, or concurrent path), the step falls through to requiring a fresh approval request instead of silently proceeding. Migration v12's `consumed_at` guard is now the sole enforcement point.
+* **Plan mutation bumps plan version when adding external_write steps.** `mutatePlan()` in `planMutation.ts` now counts new `external_write` steps and calls `bumpPlanVersion()` if any exist. An audit event `plan.mutation.new_approval_required` is logged. This invalidates any prior plan-level approval so the new version requires explicit re-approval.
+* `tests/redis.test.ts` expanded from 20 to 40 tests covering `recordAuthFailure`, `isAuthLockedOut`, `lockoutAuth`, and `resetAuthFailures`.
+
+### Fixed
+
+* **Plan-level approval now truly single-use.** The original post-execution consumption in `loop.ts` allowed a brief window where a concurrent invocation or re-execution of the same step could use the same approval. Moving consumption into `executor.ts` with an `UPDATE ... WHERE consumed_at IS NULL RETURNING id` closes this gap — the SQL itself rejects a second consume.
+* **Migration v13: `plan_version_id` cast to `text`.** The column was originally `uuid`, but the code stores composite `<planId>:<version>` strings. Migration v13 alters the column type to `text` via `USING plan_version_id::text`.
+
+### 🧪 Test Results
+
+* 338 tests across 27 files — all passing.
+* `tsc --noEmit` — clean.
+
+## [7.2.0] - Env Validation on Vercel, Approval Scope Creep Fix - 2026-07-17
+
+### Security
+
+* **Env validation now runs on Vercel deployments.** Removed `VERCEL=1` bypass from startup validation — `validateEnv()` now runs at module scope in `server.ts` so it fires on all platforms including Vercel serverless imports. Previously, if an operator deployed without setting `SLACK_SIGNING_SECRET` or `GEMINI_API_KEY`, the app started silently with open signature verification and disabled agent logic. Now the deployment fails with explicit `[FATAL]` messages mentioning `.env.example`. DASHBOARD_PASSWORD remains warn-only (open-access dev mode allowed).
+* **Module-level validation guard added.** `server.ts` calls `validateEnv()` at module scope (after `dotenv.config()`) so validation runs before any middleware or route setup, even on Vercel where `initServer()` is not called.
+
+### Fixed
+
+* **Approval scope creep fix.** Plan-level approvals are now scoped by `plan_version_id` — a stale approval from a previous plan version can no longer auto-approve a replanned set of steps. Approvals are also single-use: the first `external_write` tool step consumes the approval, preventing unbounded execution of subsequent steps under the same plan-level approval. Migration v12 adds `consumed_at`, `plan_version_id`, and `consumed_step_count` columns to `approval_requests` with supporting indexes.
+
+### Added
+
+* `src/server/storage/types.ts` — `ApprovalRequest` fields: `consumed_at`, `plan_version_id`, `consumed_step_count`
+* `src/server/storage/schema.ts` — migration v12 (`approval_scope_creep_fix`)
+* `src/server/storage/agentStore.ts` — `getApprovedPlanApprovalForVersion()` and `consumeApproval()` methods
+* `src/server/agent/loop.ts` — version-scoped approval checking and consumption logic
+
+### Tests
+
+* `tests/vercel.test.ts` — updated `beforeEach` to set critical env vars for module-level validation compatibility
+* `tests/security-headers.test.ts` — updated all 3 `beforeAll` blocks to set env vars before importing `server.js`
+
+### 🧪 Test Results
+
+* 313 tests across 25 files — all passing.
+* `tsc --noEmit` — clean.
+
+### Added
+* **Centralized system maintenance (`runSystemMaintenance`).** Extracted maintenance logic (stale claim recovery, approval expiry, dedup cleanup, scheduled trigger polling) into `src/server/agent/maintenance.ts` for reuse by both the daily Vercel Cron endpoint and on-demand workflow bootstrap. This reduces code duplication and ensures low MTTR for stale claims across all invocation paths.
+* `src/server/agent/maintenance.ts` — new shared module exporting `runSystemMaintenance()` with configurable log prefix and structured return type `SystemMaintenanceResult`.
+* `tests/maintenance.test.ts` — 5 test cases covering maintenance step execution order and graceful continuation when individual steps fail.
+
+### Changed
+* `api/cron/poll.ts` — refactored to delegate to `runSystemMaintenance()` instead of inlining maintenance calls. Extracted `isCronAuthorized()` helper with explicit `VERCEL=1` bypass logic.
+* `api/workflows/agentRun.ts` — now calls `runSystemMaintenance()` on handler bootstrap for on-demand maintenance (stale claims, approvals, dedup, trigger polling).
+* `tests/vercel.test.ts` — added test for missing `CRON_SECRET` on Vercel (rejects access when secret is not configured).
+
+### Documentation
+* Updated README.md: test badge (25 files, 311 cases), project structure (added `maintenance.ts`), test suite table (added `maintenance.test.ts`, updated Vercel test count).
+* Updated `.env.example` CRON_SECRET comment to clarify it's set in Vercel Project Settings, not `vercel.json`.
+
+### 🧪 Tests
+* 311 tests across 25 files — all passing.
+* `tsc --noEmit` — clean.
+
+## [7.0.0] - Startup Env Validation & Security Hardening (CSP, HSTS) - 2026-07-16
+
+### Security
+* **Content Security Policy enabled (H-1 fix).** Replaced `contentSecurityPolicy: false` in `server.ts` with a comprehensive CSP covering `default-src 'self'`, `script-src 'self' 'unsafe-inline'`, `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`, `font-src 'self' https://fonts.gstatic.com`, `img-src 'self' data: https:`, `connect-src 'self' ws://localhost:3000 ws://0.0.0.0:3000`, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, and `upgrade-insecure-requests` — closing the gap where the React dashboard rendered untrusted Slack/AI content via `dangerouslySetInnerHTML` with no script-src protection.
+* **Clickjacking protection (L-1 fix).** Set `X-Frame-Options: DENY` and CSP `frame-ancestors 'none'` so the dashboard cannot be embedded in malicious iframes; older browsers respect the header, modern ones use CSP.
+* **MIME-sniffing prevention (L-3 fix).** `X-Content-Type-Options: nosniff` is now applied globally (helmet default, previously disabled alongside CSP).
+* **HTTPS enforcement.** Added an HTTP→HTTPS redirect middleware (active in production when `x-forwarded-proto` is `http`, gated by `DISABLE_HTTPS_REDIRECT` env var) and `Strict-Transport-Security` header (`max-age=31536000; includeSubDomains; preload`) in production only.
+* **Fail-fast startup validation.** New `src/server/env.ts` checks all critical env vars (`GEMINI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DASHBOARD_PASSWORD`, database connection config, `APP_URL`) at boot with clear error messages and calls `process.exit(1)` before `app.listen()` in all environments. Placeholder detection (case-insensitive match against `MY_GEMINI_API_KEY`, `xoxb-myslackbottoken`, `my_slack_signing_secret`, `MY_SIGNING_SECRET`, `my_dashboard_password`, `changeme`, `placeholder`) prevents accidental deployment with example values.
+* **Database config required everywhere.** Missing database env vars are a hard failure on all platforms (including Vercel), not just production. In-memory dev fallback removed — at least one of `DATABASE_URL`, `CLOUD_SQL_CONNECTION_NAME`, or `SQL_HOST` is required.
+* **`DASHBOARD_PASSWORD` is warn-only everywhere.** Missing or placeholder values log a security warning but never block startup. Dashboard runs open-access when unset.
+* **`VERCEL=1` no longer bypasses validation.** Vercel deployments are now subject to the same env validation as all other platforms.
+* **Secret values are never logged.** Only variable names and reason strings appear in console output.
+
+### Added
+* `src/server/env.ts` — `validateEnv()` module with helpers `isPlaceholder()`, `checkVar()`, `readCriticalVars()`, and `validateEnv()`.
+* `tests/env.test.ts` — 29 tests covering missing, empty, placeholder, database variants, VERCEL guard, APP_URL production/dev, adapter warnings, no value leaks, DB/APP_URL placeholder detection.
+* `tests/security-headers.test.ts` — 12 tests covering CSP directives, X-Content-Type-Options, X-Frame-Options, HSTS (present in production, absent in dev), upgrade-insecure-requests, and HTTPS redirect (301 on `x-forwarded-proto: http`, pass-through when missing).
+
+### Changed
+* `server.ts` — replaced old production-only validation block with single `validateEnv()` call inside `initServer()`. Replaced disabled CSP with full helmet configuration. Added HTTPS redirect middleware. Added conditional HSTS.
+
+### New Env Vars
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DISABLE_HTTPS_REDIRECT` | unset | Set to `1` to skip HTTP→HTTPS redirect in production |
+
+### 🧪 Tests
+* 305 tests across 24 files — all passing.
+* `tsc --noEmit` — 0 errors in changed files.
+
+## [6.9.0] - Fix Gemini thoughtSignature for streaming function calls - 2026-07-15
+
+### Fixed
+* **thoughtSignature preservation in Gemini streaming responses.** The Gemini API now requires `thoughtSignature` on `functionCall` parts in conversation history. The Google Gen AI SDK's `response.functionCalls()` getter strips this field, causing `Function call is missing a thought_signature in functionCall parts` errors on subsequent turns. Fixed by:
+  - Adding a `parts` field to `GeminiStructuredResponse` type (`src/server/agent/geminiClient.ts`)
+  - `mapStructured()` now captures raw `candidates[0].content.parts`
+  - `geminiAgentStep()` accumulates raw parts across streaming chunks, deduplicating by name+args
+  - `reactLoop.ts` uses `response.parts` (raw parts with `thoughtSignature`) instead of reconstructing from stripped `functionCalls`
+* All test mocks updated: `geminiClient.test.ts` and `agent-loop.test.ts` include `_candidates` + `parts` + `thoughtSignature` in mock returns.
+
+## [6.8.0] - Fix order_index overflow & SSL warning - 2026-07-15
+
+### Fixed
+* **`order_index` integer overflow.** `Date.now()` (13-digit millisecond timestamp) exceeded PostgreSQL `integer` (INT4 max 2,147,483,647) when stored in `agent_steps.order_index`, causing runs to fail with `value "1784151602289" is out of range for type integer`. Two-part fix:
+  - Migration v11 (`widen_step_order_index`): altered `agent_steps.order_index` from `integer` to `bigint` (`src/server/storage/schema.ts`)
+  - `reactLoop.ts`: replaced `Date.now()` with a sequential `stepOrder` counter in both `executeOneToolCall` and `persistLoopStep`, matching the existing pattern in `loop.ts`
+* **SSL security warning suppressed.** `pg` v8.12+ warns when `ssl: { rejectUnauthorized: false }` is configured with passwordless auth. Removed the redundant `ssl: { rejectUnauthorized: false }` from both pool configs in `src/server/storage/db.ts` — Neon's connection string already bundles `?sslmode=require`, so the override was unnecessary.
+
+## [6.7.0] - Model-Aware Thread History Budgeting - 2026-07-20
+
+### Enhanced
+* **Model-Aware Thread History Budgeting**: Previously `MAX_THREAD_HISTORY_CHARS` was a fixed 40000 regardless of model. Now it defaults to a percentage (`THREAD_HISTORY_BUDGET_PERCENT`, default 5%) of the resolved model's real context window, converted to an approximate char count. Explicitly setting `MAX_THREAD_HISTORY_CHARS` in the environment still overrides this and behaves exactly as before.
+* Added `CONTEXT_WINDOW_TOKENS` map and `getContextWindowTokens()` helper in `src/server/agent/models.ts`.
+* Env vars added: `THREAD_HISTORY_BUDGET_PERCENT` (default 0.05).
+
+## [6.6.0] - Atomic Run Claiming & 508 Handling - 2026-07-16
+
+### Fixed
+* **Atomic Run Claiming**: Replaced the non-atomic `getRun` + `updateRunStatus` sequence in the Vercel Workflow handler with a single atomic `claimQueuedRunById` call. This prevents duplicate/concurrent invocations for the same `runId` from both entering `runLoop`, resolving the "concurrent-worker storm" bug.
+* **HTTP 508 Handling**: Updated `taskClient.ts` to treat HTTP 508 Loop Detected as a terminal state. This prevents useless retries when Vercel identifies a recursive function-invocation chain.
+
+
+## [6.5.0] - Durable Run Attachments - 2026-07-09
+
+### Fixed
+* **Durable Run Attachments**: Fixed a race condition/silent failure where attachments were lost across serverless HTTP hops due to in-memory caching. Attachments are now persisted in the `agent_runs` table (`jsonb` column).
+* Deleted `attachmentCache` (process-local Map) in favor of database persistence.
+* Migration: Added v5 `run_attachments` to `agent_runs`.
+
+## [6.4.0] - Thread History Bounding & DB Bloat Fix - 2026-07-01
+
+### 🚀 Features & Fixes
+
+* **Thread History Configuration & Bounds.** Prevents unbounded row growth in the `thread_memories` DB table and stops the agent from unnecessarily re-embedding stale attachment payloads (which consumed excessive Gemini token window limits and latency). Historical messages with attachments now persist their metadata only (filename, mimeType, sizeBytes) without `base64Data`, and are summarized via a text note in the model context instead of being re-uploaded to Gemini on every turn.
+* **Char/Message Caps.** Added a cumulative character limit and a per-message truncation limit. Three new configurable environment variables shape these limits (with backward-compatible defaults for text-only threads): `MAX_THREAD_HISTORY_MESSAGES` (default 20), `MAX_THREAD_HISTORY_CHARS` (default 40000), and `MAX_THREAD_MESSAGE_CHARS` (default 400).
+
+## [6.3.0] - Multimodal Input & Generic Output Injection - 2026-07-01
+
+### 🚀 Features
+
+* **Multimodal input support (images, PDFs, screenshots).** The agent can now see and reason
+  about files attached to Slack messages — PNG, JPEG, WebP, HEIC/HEIF, and PDF — up to 15MB per
+  file and 4 files per message (configurable via `MAX_ATTACHMENT_BYTES` and
+  `MAX_ATTACHMENTS_PER_MESSAGE`). Attachments are passed to Gemini as native multimodal
+  `inlineData` parts, not OCR'd or pre-processed, and work for both direct replies and multi-step
+  durable tasks. New `src/server/agent/attachments.ts` module handles Slack file download and
+  part conversion; `geminiClient.ts`, `context.ts`, and the type system were extended to carry
+  attachments through the pipeline.
+
+* **Generic `injectInto` field for generate-step output routing.** `PlannedAgentStep` gained an
+  optional `injectInto: string` field so a "generate" step's output can be routed into any field
+  on the following tool step's input, not just `slack.replyInThread`'s `text` field (e.g.
+  `injectInto: "body"` for `github.createIssue`). This unlocks acting on attachment analysis —
+  e.g. summarizing a screenshot directly into a bug-tracker ticket body. Falls back to the
+  original `slack.replyInThread`/`text` behavior when no `injectInto` is set upstream, so existing
+  plans are unaffected. Added planner rule 6 instructing the LLM when and how to set `injectInto`,
+  including guidance for referencing attached files by name in generate-step prompts.
+
+### 🧪 Tests
+
+* 13 new test cases in `tests/attachments.test.ts` covering Slack file download, size/count
+  limits, supported/unsupported MIME types, and `inlineData` part conversion.
+* 6 new test cases in `tests/executorInjection.test.ts` covering backward compatibility, explicit
+  non-Slack injection targets, explicit-over-legacy precedence, absent-upstream-step no-op,
+  most-recent-of-multiple-candidates resolution, and non-interference with unrelated steps.
+
+### 🧹 Housekeeping
+
+* Removed one-off patch scripts (`fix_agentRun.cjs`, `fix_context.cjs`, `fix_loop.cjs`) left over
+  from the multimodal PR's development process — the changes they applied are already part of the
+  tracked source files.
+
+### ✅ Verification
+
+* `npm run lint` — 0 errors
+* `npm test` — 14 files, 121 tests pass.
+
+## [6.2.0] - Production Reliability & Feedback Fixes - 2026-06-27
+
+Resolves the remaining critical and high-priority issues identified during Vercel production deployment analysis, plus a batch of low-priority edge-case fixes.
+
+### 🔴 Critical Fix
+
+* **Slack interactivity signature verification (Fix 6).** `express.urlencoded()` in `server.ts` now includes a `verify` callback that captures `req.rawBody` for URL-encoded payloads, matching the existing `express.json()` parser. All Block Kit button clicks (Approve/Reject) were returning 401 in production because the HMAC was computed over an empty body. Now works in production.
+
+### 🐛 High-Priority Bug Fixes
+
+* **`slack.ts` respects dashboard model selection (Fix 7).** `src/server/tools/slack.ts` now imports `selectedModel` from the state module instead of reading `process.env.SELECTED_MODEL` (always `undefined`). The auto-reply synthesis path now uses the user's chosen model.
+* **Fire-and-forget async calls now awaited (Fix 8).** Four previously-unawaited async calls — two `addLog()` calls in `routes.ts`, one `updateLog()` in `agentRun.ts`, and a dynamic `import()` in the dashboard approval handler — are now properly awaited with error handling.
+* **`enqueueRunTask` no longer silently swallows errors (Fix 9).** `taskClient.ts` changed from `Promise<void>` to `Promise<boolean>`. `durableTask.ts` checks the return value and throws on failure, which marks the run as `failed` instead of leaving it stranded in `queued` forever with a misleading "I have accepted your goal" reply.
+* **Dashboard approval handler wrapped in `waitUntil` (Fix 10).** The `POST /agent/approvals/:id/resolve` route wraps the dynamic import and pipeline resume in `waitUntil()`, matching the interactivity handler pattern. Prevents Vercel from freezing the function before pipeline resume completes.
+* **`setInterval` guarded for Vercel serverless (Fix 11).** Two `setInterval` calls in `state.ts` (dedup cache eviction, DB cleanup) are now guarded with `if (process.env.VERCEL !== '1')`. The DB `processed_events` cleanup was moved to the Vercel Cron handler as a replacement.
+* **Step-level approval resume fixed (Fix 18).** `resumeAgentPipeline()` in `orchestrator.ts` now resets any blocked steps to `pending` before re-queuing the run. Previously, approving a tool call silently skipped the blocked step because `runLoop()` only processes steps with status `pending`.
+
+### 🟡 Medium-Priority Fixes
+
+* **DB pool serverless optimization (Fix 7).** Increased `connectionTimeoutMillis` from 5000 to 10000 (configurable via `DB_CONNECTION_TIMEOUT`). Added retry logic to `query()` with 2 attempts and exponential backoff for transient connection errors.
+* **Vercel-optimized build script (Fix 8).** Added `"vercel-build": "vite build"` to `package.json`, skipping the esbuild CJS backend bundle (unused on Vercel) during deployment.
+* **Node engine requirement declared (Fix 9).** Added `"engines": { "node": ">=18.0.0" }` to prevent silent breakage on older runtimes.
+* **Complete `.env.example` (Fix 10).** Added all missing documented variables: `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `DASHBOARD_PASSWORD`, `DATABASE_SSL`, `DB_POOL_MAX`, `DB_CONNECTION_TIMEOUT`, `DIRECT_REPLY_CONCURRENCY`, `RUN_TIMEOUT_MS`, `WORKER_LEASE_SECONDS`, `GEMINI_TIMEOUT_MS`, `VERCEL_AUTOMATION_BYPASS_SECRET`.
+* **`require()` replaced with `await import()` in ESM module (Fix 11).** `scheduler.ts` replaced `require('cron-parser')` with `await import()`, making `computeNextRunAt` async. Fixes a correctness issue in the ESM module context.
+
+### 🟢 Low-Priority Fixes
+
+* **`waitUntil` lambda error handling (Fix 12).** The interactivity handler's `waitUntil` lambda now wraps its body in `try/catch` and awaits `resumeAgentPipeline()` instead of fire-and-forget with `.catch()`.
+* **Timer leak in executor (Fix 13).** The `Promise.race` timeout in `executor.ts` is now wrapped in `try/finally` to always clear the timeout, preventing timer leaks when a tool rejects before the timeout fires.
+* **"Tomorrow" before 9 AM off by ~1h (Fix 14).** Removed the `Math.min(delta, MS_DAY)` cap in `msUntilTomorrow9am()` so "tomorrow" always means the next calendar day at 9 AM, even when more than 24h away.
+* **Single-letter time units supported (Fix 15).** Added pre-processing `.replace()` calls that normalize `10m`→`10 minutes`, `2h`→`2 hours`, etc. before deferral pattern matching.
+* **"Let me know in X" deferral pattern (Fix 16).** Added `know` and `let` to `hasActionContext()` regex to catch "let me know in 2 hours".
+* **Connector socket leak (Fix 17).** Both `connector = new Connector()` calls in `db.ts` are now guarded with `if (!connector)` to prevent overwrite and socket leak when both admin and regular pools use Cloud SQL Connector.
+
+### 📊 Observability
+
+* **Confidence type mismatch resolved.** `IntentResult.confidence` (`'high' | 'medium' | 'low'`) was being passed directly to the DB column `slack_event_logs.confidence` (type `numeric`), causing `invalid input syntax for type numeric: "high"` on every workflow invocation. Added `confidenceToNumber()` mapping (`high→1.0`, `medium→0.5`, `low→0.0`) and updated the `SlackEventLog` type to `number`.
+* **Semaphore acquire timeout.** `Semaphore.acquire()` now accepts an optional `timeoutMs` parameter (10s for direct reply concurrency). If no permit is available within the window, the caller logs a warning and proceeds without blocking.
+* **`runLoop` entry/exit instrumentation.** Added `slog('loop', 'runLoop.start', ...)` and `slog('loop', 'runLoop.complete', ...)` (in a `finally` block) so every `runLoop()` invocation leaves a visible trace in Vercel logs with elapsed time and final run status.
+
+### ✅ Verification
+
+* `npm run lint` — 0 type errors.
+* `npm test` — 11 files, 94 tests pass.
+* All fixes deployed to production and verified in Vercel logs.
+
+## [6.1.0] - Vercel Stability Hardening - 2026-06-27
+
+Resolves five reliability gaps discovered during Vercel serverless deployment testing.
+
+### 🐛 Bug Fixes
+
+* **Model selection now resolves on cold start (Fix 1).** `agentRun.ts` calls `getSelectedModel()` at handler bootstrap so the user's dashboard-selected Gemini model is used instead of the module default on every Vercel cold start. The old behavior silently pinned all workflow runs to `gemini-3.1-flash-lite` regardless of dashboard selection.
+* **Interactivity handler no longer drops async work (Fix 2).** The `POST /api/slack/interactivity` route wraps approval resolution and pipeline resumption in `waitUntil()` from `@vercel/functions`, preventing Vercel from terminating the function before async work completes.
+* **Workflow triggers retry on transient failures (Fix 3).** `enqueueRunTask()` now retries 3 times with exponential backoff (1s → 2s → 4s) on network errors and 5xx responses. Client errors (4xx) are not retried. Previously, any `fetch` failure silently dropped the task.
+* **Stale lease reclamation wired into cron (Fix 4).** `recoverStaleClaims()` and `reapExpiredApprovals()` — both defined in `agentStore.ts` but never called — now run at the start of every Vercel Cron cycle and on workflow handler startup. Runs abandoned by terminated serverless invocations are reclaimed and re-queued.
+* **Cooperative timeout guard prevents hard termination (Fix 5).** `runLoop()` checks elapsed wall-clock time before plan creation, each step execution, and verification. When the configurable `RUN_TIMEOUT_MS` (default 45s) is approached, the run is gracefully re-queued for the next invocation instead of being hard-killed by the Vercel serverless timeout (60s Pro / 15s Hobby).
+
+### 🧪 Tests
+
+* Added 5 new test cases in `tests/vercel.test.ts` covering:
+  - Stale claim recovery and approval expiration in the cron handler (Fix 4)
+  - Retry-success, retry-exhaustion, and 4xx-no-retry for `enqueueRunTask` (Fix 3)
+  - `getSelectedModel()` call during workflow handler bootstrap (Fix 1)
+  - Timeout guard re-queuing in `runLoop()` (Fix 5)
+* Updated mocks for `agentStore` (added `recoverStaleClaims`, `reapExpiredApprovals`, `updateGoalStatus`, lease, and step operations) and `state` (added `getThreadHistory`, `saveThreadHistory`).
+* Full suite: 94 tests passing across 11 test files; `tsc --noEmit` clean.
+
+## [5.0.0] - Google Cloud Tasks Migration & Resilience Hardening - 2026-06-24
+
+Migrates the background processing system to Google Cloud Tasks for serverless task execution and hardens error boundaries for Slack API calls (approvals and reports).
+
+### 🚀 Features & Infrastructure
+* **Google Cloud Tasks Integration:** Replaced legacy in-memory `setInterval` polling loops in `worker.ts` and `scheduler.ts` with serverless executions triggered by Google Cloud Tasks webhooks.
+  * Added `src/server/agent/taskClient.ts` to enqueue task execution requests to Google Cloud Tasks.
+  * Exposed authenticated internal webhook endpoints: `POST /api/internal/worker/execute` for running tasks and `POST /api/internal/scheduler/poll` for evaluating scheduled triggers.
+  * Added configuration environment variables: `GCP_PROJECT_ID`, `GCP_LOCATION`, `CLOUD_TASKS_QUEUE_NAME`, and `INTERNAL_API_SECRET`.
+  * Decommissioned `setInterval` tasks in the worker and scheduler, keeping lifecycle hooks as lightweight stubs.
+
+### 🛡️ Error Handling & Hardening
+* **Slack Approval Posting Safety:** Wrapped `postApprovalBlockKit` in try-catch in both the plan loop (`loop.ts`) and step execution (`executor.ts`). If posting to Slack fails (e.g. invalid message TS, slack timeout), the approval is marked as `failed` in the database, and the run fails with a user-facing Slack message instead of hanging indefinitely.
+* **Slack Reporting Resilience:** Wrapped final `reportRunResult` in a try-catch block inside `finalize.ts`. If posting the rich execution report fails, it falls back to a simpler status notification and logs details via `slog` at the error level to prevent silent run execution hangs.
+
+### 🐛 Bug Fixes
+* Fixed concurrency issues where multi-instance deployments could double-claim or clash on runs by delegating scheduling and execution orchestration entirely to Cloud Tasks queues.
+
+## [4.4.0] - Agentic base fixes (multistep & planning reliability) - 2026-06-22
+
+Fixes the durable-task plan-and-execute pipeline, which frequently failed on
+multistep and planning workflows in Slack. Branch: `agentic-base-fix`.
+
+### 🐛 Bug Fixes
+* **Planner tool hallucinations no longer fail or over-gate the whole plan (WS2).**
+  Introduced `planNormalize.ts`: unknown/unavailable tool names are degraded to a
+  safe `note` step (only that step is flagged) instead of redacting it into a
+  no-tool step that the executor failed and poisoning the entire plan to
+  `external_write` + `requiresApproval`. Plan `requiresApproval` is now derived
+  from whether any executable step actually maps to an external_write tool, and
+  free-text `riskLevel` values from the model (e.g. "low"/"medium"/"high") are
+  coerced to the strict `AgentRiskLevel` enum. `generate` steps are guaranteed a
+  prompt, and `kindKind`-in-`toolName` mistakes are normalised.
+* **Multistep state isolation (WS3).** Upstream-output gathering, the
+  `slack.replyInThread` auto-injection, and the empty-reply fallback now scope to
+  the current plan iteration (`plan_id`) instead of `getStepsForRun`, which mixed
+  steps across abandoned replans (whose `order_index` restarts at 1) and caused
+  wrong/blank replies.
+* **Verification & replan control loop (WS4).** Transient failures (e.g. a failed
+  Slack post) now retry the failed steps within the same plan (bounded by
+  `MAX_TRANSIENT_RETRIES`) instead of discarding the plan. Genuine replans and
+  retries re-queue the run (lease-safe) rather than recursing via `setImmediate`,
+  which executed the run untracked and caused double-execute on lease recovery.
+  Semantic-verifier verdicts only trigger a replan when confidence ≥ 0.5; errors
+  and empty responses are treated as inconclusive (defer to rule-based verifier)
+  instead of forcing a replan. Added `agent_runs.retry_count` (migration v4).
+* **Accurate run reports (WS5).** `buildRunReport` now reports only the latest
+  plan iteration's steps, so abandoned earlier plans no longer appear as
+  duplicate/failed noise in the Slack run report.
+* **Time-deferred "tomorrow" capped (WS6).** `msUntilTomorrow9am` is capped at 24h
+  so "remind me tomorrow" before 9am no longer schedules >24h out; fixes the
+  failing `deferral` test.
+
+### 🛡️ Hardening
+* **Model configuration integrity (WS1).** New `agent/models.ts` is the single
+  source of truth for allowed Gemini models with a `resolveModel()` safe
+  fallback (`gemini-2.5-flash`). All LLM call sites (planner, executor generate
+  step, intent classifier, semantic verifier, plan mutation, direct reply, Slack
+  reply synthesis) and the persisted/selected model in `state.ts` + `routes.ts`
+  now resolve through it, so an unreleased or corrupted model id can never throw
+  a "model not found" error and cascade into multistep failure. (Note: the live
+  model list confirms `gemini-3.1-flash-lite` and `gemini-3.5-flash` are served,
+  so this is a guardrail, not the root cause.)
+
+### 🧪 Tests / CI
+* Added `tests/planNormalize.test.ts` and `tests/models.test.ts`; extended
+  `tests/loop.test.ts` (retry vs replan, lease-safe re-queue, inconclusive
+  semantic verdict) and `tests/reporter.test.ts` (plan-scoped report).
+* `vitest.config.ts` binds its internal API server to `127.0.0.1` and uses the
+  `forks` pool so the suite runs on a fresh clone with no `localhost` hosts entry.
+* Full suite: 83 passing; `tsc --noEmit` clean; server bundle builds.
+
+## [4.3.0] - Pre-merge QA Remediation - 2026-06-20
+
+Resolves every gap found during the `version-3` pre-merge QA review. The branch
+now passes its own CI gate (`npm run lint` + `npm test`) end-to-end.
+
+### 🔒 Security Fixes
+* **Secret sanitizer no longer leaks secrets.** `sanitizeString()` previously used
+  a function replacer that, for patterns *without* capture groups (Slack `xoxb-`,
+  OpenAI `sk-`, Google `AIza`, AWS `AKIA`), received `(match, offset, string)` and
+  re-emitted the original secret-bearing text via the "suffix" argument. Rewrote
+  the sanitizer as a table of `{ regex, stringReplacement }` rules using `$1`/`$2`
+  backreferences, so a no-group pattern always collapses to `[REDACTED]`. All four
+  opaque-token formats are now redacted; `tests/sanitize.test.ts` passes.
+
+### 🐛 Bug Fixes
+* **`tests/loop.test.ts` no longer crashes on load.** Replaced the top-level
+  `const mock…` declarations referenced inside hoisted `vi.mock()` factories with a
+  `vi.hoisted()` block (the consts were in the temporal dead zone). Added a default
+  `getRun`/`getRunTrace` mock in `beforeEach` so `buildScopedTrace()` resolves in the
+  verification path. All 4 Agent Loop cases now run and pass.
+* **`npm run lint` is clean.** Added the required `provider: 'v8'` to the `coverage`
+  block in `vitest.config.ts`, fixing the lone `tsc --noEmit` type error.
+* **Approval expiry now matches spec.** Plan/tool approval requests expire after
+  30 minutes (`executor.ts`, `loop.ts`) instead of 24 hours, matching the W3-C DoD
+  and the documented interactive-approval flow.
+
+### 📦 Dependencies
+* Added `cron-parser@^5.6.0` to `dependencies`. It was referenced via
+  `require('cron-parser')` in `scheduler.ts` (using the v5 `CronExpressionParser.parse`
+  API) but never declared, so cron triggers silently fell back to the naive parser.
+  Full cron expressions now compute accurate next-run times.
+* Added `@vitest/coverage-v8@^3.2.4` to `devDependencies` so `npm run test:coverage`
+  works out of the box.
+
+### ✅ Verification
+* `npm run lint` — 0 type errors.
+* `npm test` — 8/8 suites, 72/72 tests pass.
+* `npm run test:coverage` — runs successfully.
+* `npm run build` — Vite + esbuild compile cleanly.
+* `npm audit` — 0 vulnerabilities.
+
+## [3.1.0] - Final W3+W4 DoD Completion - 2026-06-20
+
+### ✨ Features
+
+#### W4-F1: Time-Deferred Trigger Detection
+* Created `src/server/agent/deferral.ts` with `detectDeferral()` utility.
+* Patterns: "remind me in N hours/days", "remind me tomorrow", "follow up
+  next week", "schedule this for tomorrow", and bare "in N units" with
+  action-verb context guard.
+* `durableTask.ts` now checks for deferral before creating a run. When
+  detected, creates a `scheduled_trigger` (one-shot) instead of an
+  immediate `queued` run. The scheduler poller fires the run at the
+  scheduled time.
+* Audit event `trigger.created` logged with delay and human-readable label.
+
+#### W4-F9: Plan Mutation Wired into cancel_or_update Handler
+* `cancelUpdate.ts` now sub-classifies messages as `cancel` vs `update`.
+* Cancel patterns ("cancel", "stop", "abort", etc.) → existing cancel path.
+* Everything else → calls `mutatePlan()` to modify pending steps in the
+  active run's plan, producing an audit-visible `plan.mutated` event.
+* Removed unused `'reorder'` action from `MutationInstruction` type.
+
+#### Scheduler Upgrades
+* `cron-parser` used for full cron expression support (dynamic require with
+  graceful fallback to basic parsing if not installed).
+* Scheduled runs now inherit the model from the goal's most recent run
+  instead of hardcoding `gemini-3.1-flash-lite`.
+
+### 🧪 Tests
+
+#### W4-F6: Loop Integration Tests
+* `tests/loop.test.ts` — 4 test cases covering the full closed loop:
+  - Happy path (plan → execute → verify → succeed)
+  - Semantic failure triggers replan via `setImmediate`
+  - Max iterations (3) → run fails without creating a plan
+  - Step blocked → run blocked and finalized
+
+#### W4-F7: Migration Idempotency Tests
+* `tests/migration.test.ts` — 9 static analysis tests:
+  - All CREATE TABLE uses IF NOT EXISTS
+  - All CREATE INDEX uses IF NOT EXISTS
+  - All ADD COLUMN uses IF NOT EXISTS
+  - All DROP TABLE/COLUMN uses IF EXISTS
+  - Versions unique, ascending, positive integers
+  - Every migration has name and non-empty SQL
+
+#### W4-F1: Deferral Detection Tests
+* `tests/deferral.test.ts` — 15 tests: "remind me", "follow up",
+  "schedule this", unit normalization (mins/hrs), and 5 negative cases
+  to prevent false positives.
+
+### 🧹 Cleanup
+* Added `getRunsForGoal()` to `agentStore.ts` for model inheritance.
+* Removed dead `updateScheduledTriggerAfterRun()` and
+  `disableScheduledTrigger()` store methods (superseded by atomic
+  `DELETE + reinsert` pattern from v3.0.1).
+
+## [3.0.1] - Pre-merge QA Bug Fixes - 2026-06-20
+
+### 🔒 Security
+* **Interactivity signature verification (W3-F7):** Extracted Slack HMAC-SHA256
+  verification into a shared `verifySlackSignature()` helper. Both `/api/slack/events`
+  and `/api/slack/interactivity` now verify request signatures, preventing forged
+  approval/rejection actions.
+
+### 🐛 Bug Fixes
+* **Expired approval guard (W3-F9):** `resolveApproval()` now checks
+  `status = 'pending' AND expires_at > now()`. Expired approvals can no longer be
+  approved to execute external tools. Returns descriptive errors for already-resolved,
+  expired, or not-found approvals.
+* **Scheduler atomic claim (W4-F3):** `getDueScheduledTriggers()` now uses
+  `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *` for atomic trigger claiming.
+  Multiple Cloud Run instances polling concurrently can no longer double-fire the same
+  trigger. Recurring triggers are re-inserted with the next run time after successful
+  claim; one-shot triggers are not re-inserted (effectively disabled).
+
+## [3.0.0] - Weeks 3–4 (merged) - 2026-06-20
+
+### Week 3: Real-World Action
+
+#### W3-A: Exec-Time Content Generation (`generate` step kind)
+* Added `StepKind` type (`'tool' | 'generate' | 'note'`) to `types.ts`.
+* `executor.ts` now handles `kind: 'generate'` steps: calls Gemini at execution time
+  with upstream step outputs as context, stores result in `output.generated`.
+* Downstream `slack.replyInThread` steps auto-inject generated text when their
+  `input.text` is empty, eliminating the "chat wrapper" problem where the planner
+  would bake empty `input:{}` at plan time.
+* Added `updateStepInput()` to `agentStore.ts` for runtime input patching.
+* Updated `planner.ts` to teach the LLM about `generate` steps and build the tool
+  catalogue dynamically from the live registry.
+
+#### W3-B: External Adapter Framework + GitHub Issue Adapter
+* Created `src/server/tools/adapters/` with `ExternalAdapter` interface (`base.ts`).
+* Implemented `GitHubIssueAdapter` — creates issues via GitHub REST API when
+  `GITHUB_TOKEN` is set. Declares `riskLevel: 'external_write'`.
+* Implemented `EmailAdapter` — sends email via configurable webhook relay when
+  `EMAIL_WEBHOOK_URL` is set.
+* `registry.ts` now auto-registers configured adapters at startup and exposes
+  `registerAdapter()` + `getAdapters()` methods.
+* Planner prompt dynamically includes all registered tools.
+
+#### W3-C: Block Kit Interactive Approvals
+* `slack.ts` exports `postApprovalBlockKit()` — posts Approve/Reject buttons
+  with the approval UUID in `action.value`.
+* `executor.ts` calls `postApprovalBlockKit()` when policy blocks a tool.
+* Added `POST /api/slack/interactivity` route to `routes.ts`:
+  - Parses URL-encoded `payload` from Slack
+  - Resolves approval in DB, updates Block Kit message (removes buttons)
+  - Resumes pipeline on approve, cancels on reject
+* `updateApprovalMessage()` replaces the button message with a resolved state.
+* `updateApprovalMessageTs()` added to `agentStore.ts`.
+* Updated `slack-manifest.json` with interactivity request URL.
+
+#### W3-D: Action-Aware Reporting
+* Rewrote `reporter.ts` with `buildRunReport(trace)` — generates a structured
+  Slack message listing every step, its tool, outcome, generated content length,
+  and resolved approvals.
+* `finalize.ts` now calls `reportRunResult(trace)` instead of posting a generic
+  "Task finished with status: X" message.
+* Legacy `reportStatus()` preserved for backward compatibility.
+
+### Week 4: Autonomy & Hardening
+
+#### W4-A: Scheduled Triggers Poller
+* Created `src/server/agent/scheduler.ts` with 15-second polling interval.
+* `startScheduler()` / `stopScheduler()` lifecycle methods.
+* `getDueScheduledTriggers()`, `updateScheduledTriggerAfterRun()`,
+  `disableScheduledTrigger()`, `createScheduledTrigger()` added to `agentStore.ts`.
+* Computes next run from cron (basic subset) or `interval_seconds`.
+* Broken triggers are auto-disabled to prevent infinite error loops.
+* `server.ts` starts the scheduler alongside the worker.
+
+#### W4-B: Test Suite & CI Gate
+* Added `vitest` as dev dependency with `vitest.config.ts`.
+* Created 5 test files covering core agent modules:
+  - `tests/intent.test.ts` — 11 heuristic classification tests
+  - `tests/policy.test.ts` — 6 risk-level policy tests
+  - `tests/sanitize.test.ts` — 8 secret detection / redaction tests
+  - `tests/verifier.test.ts` — 6 rule-based verification tests
+  - `tests/reporter.test.ts` — 8 action-aware report generation tests
+* `package.json` scripts: `test`, `test:watch`, `test:coverage`.
+* `cloudbuild.yaml` now runs `npm run lint` and `npm test` gates before Docker build.
+
+#### W4-C: Natural Language Plan Mutation
+* Created `src/server/agent/planMutation.ts` with `mutatePlan()`.
+* Supports add/remove/replace/modify actions on pending steps.
+* Uses Gemini structured output to interpret user instructions.
+* Only pending steps can be mutated; succeeded/running/blocked are protected.
+* All mutations are audit-logged with `plan.mutated` event type.
+
+#### W4-D: Ops Hardening
+* **Email adapter** — `src/server/tools/adapters/email.ts` (see W3-B).
+* **Graceful shutdown** — `server.ts` handles SIGTERM/SIGINT: stops worker,
+  stops scheduler, drains HTTP connections, closes DB pool.
+* **Health endpoint** — `GET /api/health` returns `{ status: 'ok', uptime }`.
+* `express.urlencoded()` middleware added for Slack interactivity payloads.
+
+### Documentation
+* Created `docs/intent-routing.md` — full architecture doc covering intent
+  classification flow, step kinds, tool registry, approval flow, plan mutation,
+  and scheduled triggers.
+* Updated this CHANGELOG to cover all v3.0.0 deliverables.
+
+## [2.1.0] - CI/CD Pipeline & Runtime Upgrades - 2026-06-19
+
+### 🚀 Google Cloud Build CI/CD Modernization
+* **Hardened Pipeline Configuration**: Restructured `cloudbuild.yaml` to run a fully automated container build, double-tagging pipeline (`COMMIT_SHA` and `:latest`), and deployment steps targeting the correct region (`us-west1`) and repository (`cloud-run-source-deploy`).
+* **Cloud Run Metadata Cleanliness**: Transitioned from `gcloud run services update` to `gcloud run deploy` to allow clean specification replacements. Surgically purged a stale `run.googleapis.com/sources` annotation leftover from previous AI Studio source-based deployments, which had been blocking subsequent container-based builds.
+
+### ⚙️ Runtime Environment Upgrades
+* **Node.js Engine Upgrade**: Bumped the Dockerfile base images (`builder` and `runner` stages) from `node:20-alpine` to `node:22-alpine` to satisfy engine requirements of `@google-cloud/cloud-sql-connector` and ensure stable database connectivity.
+
+### 🧹 Repo Pruning & Documentation
+* **Stale Document Removal**: Purged untracked legacy specification file (`docs/weeks-1-2-spec.md`) to establish the current main branch as the absolute source of truth.
+* **Deployment Guide**: Updated `README.md` to include comprehensive guides for setting up automated GCP Cloud Build triggers and resolving common annotation-related deployment conflicts.
+
+## [2.0.0] - Weeks 1–2 (merged) - 2026-06-19
+
+### ✨ Completed Deliverables (Weeks 1–2)
+
+Both Week 1 (Trust & Correctness) and Week 2 (Agent Loop) have been successfully finalized, verified, and merged into the `main` branch.
+
+#### Week 1 Epics
+
+* **Unified Intent Classification (Epic W1-A)**:
+  * Consolidated message intent routing into a centralized system within `src/server/agent/intent.ts`.
+  * Removed legacy text categorization in `src/server/ai.ts`.
+  * Introduced the `IntentResult` data structure to track intent, confidence score, and evaluation source (`heuristic`, `llm`, or `fallback`).
+  * Enhanced frontend routing logic to correctly color-code intent labels by category in the Dashboard (e.g. `durable_task` vs `direct_reply`). 
+* **Intent Handler Dispatch System (Epic W1-B)**:
+  * De-cluttered `orchestrator.ts` by splitting logic into specialized isolated modules within `src/server/agent/handlers/`.
+  * Created dedicated handlers for varying task categories: `directReply`, `statusQuery`, `cancelUpdate`, `unsafeUnsupported`, `approvalResponse`, and `durableTask`.
+* **DB-Unavailable Fallback Logic (Epic W1-C)**:
+  * Adjusted handlers and the core router in `routes.ts` to allow conversational operations (`direct_reply`) safely without a connected PostgreSQL instance.
+  * Ensures Slack bot availability stays highly-resilient, cleanly refusing durable workflows with an explicit user notification rather than timing out or crashing when SQL instances restart or drop.
+* **Honest Step Execution / No-Tool Blocking (Epic W1-D)**:
+  * Hardened the step runner in `executor.ts` to detect unsupported and "no-tool" plans generated by the LLM. Step executions now explicitly fail unless explicitly marked as a conceptual step (`note` kind), preventing empty tasks from falsely reporting as completed.
+* **Memory Secret Refusal (Epic W1-E)**:
+  * Reinforced standard agentic boundaries with an intercepted credential pattern match. The application explicitly blocks "secret", "password", or "token"-esque entries into `memory.write` routines, keeping database entries compliant.
+* **Orchestrator Context Wiring**:
+  * Connected standard memory queries, agent states, pending approvals, and active runs checks via updated bindings inside `agentStore.ts`.
+
+#### Week 2 Epics
+
+* **Run Worker & Queue Semantics (Epic W2-A)**:
+  * Severed the direct run execution sequence from the immediate HTTP request cycle.
+  * Designed and implemented an independent background execution runner in `worker.ts` utilizing database queueing with atomic task row reservation via `FOR UPDATE SKIP LOCKED`.
+  * Implemented stale-claim recovery with leases to allow tasks to scale resiliently across multiple nodes.
+* **Context Assembly for Planner (Epic W2-B)**:
+  * Enhanced `planner.ts` to consume long-term thread history snapshots and active memory snippets (`context.ts`), allowing the generative step to reason with user context and historical feedback before building multi-step maps.
+* **Closed-Loop Runtime (Epic W2-C)**:
+  * Extended the executor to automatically feed failed runs / blocked verification states back into a new contextual planner instance (`loop.ts`). 
+  * Supported up to 3 automatic replan/retry cycles during failures without needing user input.
+* **Semantic Verifier (Epic W2-D)**:
+  * Introduced `semanticVerifier.ts` to intelligently determine if the final execution trace actually aligns with the user's intent. Supplementing hardcoded rule-verifications with LLM-layer verification.
+* **Observability & Dashboard Updates (Epic W2-E)**:
+  * Exposed the iteration counts (re-plans) and Semantic Verification signals inside the live React telemetry panel.
+
+### 🧹 Commit Cleanup & Refinements (Polishing gap closure)
+
+* **Robust Finished Condition Invariant**: Corrected run status updates so `finished_at` is always written for all terminal runs, including those ending in `blocked` status.
+* **Goal Completed Timestamps**: Enhanced goal tracking to ensure `completed_at` timestamps are applied to all goals ending as `completed`, `failed`, `cancelled`, or `blocked`.
+* **Technical Documentation**: Created `docs/intent-routing.md` to lay out the full intent taxonomy and heuristics matching structures. Updated `README.md` to document the 7 Worker & Queue system invariants.
+* **Log Sanitation**: Added complete descriptive JSDoc comments detailing structured logging and its strict automatic sanitation logic to hide runtime secret keys.
+* **File Cleanup**: Removed stale temporary specification documents (`phase2dod.md` and `weeks-1-2-spec.md`) to establish `vercel_ezslack` as the clear source of truth.

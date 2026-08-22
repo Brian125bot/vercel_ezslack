@@ -1,3 +1,4 @@
+
 import { classifyIntent } from '../../src/server/agent/intent.js';
 import { runSystemMaintenance } from '../../src/server/agent/maintenance.js';
 import { runAgentPipeline } from '../../src/server/agent/orchestrator.js';
@@ -7,9 +8,7 @@ import { Semaphore } from '../../src/server/agent/semaphore.js';
 import { createIntentHash, selectedModel, getSelectedModel, updateLog, setIntentDedup, markIntentComplete } from '../../src/server/state.js';
 import { processSlackFiles } from '../../src/server/agent/attachments.js';
 import { isRedisConfigured } from '../../src/server/redis.js';
-import { verifyWorkflowInternalSecret } from '../../src/server/workflowAuth.js';
 import crypto from 'crypto';
-
 const DIRECT_REPLY_CONCURRENCY = parseInt(process.env.DIRECT_REPLY_CONCURRENCY || '5');
 const directReplySemaphore = new Semaphore(DIRECT_REPLY_CONCURRENCY);
 
@@ -20,26 +19,11 @@ function confidenceToNumber(c: string): number {
   return 0.5;
 }
 
-/**
- * Vercel Workflows internal endpoint for background agent execution.
- *
- * SECURITY BOUNDARY:
- * This endpoint is strictly INTERNAL-ONLY. It must NEVER accept external untrusted traffic.
- * Slack signature verification occurs exclusively at the ingress boundary (`/api/slack/events`).
- * Requests to this workflow endpoint must present a valid internal secret in `Authorization: Bearer <secret>`.
- * The caller cannot pass `signatureVerified` in the request body as an authorization assertion.
- */
+// Vercel Workflows endpoint for agent execution
 export default async function handler(req: any, res: any) {
-  if (req.method !== 'POST') {
+if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
-
-  // 1. Authenticate caller before ANY model resolution, maintenance, DB access, or pipeline execution
-  const authResult = verifyWorkflowInternalSecret(req);
-  if (!authResult.valid) {
-    return res.status(authResult.status).json({ error: authResult.error || 'Unauthorized internal workflow request' });
-  }
-
   const startTime = Date.now();
   // Resolve the user's selected model from DB so cold starts use the correct model
   await getSelectedModel();
@@ -47,11 +31,8 @@ export default async function handler(req: any, res: any) {
   try {
     await runSystemMaintenance('[Vercel Workflow]');
   } catch { /* non-blocking */ }
-
   try {
     const body = req.body || {};
-    // Note: signatureVerified may be present as non-authoritative telemetry from ingress handoff,
-    // but security authorization is strictly governed above by verifyWorkflowInternalSecret.
     const { event, eventId, signatureVerified, workspaceId, runId, logItemId } = body;
 
     // Handle deferred/subsequent runId triggers
@@ -85,7 +66,7 @@ export default async function handler(req: any, res: any) {
 
     // Intent-based deduplication — only when Redis is available
     const intentHash = isRedisConfigured()
-      ? createIntentHash(event?.text || '', event?.channel || '', event?.user || '', event?.thread_ts || event?.ts)
+      ? createIntentHash(event.text, event.channel, event.user, event.thread_ts || event.ts)
       : undefined;
     if (intentHash && !(await setIntentDedup(intentHash))) {
       console.log(`[Vercel Workflow] Skipping intent due to deduplication: ${intentHash.substring(0, 16)}...`);
@@ -97,22 +78,22 @@ export default async function handler(req: any, res: any) {
       throw new Error('GEMINI_API_KEY is not configured or set to default example value.');
     }
 
-    let promptText = (event?.text || "").substring(0, 50000);
+    let promptText = (event.text || "").substring(0, 50000);
 
-    if (event?.type === 'app_mention') {
+    if (event.type === 'app_mention') {
       promptText = promptText.replace(/^<@[A-Z0-9]+>\s*/, '');
     }
 
     const botToken = process.env.SLACK_BOT_TOKEN;
-    const { attachments, skipped } = await processSlackFiles(event?.files, botToken);
+    const { attachments, skipped } = await processSlackFiles(event.files, botToken);
     if (skipped.length > 0) {
       console.log(`[Vercel Workflow] Skipped ${skipped.length} attachment(s): ${skipped.map(s => `${s.filename} (${s.reason})`).join(', ')}`);
     }
 
-    const threadTsTarget = event?.thread_ts || event?.ts;
+    const threadTsTarget = event.thread_ts || event.ts;
     const dbAvailable = (process.env.DATABASE_URL || process.env.CLOUD_SQL_CONNECTION_NAME || process.env.SQL_HOST) ? await isDbAvailable() : false;
 
-    const hasPendingApproval = dbAvailable ? await agentStore.hasPendingApproval(workspaceId, event?.channel) : false;
+    const hasPendingApproval = dbAvailable ? await agentStore.hasPendingApproval(workspaceId, event.channel) : false;
 
     // NOTE: classifyIntent does not currently consider attachments. A message
     // with only an image and no text may be misclassified. Tracked as a known
@@ -120,8 +101,8 @@ export default async function handler(req: any, res: any) {
     const intentResult = await classifyIntent(promptText, selectedModel, {
       context: {
         workspaceId,
-        channelId: event?.channel,
-        userId: event?.user,
+        channelId: event.channel,
+        userId: event.user,
         threadTs: threadTsTarget,
         hasPendingApproval
       }
@@ -140,14 +121,14 @@ export default async function handler(req: any, res: any) {
     try {
       result = await runAgentPipeline({
         workspaceId,
-        channelId: event?.channel,
-        userId: event?.user,
+        channelId: event.channel,
+        userId: event.user,
         messageText: promptText,
         eventId: eventId,
-        messageTs: event?.ts,
+        messageTs: event.ts,
         threadTs: threadTsTarget,
         selectedModel,
-        signatureValid: signatureVerified ?? true,
+        signatureValid: signatureVerified,
         sourceType: 'slack',
         dbAvailable,
         intentResult,
@@ -182,7 +163,6 @@ export default async function handler(req: any, res: any) {
 
       return res.status(200).json({ success: true, result });
     }
-    return res.status(200).json({ success: true, result });
   } catch (error: any) {
     console.error(`[Vercel Workflow] execution error: ${error.message}`);
     const errLogId = req.body?.logItemId;

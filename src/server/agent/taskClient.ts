@@ -1,5 +1,4 @@
 import { slog } from './log.js';
-import { getWorkflowInternalSecret } from '../workflowAuth.js';
 
 const ENQUEUE_MAX_RETRIES = 3;
 const ENQUEUE_RETRY_BASE_MS = 1000;
@@ -27,12 +26,6 @@ export async function enqueueRunTask(runId: string, logItemId?: string): Promise
   for (let attempt = 0; attempt <= ENQUEUE_RUN_MAX_RETRIES; attempt++) {
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-
-      const workflowSecret = getWorkflowInternalSecret();
-      if (workflowSecret) {
-        headers['Authorization'] = `Bearer ${workflowSecret}`;
-      }
-
       const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
       if (bypassSecret) {
         headers['x-vercel-protection-bypass'] = bypassSecret;
