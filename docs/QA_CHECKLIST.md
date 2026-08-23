@@ -43,6 +43,8 @@
 | Migration Idempotency | `tests/migration.test.ts` | 9 | [ ] |
 | SSRF Guard | `tests/ssrfGuard.test.ts` | 17 | [x] |
 | Web Fetch Adapter SSRF | `tests/webFetch.test.ts` | 7 | [x] |
+| Email Adapter | `tests/tools/adapters/email.test.ts` | 8 | [x] |
+
 
 ---
 
@@ -295,3 +297,14 @@
 _______________________________________________________
 _______________________________________________________
 _______________________________________________________
+
+### Added `tests/tools/adapters/email.test.ts`
+- Added comprehensive unit tests for `EmailAdapter`.
+- Test cases include:
+  - `isConfigured` based on `EMAIL_WEBHOOK_URL` setup.
+  - Returns `email.send` from `getTools`.
+  - Input validation (checking `to`, `subject`, `body` values).
+  - Webhook URL check upon `execute` call.
+  - Successful `fetch` call with right JSON body to webhook endpoint.
+  - Correct exception handling for non-200 webhook responses.
+- Number of test cases: 8.

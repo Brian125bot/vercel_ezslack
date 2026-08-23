@@ -648,3 +648,6 @@ Both Week 1 (Trust & Correctness) and Week 2 (Agent Loop) have been successfully
 * **Technical Documentation**: Created `docs/intent-routing.md` to lay out the full intent taxonomy and heuristics matching structures. Updated `README.md` to document the 7 Worker & Queue system invariants.
 * **Log Sanitation**: Added complete descriptive JSDoc comments detailing structured logging and its strict automatic sanitation logic to hide runtime secret keys.
 * **File Cleanup**: Removed stale temporary specification documents (`phase2dod.md` and `weeks-1-2-spec.md`) to establish `vercel_ezslack` as the clear source of truth.
+
+### Added
+- Added comprehensive unit tests for `EmailAdapter` to ensure proper input validation, configurations logic, and correct HTTP interaction with the email webhook.
