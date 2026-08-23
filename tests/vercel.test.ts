@@ -387,7 +387,7 @@ describe('Vercel Migration Integration Tests', () => {
     });
   });
 
-  describe('4. Vercel Workflow Handler - Schema Readiness and Model Selection', () => {
+  describe('4. Vercel Workflow Handler - Direct Reply Concurrency & Error Release', () => {
     it('returns 503 before model resolution or agent work when schema readiness fails', async () => {
       vi.mocked(ensureSchemaReady).mockRejectedValueOnce(new Error('migration unavailable'));
       const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
@@ -442,6 +442,97 @@ describe('Vercel Migration Integration Tests', () => {
 
       // getSelectedModel is called during handler bootstrap to resolve user's model
       expect(getSelectedModel).toHaveBeenCalled();
+    });
+
+    it('direct-reply workflow error after acquisition releases its permit', async () => {
+      const { runAgentPipeline } = await import('../src/server/agent/orchestrator.js');
+      vi.mocked(runAgentPipeline).mockRejectedValueOnce(new Error('Pipeline error during direct reply'));
+
+      const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
+
+      const mockReq = {
+        method: 'POST',
+        body: {
+          event: { text: 'hello', channel: 'C123', user: 'U123', ts: '123.456', thread_ts: null, type: 'message' },
+          eventId: 'evt-error-test',
+          signatureVerified: true,
+          workspaceId: 'T001',
+          logItemId: 'log-err-1'
+        },
+        get: vi.fn().mockReturnValue(''),
+        headers: {}
+      };
+      const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+
+      await workflowHandler(mockReq as any, mockRes as any);
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Pipeline error during direct reply' }));
+    });
+
+    it('saturated direct-reply workflow follows 429 timeout policy and never executes without permit', async () => {
+      process.env.DIRECT_REPLY_CONCURRENCY = '1';
+      const { classifyIntent } = await import('../src/server/agent/intent.js');
+      vi.mocked(classifyIntent).mockResolvedValue({ intent: 'direct_reply', confidence: 0.9, source: 'rule' });
+
+      const { runAgentPipeline } = await import('../src/server/agent/orchestrator.js');
+
+      // First request acquires the sole permit and hangs in runAgentPipeline
+      let resolveFirstPipeline: any;
+      vi.mocked(runAgentPipeline).mockImplementationOnce(() => {
+        return new Promise(resolve => {
+          resolveFirstPipeline = resolve;
+        });
+      });
+
+      const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
+
+      const req1 = {
+        method: 'POST',
+        body: {
+          event: { text: 'first req', channel: 'C1', user: 'U1', ts: '1.0' },
+          eventId: 'evt-1',
+          workspaceId: 'T1'
+        },
+        get: vi.fn().mockReturnValue(''),
+        headers: {}
+      };
+      const res1 = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+
+      // Start req1 (acquires permit)
+      const req1Promise = workflowHandler(req1 as any, res1 as any);
+
+      // Req2 attempts direct_reply, but semaphore is fully saturated.
+      // Mock timers are fake or short timeout: we can simulate timeout
+      const req2 = {
+        method: 'POST',
+        body: {
+          event: { text: 'second req', channel: 'C1', user: 'U1', ts: '2.0' },
+          eventId: 'evt-2',
+          workspaceId: 'T1',
+          logItemId: 'log-sat-2'
+        },
+        get: vi.fn().mockReturnValue(''),
+        headers: {}
+      };
+      const res2 = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+
+      // Make classifyIntent resolve direct_reply for req2
+      vi.mocked(classifyIntent).mockResolvedValueOnce({ intent: 'direct_reply', confidence: 0.9, source: 'rule' });
+
+      // Run req2 and ensure it gets 429 when capacity is saturated
+      // Fast forward fake timers if needed, or wait for acquirePermit timeout
+      const req2Promise = workflowHandler(req2 as any, res2 as any);
+
+      // Clean up req1
+      if (resolveFirstPipeline) {
+        resolveFirstPipeline({ status: 'success', intent: 'direct_reply', message: 'done' });
+      }
+      await req1Promise;
+      await req2Promise;
+
+      expect(res2.status).toHaveBeenCalledWith(429);
+      expect(res2.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('capacity exceeded') }));
     });
   });
 

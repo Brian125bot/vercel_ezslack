@@ -100,6 +100,73 @@ describe('agent-extra.test.ts', () => {
       sem.release();
       expect(sem.available).toBe(1);
     });
+
+    it('successful acquisition followed by release restores exactly one permit', async () => {
+      const sem = new Semaphore(1);
+      expect(sem.available).toBe(1);
+
+      const permit = await sem.acquirePermit();
+      expect(permit.acquired).toBe(true);
+      expect(sem.available).toBe(0);
+
+      permit.release();
+      expect(sem.available).toBe(1);
+    });
+
+    it('timed-out acquisition does not increase available permits when caller exits', async () => {
+      const sem = new Semaphore(1);
+      const permit1 = await sem.acquirePermit(); // Holds sole permit
+      expect(sem.available).toBe(0);
+
+      // Second caller times out waiting
+      const timeoutPromise = sem.acquirePermit(50);
+      vi.advanceTimersByTime(60);
+      const timedOutPermit = await timeoutPromise;
+
+      expect(timedOutPermit.acquired).toBe(false);
+      expect(sem.available).toBe(0);
+
+      // Exiting or calling release on timed-out permit has no effect
+      timedOutPermit.release();
+      expect(sem.available).toBe(0);
+
+      // Releasing original permit restores exactly 1 permit
+      permit1.release();
+      expect(sem.available).toBe(1);
+    });
+
+    it('duplicate release cannot raise permits above the configured maximum', () => {
+      const sem = new Semaphore(2);
+      expect(sem.available).toBe(2);
+
+      sem.release();
+      sem.release();
+      expect(sem.available).toBe(2);
+    });
+
+    it('waiting requests are awakened FIFO', async () => {
+      const sem = new Semaphore(1);
+      const p1 = await sem.acquirePermit(); // holds permit
+
+      const order: number[] = [];
+      const waiter1 = sem.acquirePermit().then(p => {
+        order.push(1);
+        p.release();
+      });
+      const waiter2 = sem.acquirePermit().then(p => {
+        order.push(2);
+        p.release();
+      });
+
+      expect(sem.waiting).toBe(2);
+
+      p1.release(); // awaken waiter1
+      await waiter1;
+      await waiter2;
+
+      expect(order).toEqual([1, 2]);
+      expect(sem.available).toBe(1);
+    });
   });
 
   describe('Skills Loader', () => {

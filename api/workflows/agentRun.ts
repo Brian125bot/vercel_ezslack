@@ -1,11 +1,10 @@
-
 import { classifyIntent } from '../../src/server/agent/intent.js';
 import { runSystemMaintenance } from '../../src/server/agent/maintenance.js';
 import { runAgentPipeline } from '../../src/server/agent/orchestrator.js';
 import { isDbAvailable } from '../../src/server/storage/db.js';
 import { ensureSchemaReady } from '../../src/server/storage/readiness.js';
 import { agentStore } from '../../src/server/storage/agentStore.js';
-import { Semaphore } from '../../src/server/agent/semaphore.js';
+import { Semaphore, Permit } from '../../src/server/agent/semaphore.js';
 import { createIntentHash, selectedModel, getSelectedModel, updateLog, setIntentDedup, markIntentComplete } from '../../src/server/state.js';
 import { processSlackFiles } from '../../src/server/agent/attachments.js';
 import { isRedisConfigured } from '../../src/server/redis.js';
@@ -120,10 +119,39 @@ export default async function handler(req: any, res: any) {
     
     const { intent, confidence, source } = intentResult;
 
+    /**
+     * SATURATION POLICY:
+     * Direct reply execution requires a concurrency permit from `directReplySemaphore`.
+     * If capacity is unavailable after waiting 10 seconds (acquisition times out),
+     * the request is rejected with HTTP 429 (Too Many Requests).
+     *
+     * Invariant:
+     * Direct reply operations never run without acquiring a valid permit, and permit release
+     * is called exactly once via `permit.release()` in a `finally` block if and only if
+     * acquisition succeeded (`permit.acquired === true`).
+     */
+    let permit: Permit | null = null;
+
     if (intent === 'direct_reply') {
-      const acquired = await directReplySemaphore.acquire(10_000);
-      if (!acquired) {
-        console.warn(`[Vercel Workflow] Direct reply concurrency limit reached, proceeding without semaphore`);
+      permit = await directReplySemaphore.acquirePermit(10_000);
+      if (!permit.acquired) {
+        console.warn(`[Vercel Workflow] Direct reply concurrency limit reached (${DIRECT_REPLY_CONCURRENCY}). Request rejected.`);
+        if (logItemId) {
+          await updateLog(logItemId, {
+            status: 'error',
+            intent,
+            confidence: confidenceToNumber(confidence),
+            source,
+            processingTimeMs: Date.now() - startTime,
+            error: 'Direct reply capacity exceeded (429)'
+          });
+        }
+        if (intentHash) {
+          try {
+            await markIntentComplete(intentHash);
+          } catch { /* ignore */ }
+        }
+        return res.status(429).json({ error: 'Direct reply capacity exceeded, please retry later' });
       }
     }
     
@@ -145,8 +173,8 @@ export default async function handler(req: any, res: any) {
         attachments
       });
     } finally {
-      if (intent === 'direct_reply') {
-        directReplySemaphore.release();
+      if (permit && permit.acquired) {
+        permit.release();
       }
     }
 
