@@ -17,6 +17,7 @@ export default defineConfig({
         'src/server/agent/**/*.ts',
         'src/server/state.ts',
         'src/server/redis.ts',
+        'src/server/storage/db.ts',
       ]
     }
   },
@@ -26,3 +27,4 @@ export default defineConfig({
     }
   }
 });
+// append src/server/storage/db.ts to coverage include

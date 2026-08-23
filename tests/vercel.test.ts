@@ -40,7 +40,7 @@ vi.mock('../src/server/state.js', () => ({
 }));
 
 vi.mock('../src/server/agent/intent.js', () => ({
-  classifyIntent: vi.fn().mockResolvedValue({ intent: 'direct_reply', confidence: 0.9, source: 'rule' })
+  classifyIntent: vi.fn().mockResolvedValue({ intent: 'direct_reply', confidence: 'high', source: 'heuristic' })
 }));
 
 vi.mock('../src/server/agent/orchestrator.js', () => ({
@@ -473,7 +473,7 @@ describe('Vercel Migration Integration Tests', () => {
     it('saturated direct-reply workflow follows 429 timeout policy and never executes without permit', async () => {
       process.env.DIRECT_REPLY_CONCURRENCY = '1';
       const { classifyIntent } = await import('../src/server/agent/intent.js');
-      vi.mocked(classifyIntent).mockResolvedValue({ intent: 'direct_reply', confidence: 0.9, source: 'rule' });
+      vi.mocked(classifyIntent).mockResolvedValue({ intent: 'direct_reply', confidence: 'high', source: 'heuristic' });
 
       const { runAgentPipeline } = await import('../src/server/agent/orchestrator.js');
 
@@ -518,18 +518,19 @@ describe('Vercel Migration Integration Tests', () => {
       const res2 = { status: vi.fn().mockReturnThis(), json: vi.fn() };
 
       // Make classifyIntent resolve direct_reply for req2
-      vi.mocked(classifyIntent).mockResolvedValueOnce({ intent: 'direct_reply', confidence: 0.9, source: 'rule' });
+      vi.mocked(classifyIntent).mockResolvedValueOnce({ intent: 'direct_reply', confidence: 'high', source: 'heuristic' });
 
       // Run req2 and ensure it gets 429 when capacity is saturated
       // Fast forward fake timers if needed, or wait for acquirePermit timeout
       const req2Promise = workflowHandler(req2 as any, res2 as any);
 
-      // Clean up req1
+      // We need to resolve req1 quickly to ensure both promises fulfill
+      // without hanging the test environment
       if (resolveFirstPipeline) {
         resolveFirstPipeline({ status: 'success', intent: 'direct_reply', message: 'done' });
       }
-      await req1Promise;
-      await req2Promise;
+
+      await Promise.all([req1Promise, req2Promise]);
 
       expect(res2.status).toHaveBeenCalledWith(429);
       expect(res2.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('capacity exceeded') }));
