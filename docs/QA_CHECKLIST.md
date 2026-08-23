@@ -308,3 +308,14 @@ _______________________________________________________
   - Successful `fetch` call with right JSON body to webhook endpoint.
   - Correct exception handling for non-200 webhook responses.
 - Number of test cases: 8.
+
+### Added `tests/tools/adapters/githubIssue.test.ts`
+- Added comprehensive unit tests for `GitHubIssueAdapter`.
+- Test cases include:
+  - `isConfigured` based on `GITHUB_TOKEN` setup.
+  - Returns `github.createIssue` from `getTools`.
+  - Input validation (checking `owner`, `repo`, `title` values).
+  - Webhook URL check upon `execute` call.
+  - Successful `fetch` call with right JSON body to GitHub API endpoint.
+  - Correct exception handling for non-ok GitHub responses.
+- Number of test cases: 8.
