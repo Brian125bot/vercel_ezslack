@@ -471,40 +471,16 @@ describe('Vercel Migration Integration Tests', () => {
     });
 
     it('saturated direct-reply workflow follows 429 timeout policy and never executes without permit', async () => {
-      process.env.DIRECT_REPLY_CONCURRENCY = '1';
-      const { classifyIntent } = await import('../src/server/agent/intent.js');
-      vi.mocked(classifyIntent).mockResolvedValue({ intent: 'direct_reply', confidence: 'high', source: 'heuristic' });
-
-      const { runAgentPipeline } = await import('../src/server/agent/orchestrator.js');
-
-      // First request acquires the sole permit and hangs in runAgentPipeline
-      let resolveFirstPipeline: any;
-      vi.mocked(runAgentPipeline).mockImplementationOnce(() => {
-        return new Promise(resolve => {
-          resolveFirstPipeline = resolve;
-        });
-      });
+      // Option B: mock the semaphore boundary — no real 10s wait, no env leak, no async race.
+      // Timing/FIFO semantics are covered in semaphore unit tests; handler test only proves the 429 contract.
+      const { Semaphore } = await import('../src/server/agent/semaphore.js');
+      const spy = vi.spyOn(Semaphore.prototype, 'acquirePermit')
+        .mockResolvedValueOnce({ acquired: false, release: vi.fn() } as any);
 
       const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
+      const { runAgentPipeline } = await import('../src/server/agent/orchestrator.js');
 
-      const req1 = {
-        method: 'POST',
-        body: {
-          event: { text: 'first req', channel: 'C1', user: 'U1', ts: '1.0' },
-          eventId: 'evt-1',
-          workspaceId: 'T1'
-        },
-        get: vi.fn().mockReturnValue(''),
-        headers: {}
-      };
-      const res1 = { status: vi.fn().mockReturnThis(), json: vi.fn() };
-
-      // Start req1 (acquires permit)
-      const req1Promise = workflowHandler(req1 as any, res1 as any);
-
-      // Req2 attempts direct_reply, but semaphore is fully saturated.
-      // Mock timers are fake or short timeout: we can simulate timeout
-      const req2 = {
+      const req = {
         method: 'POST',
         body: {
           event: { text: 'second req', channel: 'C1', user: 'U1', ts: '2.0' },
@@ -515,25 +491,16 @@ describe('Vercel Migration Integration Tests', () => {
         get: vi.fn().mockReturnValue(''),
         headers: {}
       };
-      const res2 = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+      const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
 
-      // Make classifyIntent resolve direct_reply for req2
-      vi.mocked(classifyIntent).mockResolvedValueOnce({ intent: 'direct_reply', confidence: 'high', source: 'heuristic' });
+      await workflowHandler(req as any, res as any);
 
-      // Run req2 and ensure it gets 429 when capacity is saturated
-      // Fast forward fake timers if needed, or wait for acquirePermit timeout
-      const req2Promise = workflowHandler(req2 as any, res2 as any);
+      expect(spy).toHaveBeenCalledWith(10_000);
+      expect(runAgentPipeline).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(429);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('capacity exceeded') }));
 
-      // We need to resolve req1 quickly to ensure both promises fulfill
-      // without hanging the test environment
-      if (resolveFirstPipeline) {
-        resolveFirstPipeline({ status: 'success', intent: 'direct_reply', message: 'done' });
-      }
-
-      await Promise.all([req1Promise, req2Promise]);
-
-      expect(res2.status).toHaveBeenCalledWith(429);
-      expect(res2.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('capacity exceeded') }));
+      spy.mockRestore();
     });
   });
 
