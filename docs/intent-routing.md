@@ -52,10 +52,11 @@ generation to execution time when upstream step outputs are available.
 
 Tools are registered at startup:
 - **Core tools** (always available): `slack.replyInThread`, `memory.write`, `memory.search`, `task.record`
-- **External adapters** (conditional on env vars): `github.createIssue`, `email.send`
+- **External adapters** (conditional on env vars): `github.createIssue` (`GITHUB_TOKEN`), `email.send` (`EMAIL_WEBHOOK_URL`), `search.query` (`TAVILY_API_KEY`), `web.fetch` (`ENABLE_WEB_FETCH`, SSRF-guarded), `sandbox.*` (`SANDBOX_API_KEY`)
 
-External adapter tools declare `riskLevel: 'external_write'` and go through the
-policy gate, which requires explicit user approval via Block Kit buttons.
+External adapter tools declare a risk level (`external_write` for GitHub/email, `read` for search/fetch) and go through
+the policy gate. `external_write` steps require explicit user approval via Block Kit buttons; only the original requester
+or IDs listed in `SLACK_APPROVAL_ADMIN_IDS` may resolve an approval.
 
 ## Approval Flow (W3-C)
 
@@ -117,7 +118,10 @@ modifies pending steps rather than cancelling the entire run.
 
 Goals can have associated `scheduled_triggers` with cron expressions or
 interval_seconds. The scheduler is triggered via the Vercel Cron endpoint
-(`/api/cron/poll`, daily at 9 AM UTC). It checks for due triggers (atomic
+(`/api/cron/poll`, daily at 9 AM UTC) and on every workflow bootstrap
+(`/api/workflows/agentRun`), so maintenance runs on-demand for low MTTR; on
+Vercel Pro, set `*/15 * * * *` in `vercel.json` for 15-minute idle coverage.
+The poller checks for due triggers (atomic
 `DELETE ... FOR UPDATE SKIP LOCKED ... RETURNING *`), creates new runs, and
 enqueues them via the workflow endpoint. Scheduled runs inherit the model from the
 goal's most recent run.

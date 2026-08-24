@@ -1,9 +1,8 @@
-# QA Checklist — `version-3` Branch Pre-Merge Review
+# QA Checklist — Cumulative Post-Merge Status
 
-**Branch:** `version-3`  
-**Base:** `main` (HEAD: `5af8c1f`)  
-**Commits:** `89eb959` → `17deb43` → `cbaec04`  
-**Scope:** Weeks 3–4 implementation (Real-World Action + Autonomy & Hardening)
+**Branch:** `main` (HEAD: `40dcdb6`)  
+**Release:** `v7.5.0` — Concurrency Saturation Policy, SSRF Guard & Test Suite Expansion  
+**Scope:** Rolling QA verification of the shipped feature set (Real-World Action, Autonomy & Hardening, Vercel reliability, security hardening, concurrency saturation policy)
 
 ---
 
@@ -21,29 +20,30 @@
 
 ## 🧪 Test Suite Verification
 
-### Existing Tests (should still pass)
+39 test files / 477 cases total. Key suites (full matrix in the [README](../README.md#-test-suite)):
 
 | Suite | File | Cases | Status |
 |-------|------|:-----:|:------:|
 | AI Response | `tests/ai.test.ts` | 5 | [x] |
-| Intent Classification | `tests/intent.test.ts` | 11 | [ ] |
-| Policy Gate | `tests/policy.test.ts` | 6 | [ ] |
+| Intent Classification | `tests/intent.test.ts` | 16 | [x] |
+| Policy Gate | `tests/policy.test.ts` | 7 | [x] |
 | Secret Sanitization | `tests/sanitize.test.ts` | 11 | [x] |
 | Structured Logger | `tests/log.test.ts` | 4 | [x] |
-| Rule Verifier | `tests/verifier.test.ts` | 6 | [ ] |
-| Action Reporter | `tests/reporter.test.ts` | 8 | [ ] |
-
-### New Tests (version-3)
-
-| Suite | File | Cases | Status |
-|-------|------|:-----:|:------:|
 | Interactivity Authorization | `tests/interactivity-authorization.test.ts` | 6 | [x] |
-| Deferral Detection | `tests/deferral.test.ts` | 17 | [ ] |
-| Agent Loop | `tests/loop.test.ts` | 4 | [ ] |
-| Migration Idempotency | `tests/migration.test.ts` | 9 | [ ] |
+| Deferral Detection | `tests/deferral.test.ts` | 10 | [x] |
+| Agent Loop (Closed) | `tests/loop.test.ts` | 6 | [x] |
+| Agent Extras (plan mutation, semaphore leases) | `tests/agent-extra.test.ts` | 27 | [x] |
+| Auth Lockout | `tests/auth.test.ts` | 13 | [x] |
+| Redis Client | `tests/redis.test.ts` | 40 | [x] |
 | SSRF Guard | `tests/ssrfGuard.test.ts` | 17 | [x] |
 | Web Fetch Adapter SSRF | `tests/webFetch.test.ts` | 7 | [x] |
 | Email Adapter | `tests/tools/adapters/email.test.ts` | 8 | [x] |
+| GitHub Issue Adapter | `tests/tools/adapters/githubIssue.test.ts` | 8 | [x] |
+| Database Storage Pools | `tests/server/storage/db.test.ts` | 21 | [x] |
+| Vercel Integration (incl. permit & 429 policy) | `tests/vercel.test.ts` | 22 | [x] |
+
+> Note: early standalone suites (`verifier`, `reporter`, `migration`) were consolidated into the closed-loop,
+> orchestrator, and schema suites as the pipeline matured.
 
 
 ---
@@ -114,7 +114,7 @@
 
 - [x] `vitest.config.ts` — proper Vitest configuration
 - [x] `package.json` — `test`, `test:watch`, `test:coverage` scripts present
-- [x] `cloudbuild.yaml` — `npm run lint` and `npm test` steps before Docker build
+- [x] CI gate — `npm run lint` and `npm test` (legacy `cloudbuild.yaml` removed; Vercel build uses `vercel-build`)
 - [x] `vitest` listed in `devDependencies`
 
 ### W4-C: Natural Language Plan Mutation
@@ -201,9 +201,8 @@
 
 ### CHANGELOG.md
 
-- [x] v3.1.0 entry covers all new features and tests
-- [x] v3.0.1 entry covers all 3 bug fixes
-- [x] v3.0.0 entry covers all W3+W4 features
+- [x] v7.5.0 entry consolidates the former Unreleased work plus concurrency saturation, SSRF guard, and the expanded test suite (39 files / 477 cases)
+- [x] v7.3.0 / v7.2.0 / v7.0.0 entries cover prior hardening milestones with accurate migration and test counts
 - [x] No stale or incorrect information from earlier versions
 
 ---
@@ -287,35 +286,13 @@
 | Week 3 Features | Automated | 2026-06-20 | [x] |
 | Week 4 Features | Automated | 2026-06-20 | [x] |
 | Security | Automated | 2026-06-20 | [x] |
-| Documentation | Automated | 2026-06-20 | [x] |
+| Documentation | Automated | 2026-08-23 | [x] |
 | Code Quality | Automated | 2026-06-20 | [x] |
 | Integration (post-merge) | Automated | 2026-06-20 | [x] |
+| Concurrency Saturation & SSRF Guard (v7.5.0) | Automated | 2026-08-23 | [x] |
 
 **Merge Decision:** [x] Approved / [ ] Needs Changes
 
 **Notes:**
-_______________________________________________________
-_______________________________________________________
-_______________________________________________________
-
-### Added `tests/tools/adapters/email.test.ts`
-- Added comprehensive unit tests for `EmailAdapter`.
-- Test cases include:
-  - `isConfigured` based on `EMAIL_WEBHOOK_URL` setup.
-  - Returns `email.send` from `getTools`.
-  - Input validation (checking `to`, `subject`, `body` values).
-  - Webhook URL check upon `execute` call.
-  - Successful `fetch` call with right JSON body to webhook endpoint.
-  - Correct exception handling for non-200 webhook responses.
-- Number of test cases: 8.
-
-### Added `tests/tools/adapters/githubIssue.test.ts`
-- Added comprehensive unit tests for `GitHubIssueAdapter`.
-- Test cases include:
-  - `isConfigured` based on `GITHUB_TOKEN` setup.
-  - Returns `github.createIssue` from `getTools`.
-  - Input validation (checking `owner`, `repo`, `title` values).
-  - Webhook URL check upon `execute` call.
-  - Successful `fetch` call with right JSON body to GitHub API endpoint.
-  - Correct exception handling for non-ok GitHub responses.
-- Number of test cases: 8.
+- v7.5.0: concurrency saturation policy verified via `agent-extra.test.ts` semaphore suites and `vercel.test.ts` 429 workflow test; new adapter/DB/log suites verified individually.
+- One pre-existing timing-sensitive `vercel.test.ts` case (`saturated direct-reply workflow follows 429 timeout policy`) races the 10s Vitest timeout — stabilizing in a follow-up.

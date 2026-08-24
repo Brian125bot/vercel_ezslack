@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [7.5.0] - Concurrency Saturation Policy, SSRF Guard & Test Suite Expansion - 2026-08-23
 
 ### Security
 
@@ -16,35 +16,37 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 * **Gemini 3.7 Flash support.** Added `gemini-3.7-flash` as a supported model option with full context-window and output-token configuration. Available via the dashboard model selector and the `/api/model/select` endpoint. Maintains `gemini-3.1-flash-lite` as the user-facing default and `gemini-2.5-flash` as the safe fallback.
+* **Semantic message deduplication for Slack AI Agent.** `src/server/agent/dedup.ts` implements dual-strategy deduplication: exact SHA-256 hash matching for instant detection, plus Jaccard similarity over FNV-1a 32-bit bigram hashes for catching near-duplicate paraphrased messages. Fingerprints are stored in Redis with configurable TTL, falling back to an in-memory LRU `Map`. Integrated into `slack.replyInThread` so near-duplicate Slack replies are suppressed automatically. New environment variables: `SLACK_DEDUP_SIMILARITY_THRESHOLD` (0.75), `SLACK_DEDUP_WINDOW_SIZE` (5), `SLACK_DEDUP_TTL_SECONDS` (300).
+* **Self-host Dockerfile.** New `Dockerfile` provides a multi-stage Node 22 build producing a minimal, non-root production container. Also adds `.dockerignore` for clean build context.
+* **Expanded Gemini model support.** Added `gemini-3.6-flash` and `gemini-3.5-flash-lite` to the allowed models list in `src/server/agent/models.ts`, with accurate context window sizing (1M tokens for most Flash models, 128K for Flash-lite).
 * **Comprehensive Unit and Integration Tests for SSRF Guard and Web Fetch Adapter.** Created `tests/ssrfGuard.test.ts` (17 tests) and `tests/webFetch.test.ts` (7 tests) to verify IP blocks, boundary CIDR cases, cloud metadata (`169.254.169.254`), IPv4-mapped IPv6 unwrapping, safe redirects, relative redirects, max redirect limits, and `web.fetch` end-to-end SSRF rejection and regression safety.
 * **Unit and Integration Tests for Startup URL Validation.** Added two test cases inside the `HTTPS redirect (production)` suite in `tests/security-headers.test.ts` to verify that starting the server in production with missing or invalid `APP_URL` throws/rejects as expected.
+* **Database storage pool tests.** New `tests/server/storage/db.test.ts` — 21 tests covering admin/user pool configuration, Cloud SQL Connector reuse guards (preventing connector overwrite and socket leaks), SSL handling, and query retry/backoff resilience.
+* **Structured logger tests.** New `tests/log.test.ts` — 4 tests covering structured `slog` output shape and scope tagging.
+* **Email adapter tests.** New `tests/tools/adapters/email.test.ts` — 8 tests covering `EMAIL_WEBHOOK_URL` configuration gating, `email.send` tool registration, input validation, webhook JSON payload shape, and non-200 response error handling.
+* **GitHub Issue adapter tests.** New `tests/tools/adapters/githubIssue.test.ts` — 8 tests covering `GITHUB_TOKEN` configuration gating, `github.createIssue` tool registration, input validation, GitHub REST API payload shape, and non-ok response error handling.
+* **Expanded Vercel workflow tests.** `tests/vercel.test.ts` grown to 22 tests, adding direct-reply permit acquisition/release coverage and 429 saturation-policy verification; `tests/agent-extra.test.ts` grown to 27 tests with semaphore lease semantics.
+
+### Changed
+
+* **Semaphore refactored to idempotent Permit leases.** `Semaphore.acquirePermit()` now returns a `Permit { acquired, release() }` lease object with a FIFO-fair waiter queue and strict max-permit capping. `release()` is idempotent — exactly-once semantics are guaranteed regardless of how many times the caller invokes it. The legacy boolean `acquire()` API is retained as a thin wrapper for compatibility.
+* **Direct-reply saturation now fails closed with HTTP 429.** `/api/workflows/agentRun` tracks permit acquisition explicitly: when direct-reply capacity (`DIRECT_REPLY_CONCURRENCY`, default 5) is unavailable after the 10-second acquisition wait, the request is rejected with `429 Too Many Requests`, the pipeline log item is marked errored, and the intent-dedup marker is released so genuine retries are not suppressed. Direct replies can never execute without holding a valid permit.
 
 ### Fixed
 
+* **Direct-reply concurrency accounting and permit leak.** Previously the workflow released the semaphore unconditionally whenever the intent was `direct_reply` — even when permit acquisition had timed out — corrupting the permit count and allowing over-admission. Release is now tied to `permit.acquired` inside a `finally` block, restoring exact concurrency accounting.
 * **ReAct loop yields no longer leave conversations ending with a model turn.** When the ReAct loop yielded mid-tool-execution (approval or wall-clock deadline), the persisted `contents[]` ended with the model's function-call turn but no corresponding `user` functionResponse turn. On resume, Gemini rejected the request with a 400 `"Requests ending with a model turn are not supported"` error, immediately failing the run. Three-part fix in `reactLoop.ts`: (1) on resume, strip a trailing `model` turn from persisted `agent_messages` before sending to Gemini; (2) restructured the tool execution loop so the `model` turn and `user` functionResponse turn are always pushed together before any yield/break, guaranteeing persisted contents never ends with `model`; (3) the `geminiAgentStep` catch block now detects the model-turn 400 via `GeminiCallError.isModelTurnError`, strips the trailing turn, and yields gracefully instead of throwing. Also fixed `compactThreadHistory` in `context.ts` emitting `role: 'system'` (invalid for Gemini `contents[]`) — summary entries now use `role: 'user'`.
 * **Timeout-guard requeue retry count now bounded to fail-fast context.** Reduced `ENQUEUE_MAX_RETRIES` to 2 (three total attempts) specifically for `enqueueRunTask()`, which is called only when the wall-clock timeout has already fired. This prevents the timeout guard from spending 20+ seconds retrying when Vercel's hard function deadline is imminent. The scheduler poller's retry behavior is unchanged. The database row is already atomically marked `'queued'`, so the cron poller will pick up the run if this requeue fails.
 * **Resilient Rate-Limiter Fail-Open Fallback.** Modified `KvRateLimitStore` in `src/server/rateLimitStore.ts` to implement a robust fail-open fallback. All Redis network client operations (`increment()`, `decrement()`, and `resetKey()`) are now wrapped in `try/catch` blocks. If `getRedisClient()` returns `null` (unconfigured store) or a Redis operation throws a network/runtime exception, the store gracefully logs a structured warning via `slog` with a `'rate-limit'` scope and returns a permissive payload (e.g. `totalHits: 1` and a reset time derived dynamically from `this.windowMs`) rather than allowing the error to bubble up and trigger an Express 500 server error across `/api/*` endpoints. Added extensive unit tests inside `tests/rateLimitStore.test.ts` to assert exact fail-open payload properties, graceful rejections avoidance, and `slog` structure.
 * **Task Client Requeue Timeout & Hang Prevention.** Added a dedicated wall-clock timeout (`ENQUEUE_FETCH_TIMEOUT_MS` default 5s) via `AbortSignal.timeout` to fetch requests inside `taskClient.ts`. This prevents infinite execution hangs on requeue tasks and resolves the flaky `vercel.test.ts` timeout-guard test by properly stubbing and simulating fetch timeouts.
-
-## [Unreleased] - 2026-07-28
-
-### Added
-
-* **Semantic message deduplication for Slack AI Agent.** `src/server/agent/dedup.ts` implements dual-strategy deduplication: exact SHA-256 hash matching for instant detection, plus Jaccard similarity over FNV-1a 32-bit bigram hashes for catching near-duplicate paraphrased messages. Fingerprints are stored in Redis with configurable TTL, falling back to an in-memory LRU `Map`. Integrated into `slack.replyInThread` so near-duplicate Slack replies are suppressed automatically. New environment variables: `SLACK_DEDUP_SIMILARITY_THRESHOLD` (0.75), `SLACK_DEDUP_WINDOW_SIZE` (5), `SLACK_DEDUP_TTL_SECONDS` (300).
-* **Self-host Dockerfile.** New `Dockerfile` provides a multi-stage Node 22 Alpine build producing a minimal, non-root production container. Also adds `.dockerignore` for clean build context.
-* **Expanded Gemini model support.** Added `gemini-3.6-flash` and `gemini-3.5-flash-lite` to the allowed models list in `src/server/agent/models.ts`, with accurate context window sizing (1M tokens for most Flash models, 128K for Flash-lite).
-
-### Fixed
-
 * **`classifyCancelVsUpdate` false-positive on hyphenated compounds.** Excluded hyphen-adjacent matches (e.g. "front-end", "back-end", "non-stop") from cancel word boundaries to prevent false cancellations.
 * **`durable_task` heuristic precision improvements.** Ambiguous bare-word matching is now restricted to task-oriented phrases or explicit word boundaries to prevent false matches inside words like "trackable" or on common verbs like "watch" and "create".
 * **ReAct loop final answer persistence regression.** The final text answer from the ReAct loop is now persisted as a `succeeded` step titled "Final answer" with `output: { generated: "..." }`, and an `agent_loop.final_answer` audit event is logged. This prevents the semantic verifier from reporting "not satisfied" and triggering infinite replan/re-enqueue storms.
 * **Rapid dashboard authentication request fix.** Dashboard auth endpoints now handle rapid concurrent requests without failure.
-* **Rate limiter revert.** Reverted the KV degradation fail-visible change that caused rate limit store failures under high load.
 
 ### 🧪 Test Results
 
-* 355 tests across 28 files — all passing.
+* 477 tests across 39 files.
 * `tsc --noEmit` — clean.
 
 ## [7.3.0] - Redis Distributed Auth Lockout, Approval Scope Creep Hardening, Vercel Analytics - 2026-07-17

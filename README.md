@@ -1,9 +1,9 @@
 # 🧠 Dynamic Gemini Slack AI Agent Backend 
 
-[![Engine](https://img.shields.io/badge/Gemini-3.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
+[![Engine](https://img.shields.io/badge/Gemini-3.7%20Flash%20%7C%203.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
-[![Tests](https://img.shields.io/badge/Tests-34%20files%20%7C%20420%20cases-brightgreen?style=flat-square)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-39%20files%20%7C%20477%20cases-brightgreen?style=flat-square)](tests/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 An enterprise-ready, secure, and hot-swappable **Slack AI Agent Backend** powered by **Express.js** and the **Google Gen AI SDK**, deployed as **Vercel Serverless Functions**. This agent incorporates dynamic runtime intent classification, multi-turn threaded memory persistence, and an interactive real-time telemetry dashboard.
@@ -166,6 +166,8 @@ Explicit `MAX_THREAD_HISTORY_CHARS` in the environment still takes precedence.
 | Semantic message deduplication via Jaccard similarity | Dual-strategy dedup (exact SHA-256 hash + bigram Jaccard similarity) prevents near-duplicate Slack replies; configurable threshold, window size, and TTL |
 | ReAct loop final answer persistence | Final text answers are persisted as a `succeeded` step so the semantic verifier sees the delivered result, preventing infinite replan/re-enqueue storms |
 | ReAct loop model-turn safety guard | Persisted `contents[]` is guaranteed to never end with a `model` turn: on resume, trailing model turns are stripped; during execution, `model` + `functionResponse` turns are always pushed atomically before any yield/break; the catch block auto-recovers 400 model-turn errors from Gemini |
+| Idempotent `Permit` leases for direct replies | Exactly-once release prevents permit leaks; FIFO fairness bounds wait time under load |
+| Fail-closed HTTP 429 on direct-reply saturation | Requests never execute without holding a valid concurrency permit; callers get an explicit retry signal |
 
 ---
 
@@ -514,7 +516,7 @@ In production, a middleware checks `x-forwarded-proto` (set by Cloud Run / Verce
 
 ## 🗄 Database Schema
 
-PostgreSQL with 12 idempotent migrations (v1–v12). All DDL uses `IF NOT EXISTS` / `IF EXISTS` guards.
+PostgreSQL with 13 idempotent migrations (v1–v13). All DDL uses `IF NOT EXISTS` / `IF EXISTS` guards.
 
 ### Tables
 
@@ -561,6 +563,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 | **Stale Recovery** | `runSystemMaintenance()` (recoverStaleClaims + reapExpiredApprovals + dedup + trigger poll) on workflow bootstrap and daily cron |
 | **Schema readiness** | The shared readiness gate completes idempotent migrations before protected API, workflow, or cron work. A failure returns retryable `503` and prevents downstream agent/state operations. |
 | **Timeout Guard** | Cooperative wall-clock check (configurable `RUN_TIMEOUT_MS`, default 45s) before plan creation, each step, and verification — gracefully re-queues instead of hard-terminating on Vercel's serverless timeout |
+| **Direct-Reply Saturation Policy** | Direct replies acquire an idempotent `Permit` lease from a FIFO semaphore (`DIRECT_REPLY_CONCURRENCY`, default 5). When capacity is unavailable after the 10s wait, the workflow rejects with **HTTP 429** instead of executing unpermitted; the permit is released exactly once in a `finally` block |
 | **Security** | Workflow endpoint secured via Vercel Automation Bypass secret for preview deployments; cron endpoint secured via `CRON_SECRET` |
 
 ### Health and Readiness
@@ -576,7 +579,7 @@ The background processing system runs on **Vercel Serverless Functions** with HT
 
 ## 🧪 Test Suite
 
-28 test files, 355 test cases. Run with:
+39 test files, 477 test cases. Run with:
 
 ```bash
 npm test              # Single run
@@ -586,33 +589,45 @@ npm run test:coverage # With coverage report
 
 | Suite | File | Tests | Coverage |
 |-------|------|:-----:|----------|
-| Env Validation | `tests/env.test.ts` | 31 | Missing/empty/placeholder vars, DB variants, VERCEL guard, APP_URL, adapter warnings, DASHBOARD_PASSWORD dev/prod split, DB/APP_URL placeholder detection, no value leaks |
-| Security Headers | `tests/security-headers.test.ts` | 12 | CSP directives, HSTS, X-Frame-Options, nosniff, HTTPS redirect |
-| Agent Handlers | `tests/handlers.test.ts` | 27 | direct reply, durable task, status query, approval response, cancel/update |
-| Agent Extras | `tests/agent-extra.test.ts` | 23 | Plan mutation, intent ensure, pipeline dispatch, semaphore |
-| State Management | `tests/state.test.ts` | 15 | Thread memory, dedup sets, intent hash, LRU eviction |
-| Context Assembly | `tests/context.test.ts` | 14 | Thread history compaction, memory formatting, date/time context |
-| Intent Classification | `tests/intent.test.ts` | 13 | Heuristic rules, LLM fallback, category dispatch |
-| Attachment Conversion | `tests/attachments.test.ts` | 13 | Slack file download, size/count limits, MIME types, inlineData parts |
-| Vercel Integration | `tests/vercel.test.ts` | 14 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard |
-| Auth Lockout | `tests/auth.test.ts` | 11 | Redis distributed lockout, in-memory fallback, audit safety |
+| Agent Extras | `tests/agent-extra.test.ts` | 27 | Plan mutation, intent ensure, pipeline dispatch, semaphore lease semantics |
+| ReAct Agent Loop | `tests/agent-loop.test.ts` | 11 | runAgentLoop with tool calls, streaming yields, deadline, turn cap, model-turn resume guard, catch-block recovery |
+| AI Response | `tests/ai.test.ts` | 5 | Gemini wrapper basics |
 | Approval Scope Creep | `tests/approval-scope-creep.test.ts` | 4 | Single-use consumption, plan-version scoping, mutation bump |
-| System Maintenance | `tests/maintenance.test.ts` | 5 | Centralized maintenance: stale claims, approval expiry, dedup cleanup, trigger polling |
-| Secret Sanitization | `tests/sanitize.test.ts` | 11 | Token/password/key detection and redaction |
-| Gemini Client | `tests/geminiClient.test.ts` | 11 | mapStructured response parsing, thoughtSignature preservation |
-| Web Search | `tests/webSearch.test.ts` | 10 | Tavily adapter integration, result formatting, error handling |
-| Deferral Detection | `tests/deferral.test.ts` | 10 | Time-deferred language patterns, unit normalization, negative cases |
-| Rate Limit Store | `tests/rateLimitStore.test.ts` | 10 | KV-backed store, sliding window, TTL expiry |
-| Scheduler | `tests/scheduler.test.ts` | 8 | Cron parsing, interval triggers, one-shot scheduling |
+| Attachment Conversion | `tests/attachments.test.ts` | 13 | Slack file download, size/count limits, MIME types, inlineData parts |
+| Auth Lockout | `tests/auth.test.ts` | 13 | Redis distributed lockout, in-memory fallback, audit safety |
+| Cancel vs Update | `tests/cancelUpdate.test.ts` | 3 | cancel/update sub-classification, hyphenated-compound safety |
+| Context Assembly | `tests/context.test.ts` | 14 | Thread history compaction, memory formatting, date/time context |
 | Semantic Message Deduplication | `tests/dedup.test.ts` | 17 | Fingerprinting, tokenization, Jaccard similarity, exact-hash check, Redis fallback |
+| Deferral Detection | `tests/deferral.test.ts` | 10 | Time-deferred language patterns, unit normalization, negative cases |
+| Env Validation | `tests/env.test.ts` | 31 | Missing/empty/placeholder vars, DB variants, VERCEL guard, APP_URL, adapter warnings, DASHBOARD_PASSWORD dev/prod split, DB/APP_URL placeholder detection, no value leaks |
+| Finalize | `tests/finalize.test.ts` | 6 | Run/goal status finalization, Slack reporting |
+| Gemini Client | `tests/geminiClient.test.ts` | 11 | mapStructured response parsing, thoughtSignature preservation |
+| Agent Handlers | `tests/handlers.test.ts` | 27 | direct reply, durable task, status query, approval response, cancel/update |
+| Intent Classification | `tests/intent.test.ts` | 16 | Heuristic rules, LLM fallback, category dispatch |
+| Interactivity Authorization | `tests/interactivity-authorization.test.ts` | 6 | Requester/admin authorization on Block Kit approval clicks |
+| Structured Logger | `tests/log.test.ts` | 4 | Structured `slog` output shape, scope tagging |
+| Agent Loop (Closed) | `tests/loop.test.ts` | 6 | Full closed-loop: plan→execute→verify→finalize |
+| System Maintenance | `tests/maintenance.test.ts` | 5 | Centralized maintenance: stale claims, approval expiry, dedup cleanup, trigger polling |
+| Model Resolution | `tests/models.test.ts` | 13 | Allowed-model catalogue, context windows, safe fallback resolution |
+| Orchestrator + Planner | `tests/orchestrator-planner.test.ts` | 7 | Pipeline dispatch, plan mutation wiring |
 | Planner | `tests/planner.test.ts` | 8 | Plan generation, date/time context injection |
 | Policy Gate | `tests/policy.test.ts` | 7 | Risk level evaluation, approval requirement, policy decisions |
-| Orchestrator + Planner | `tests/orchestrator-planner.test.ts` | 7 | Pipeline dispatch, plan mutation wiring |
-| Agent Loop (Closed) | `tests/loop.test.ts` | 6 | Full closed-loop: plan→execute→verify→finalize |
-| ReAct Agent Loop | `tests/agent-loop.test.ts` | 11 | runAgentLoop with tool calls, streaming yields, deadline, turn cap, model-turn resume guard, catch-block recovery |
-| Finalize | `tests/finalize.test.ts` | 6 | Run/goal status finalization, Slack reporting |
-| Tool Registry | `tests/registry.test.ts` | 5 | Adapter registration, tool catalog freshness |
-| Debug Mock | `tests/debug-mock.test.ts` | 1 | Simulated environment smoke test |
+| Rate Limit Store | `tests/rateLimitStore.test.ts` | 13 | KV-backed store, sliding window, TTL expiry, fail-open fallback |
+| Schema Readiness | `tests/readiness.test.ts` | 3 | Shared migration gate, retryable 503 behavior |
+| Redis Client | `tests/redis.test.ts` | 40 | KV operations, event/intent dedup, distributed auth lockout helpers |
+| Tool Registry | `tests/registry.test.ts` | 9 | Adapter registration, tool catalog freshness |
+| Routes | `tests/routes.test.ts` | 6 | API route wiring, health/readiness endpoints |
+| Secret Sanitization | `tests/sanitize.test.ts` | 11 | Token/password/key detection and redaction |
+| Scheduler | `tests/scheduler.test.ts` | 8 | Cron parsing, interval triggers, one-shot scheduling |
+| Security Headers | `tests/security-headers.test.ts` | 15 | CSP directives, HSTS, X-Frame-Options, nosniff, HTTPS redirect, startup APP_URL validation |
+| Database Storage Pools | `tests/server/storage/db.test.ts` | 21 | Pool configuration, Cloud SQL Connector guards, retry/backoff resilience |
+| SSRF Guard | `tests/ssrfGuard.test.ts` | 17 | IP/CIDR blocking, cloud metadata ranges, IPv6 unwrapping, DNS failure fail-closed |
+| State Management | `tests/state.test.ts` | 15 | Thread memory, dedup sets, intent hash, LRU eviction |
+| Email Adapter | `tests/tools/adapters/email.test.ts` | 8 | Config gating, webhook payloads, error paths |
+| GitHub Issue Adapter | `tests/tools/adapters/githubIssue.test.ts` | 8 | Config gating, REST payloads, error paths |
+| Vercel Integration | `tests/vercel.test.ts` | 22 | Lazy migrations, cron auth, workflow trigger, retry, timeout guard, direct-reply permit & 429 policy |
+| Web Fetch Adapter | `tests/webFetch.test.ts` | 7 | SSRF end-to-end rejection, redirect limits |
+| Web Search | `tests/webSearch.test.ts` | 10 | Tavily adapter integration, result formatting, error handling |
 
 ### CI Gate
 
@@ -668,11 +683,14 @@ npm run test:coverage # With coverage report
 │   ├── env.ts                     # Startup environment variable validation
 │   ├── state.ts                   # In-memory logs, model selection, dedup sets
 │   ├── ai.ts                      # Gemini SDK wrapper
+│   ├── ssrfGuard.ts               # Shared SSRF protection for outbound fetches
 │   ├── rateLimitStore.ts          # KV-backed express-rate-limit store
 │   ├── redis.ts                   # Vercel KV / Upstash Redis client
 │       ├── agent/
 │       │   ├── orchestrator.ts        # Pipeline entry point, resume logic
 │       │   ├── intent.ts              # Heuristic + LLM intent classifier
+│       │   ├── models.ts              # Allowed-model catalogue + safe resolution
+│       │   ├── geminiClient.ts        # Gemini structured response parsing (raw parts)
 │       │   ├── dedup.ts               # Semantic message deduplication (Jaccard + SHA-256)
 │       │   ├── handlers/
 │       │   │   ├── index.ts           # Handler dispatch
@@ -695,7 +713,7 @@ npm run test:coverage # With coverage report
 │       │   ├── policy.ts             # Risk-level policy gate
 │       │   ├── sanitize.ts           # Secret detection and redaction
 │       │   ├── skills.ts             # Skill system prompt loader
-│       │   ├── semaphore.ts          # Concurrency semaphore
+│       │   ├── semaphore.ts          # Permit-lease concurrency semaphore
 │       │   ├── attachments.ts        # Slack file download + multimodal conversion
 │       │   ├── maintenance.ts        # Centralized system maintenance (stale claims, approvals, dedup, triggers)
 │       │   ├── worker.ts             # Webhook execution handler (formerly queue poller)
@@ -706,10 +724,11 @@ npm run test:coverage # With coverage report
 │       │   ├── log.ts                # Structured logging utility
 │       │   └── types.ts              # Agent type definitions
 │       ├── storage/
-│       │   ├── schema.ts             # Migration SQL definitions
+│       │   ├── schema.ts             # Migration SQL definitions (v1–v13)
 │       │   ├── migrations.ts         # Migration runner
+│       │   ├── readiness.ts          # Shared schema-readiness gate (503 on failure)
 │       │   ├── agentStore.ts         # All DB queries (goals, runs, steps, etc.)
-│       │   ├── db.ts                 # PostgreSQL connection pool
+│       │   ├── db.ts                 # PostgreSQL connection pools
 │       │   └── types.ts              # DB row types
 │       └── tools/
 │           ├── registry.ts           # Tool registry + adapter registration
@@ -722,33 +741,9 @@ npm run test:coverage # With coverage report
 │               ├── githubIssue.ts    # GitHub Issues adapter
 │               ├── email.ts          # Email webhook adapter
 │               ├── webSearch.ts      # Tavily web search adapter
-│               ├── webFetch.ts       # Generic URL fetch adapter
+│               ├── webFetch.ts       # Generic URL fetch adapter (SSRF guarded)
 │               └── sandbox.ts        # Vercel Sandbox code execution adapter
-├── tests/
-│   ├── handlers.test.ts              # 27 handler dispatch tests
-│   ├── agent-extra.test.ts           # 23 plan mutation + pipeline tests
-│   ├── state.test.ts                 # 15 state management tests
-│   ├── context.test.ts               # 14 context assembly tests
-│   ├── intent.test.ts                # 13 heuristic + LLM intent tests
-│   ├── env.test.ts                   # 29 env validation tests
-│   ├── security-headers.test.ts      # 12 security header tests
-│   ├── sanitize.test.ts              # 11 secret redaction tests
-│   ├── loop.test.ts                  # 6 agent-loop integration tests
-│   ├── vercel.test.ts                # 14 Vercel integration tests
-│   ├── attachments.test.ts           # 13 attachment processing tests
-│   ├── geminiClient.test.ts          # 11 Gemini client response parsing tests
-│   ├── webSearch.test.ts             # 10 web search adapter tests
-│   ├── deferral.test.ts              # 10 time-deferred detection tests
-│   ├── rateLimitStore.test.ts        # 10 KV rate limit store tests
-│   ├── scheduler.test.ts             # 8 scheduled trigger tests
-│   ├── planner.test.ts               # 8 plan generation tests
-│   ├── policy.test.ts                # 7 policy gate tests
-│   ├── orchestrator-planner.test.ts  # 7 pipeline dispatch tests
-│   ├── agent-loop.test.ts            # 6 ReAct loop orchestration tests
-│   ├── finalize.test.ts              # 6 run finalization tests
-│   ├── registry.test.ts              # 5 tool registry tests
-│   ├── maintenance.test.ts           # 5 system maintenance tests
-│   └── debug-mock.test.ts            # 1 simulated environment smoke test
+├── tests/                               # Vitest suites — 39 files / 477 cases (see Test Suite)
 ├── skills/
 │   └── builtin/
 │       ├── coding-standards.md       # Code style guidelines
@@ -758,11 +753,10 @@ npm run test:coverage # With coverage report
 │   ├── intent-routing.md             # Intent routing architecture spec
 │   └── QA_CHECKLIST.md               # QA verification checklist
 ├── slack-manifest.json               # Slack App Manifest (copy-paste ready)
-├── cloudbuild.yaml                   # GCP Cloud Build CI/CD pipeline
-├── Dockerfile                        # Multi-stage Node 22 Alpine build
+├── Dockerfile                        # Multi-stage Node 22 build
 ├── vitest.config.ts                  # Vitest configuration
 ├── vite.config.ts                    # Vite build configuration
-├── CHANGELOG.md                      # Version history (v2.0.0 → v7.3.0 → unreleased)
+├── CHANGELOG.md                      # Version history (v2.0.0 → v7.5.0)
 ├── .env.example                      # Environment variable template
 └── package.json                      # Dependencies and scripts
 ```
@@ -798,6 +792,12 @@ Three are required in all environments; `DASHBOARD_PASSWORD` is warn-only everyw
 | `AGENT_INCLUDE_DATETIME` | `true` | Inject current date/time into all LLM prompts |
 | `AGENT_TIMEZONE` | `UTC` | Timezone for date/time display (e.g. `America/Chicago`) |
 
+### Slack Approvals
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SLACK_APPROVAL_ADMIN_IDS` | — | Comma-separated Slack user IDs authorized to resolve any pending Block Kit approval, in addition to the original requester. Unauthorized clickers receive an ephemeral warning and trigger an `approval.unauthorized_attempt` audit event |
+
 ### Thread History
 
 | Variable | Default | Description |
@@ -827,8 +827,9 @@ Three are required in all environments; `DASHBOARD_PASSWORD` is warn-only everyw
 |----------|---------|-------------|
 | `CRON_SECRET` | — | **Required on Vercel.** Bearer token for `/api/cron/poll` authentication (set in Vercel Project Settings) |
 | `RUN_TIMEOUT_MS` | `45000` | Soft wall-clock limit for `runLoop()` (graceful re-queue) |
-| `DIRECT_REPLY_CONCURRENCY` | `5` | Max concurrent direct-reply Gemini calls |
+| `DIRECT_REPLY_CONCURRENCY` | `5` | Max concurrent direct-reply Gemini calls; requests beyond capacity are rejected with HTTP 429 |
 | `GEMINI_TIMEOUT_MS` | `30000` | Per-call Gemini API timeout |
+| `ENQUEUE_FETCH_TIMEOUT_MS` | `5000` | Wall-clock timeout for workflow requeue fetch requests (prevents hang on requeue) |
 | `WORKER_LEASE_SECONDS` | `300` | DB lease TTL for run claims |
 | `VERCEL_AUTOMATION_BYPASS_SECRET` | — | Bypass Vercel deployment protection for preview testing |
 
@@ -849,8 +850,6 @@ Three are required in all environments; `DASHBOARD_PASSWORD` is warn-only everyw
 | `SLACK_DEDUP_SIMILARITY_THRESHOLD` | `0.75` | Jaccard similarity above which a message is suppressed (0.0–1.0) |
 | `SLACK_DEDUP_WINDOW_SIZE` | `5` | Number of recent messages per thread to compare against |
 | `SLACK_DEDUP_TTL_SECONDS` | `300` | TTL for stored fingerprints (5 minutes) |
-
-### Vercel / Workflows Configuration
 
 ### External Adapters
 
@@ -1037,4 +1036,30 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v7.2.0 | ✅ Done | Env validation on Vercel, approval scope creep fix (plan_version_id, consumption) |
 | v7.3.0 | ✅ Done | Redis distributed auth lockout, approval scope creep hardening, Vercel Analytics |
 | v7.4.0 | ✅ Done | Gemini 3.7 Flash support (latest-gen model, 1M context, 8192 max output) |
-| *Unreleased | 🔄 In Progress | Semantic message deduplication (Jaccard + SHA-256), self-host Dockerfile, ReAct loop final answer persistence, SSRF Guard for `web.fetch` |
+| v7.5.0 | ✅ Done | Concurrency saturation policy (idempotent permit leases + HTTP 429 fail-closed direct replies), SSRF guard for `web.fetch`, requester/admin approval authorization, startup `APP_URL` validation, semantic message deduplication, self-host Dockerfile, expanded test suite (39 files / 477 cases) |
+
+---
+
+## 🤝 Contributing
+
+Issues and pull requests are welcome!
+
+```bash
+# 1. Fork + clone, then install
+npm install
+
+# 2. Create a branch and make your changes
+git checkout -b feat/my-feature
+
+# 3. Validate before opening a PR
+npm run lint   # type-checking gate (tsc --noEmit)
+npm test       # Vitest suite (39 files)
+```
+
+- Keep PRs focused; describe backend/API changes, dashboard UI changes (with screenshots), any required environment variables, and Slack manifest or deployment impact.
+- Follow Conventional Commit-style messages (`feat(...)`, `fix(...)`, `chore`).
+- Never commit real secrets — use `.env.example` as the configuration reference.
+
+## 📄 License
+
+Released under the [MIT License](LICENSE).
