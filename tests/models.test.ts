@@ -7,6 +7,7 @@ beforeEach(() => {
 describe('isAllowedModel', () => {
   it('returns true for valid allowed models', async () => {
     const { isAllowedModel } = await import('../src/server/agent/models.js');
+    expect(isAllowedModel('gemini-3.8-flash')).toBe(true);
     expect(isAllowedModel('gemini-3.7-flash')).toBe(true);
     expect(isAllowedModel('gemini-3.6-flash')).toBe(true);
     expect(isAllowedModel('gemini-3.5-flash')).toBe(true);
@@ -28,6 +29,7 @@ describe('isAllowedModel', () => {
 describe('resolveModel', () => {
   it('passes through a valid allowed model', async () => {
     const { resolveModel } = await import('../src/server/agent/models.js');
+    expect(resolveModel('gemini-3.8-flash')).toBe('gemini-3.8-flash');
     expect(resolveModel('gemini-3.7-flash')).toBe('gemini-3.7-flash');
     expect(resolveModel('gemini-3.6-flash')).toBe('gemini-3.6-flash');
     expect(resolveModel('gemini-3.5-flash')).toBe('gemini-3.5-flash');
@@ -63,6 +65,7 @@ describe('getMaxOutputTokens', () => {
   it('returns correct max output tokens for each allowed model', async () => {
     const { getMaxOutputTokens, ALLOWED_MODELS } = await import('../src/server/agent/models.js');
     const expected: Record<string, number> = {
+      'gemini-3.8-flash': 8192,
       'gemini-3.7-flash': 8192,
       'gemini-3.6-flash': 8192,
       'gemini-3.5-flash': 8192,
@@ -92,6 +95,7 @@ describe('constants', () => {
 
   it('ALLOWED_MODELS includes all expected models', async () => {
     const { ALLOWED_MODELS } = await import('../src/server/agent/models.js');
+    expect(ALLOWED_MODELS).toContain('gemini-3.8-flash');
     expect(ALLOWED_MODELS).toContain('gemini-3.7-flash');
     expect(ALLOWED_MODELS).toContain('gemini-3.6-flash');
     expect(ALLOWED_MODELS).toContain('gemini-3.5-flash');
@@ -102,9 +106,9 @@ describe('constants', () => {
     expect(ALLOWED_MODELS.length).toBeGreaterThanOrEqual(4);
   });
 
-  it('ALLOWED_MODELS lists gemini-3.7-flash as the first entry', async () => {
+  it('ALLOWED_MODELS lists gemini-3.8-flash as the first entry', async () => {
     const { ALLOWED_MODELS } = await import('../src/server/agent/models.js');
-    expect(ALLOWED_MODELS[0]).toBe('gemini-3.7-flash');
+    expect(ALLOWED_MODELS[0]).toBe('gemini-3.8-flash');
   });
 
   it('regression: SAFE_DEFAULT_MODEL remains gemini-2.5-flash', async () => {
