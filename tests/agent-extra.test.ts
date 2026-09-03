@@ -210,6 +210,7 @@ describe('agent-extra.test.ts', () => {
 
   describe('Models configuration', () => {
     it('checks allowed models', () => {
+      expect(isAllowedModel('gemini-3.8-flash')).toBe(true);
       expect(isAllowedModel('gemini-3.7-flash')).toBe(true);
       expect(isAllowedModel('gemini-2.5-flash')).toBe(true);
       expect(isAllowedModel('gemini-unknown')).toBe(false);
@@ -217,18 +218,21 @@ describe('agent-extra.test.ts', () => {
     });
 
     it('resolves model to safe default', () => {
+      expect(resolveModel('gemini-3.8-flash')).toBe('gemini-3.8-flash');
       expect(resolveModel('gemini-3.7-flash')).toBe('gemini-3.7-flash');
       expect(resolveModel('gemini-2.5-flash')).toBe('gemini-2.5-flash');
       expect(resolveModel('gemini-unknown')).toBe('gemini-2.5-flash');
     });
 
     it('retrieves context window tokens', () => {
+      expect(getContextWindowTokens('gemini-3.8-flash')).toBe(1_000_000);
       expect(getContextWindowTokens('gemini-3.7-flash')).toBe(1_000_000);
       expect(getContextWindowTokens('gemini-3.5-flash')).toBe(1_000_000);
       expect(getContextWindowTokens('gemini-3.1-flash-lite')).toBe(128_000);
     });
 
     it('retrieves max output tokens', () => {
+      expect(getMaxOutputTokens('gemini-3.8-flash')).toBe(8192);
       expect(getMaxOutputTokens('gemini-3.7-flash')).toBe(8192);
       expect(getMaxOutputTokens('gemini-3.5-flash')).toBe(8192);
       expect(getMaxOutputTokens('gemini-3.1-flash-lite')).toBe(4096);

@@ -124,7 +124,7 @@ function mockReq(overrides: any = {}): any {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
-describe('Dashboard routes — Gemini 3.7 Flash support', () => {
+describe('Dashboard routes — Gemini 3.8 Flash support', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.DASHBOARD_PASSWORD;
@@ -185,7 +185,7 @@ describe('Dashboard routes — Gemini 3.7 Flash support', () => {
     });
   });
 
-  it('GET /api/status includes gemini-3.7-flash in availableModels with matching name and description', async () => {
+  it('GET /api/status includes gemini-3.8-flash in availableModels with matching name and description', async () => {
     const { router } = await import('../src/server/routes.js');
     const handler = findRoute(router, 'GET', '/status');
     const req = mockReq();
@@ -197,23 +197,23 @@ describe('Dashboard routes — Gemini 3.7 Flash support', () => {
     const payload = res.json.mock.calls[0][0];
     expect(payload.availableModels).toBeDefined();
 
-    const flash37 = payload.availableModels.find((m: any) => m.id === 'gemini-3.7-flash');
-    expect(flash37).toBeDefined();
-    expect(flash37.name).toBe('Gemini 3.7 Flash');
-    expect(flash37.description).toMatch(/latest generation/i);
+    const flash38 = payload.availableModels.find((m: any) => m.id === 'gemini-3.8-flash');
+    expect(flash38).toBeDefined();
+    expect(flash38.name).toBe('Gemini 3.8 Flash');
+    expect(flash38.description).toMatch(/next-gen flagship/i);
     // It must be the first entry so the dashboard surfaces the newest model first.
-    expect(payload.availableModels[0].id).toBe('gemini-3.7-flash');
+    expect(payload.availableModels[0].id).toBe('gemini-3.8-flash');
   });
 
-  it('POST /api/model/select accepts gemini-3.7-flash and returns success', async () => {
+  it('POST /api/model/select accepts gemini-3.8-flash and returns success', async () => {
     const { router } = await import('../src/server/routes.js');
     const handler = findRoute(router, 'POST', '/model/select');
-    const req = mockReq({ body: { model: 'gemini-3.7-flash' } });
+    const req = mockReq({ body: { model: 'gemini-3.8-flash' } });
     const res = mockRes();
 
     await handler(req, res);
 
-    expect(setSelectedModel).toHaveBeenCalledWith('gemini-3.7-flash');
+    expect(setSelectedModel).toHaveBeenCalledWith('gemini-3.8-flash');
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: true })
     );

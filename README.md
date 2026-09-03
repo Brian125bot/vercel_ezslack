@@ -1,6 +1,6 @@
 # 🧠 Dynamic Gemini Slack AI Agent Backend 
 
-[![Engine](https://img.shields.io/badge/Gemini-3.7%20Flash%20%7C%203.5%20Flash%20%7C%203.1%20Flash%20Lite-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
+[![Engine](https://img.shields.io/badge/Gemini-3.8%20Flash%20%7C%203.7%20Flash%20%7C%203.5%20Flash-blueviolet?style=flat-square&logo=google)](https://ai.google.dev/)
 [![Platform](https://img.shields.io/badge/Runtime-Node.js%2022%20%7C%20Express-green?style=flat-square&logo=node.js)](https://nodejs.org/)
 [![Deploy](https://img.shields.io/badge/Deploy-Vercel-black?style=flat-square&logo=vercel)](https://vercel.com)
 [![Tests](https://img.shields.io/badge/Tests-39%20files%20%7C%20477%20cases-brightgreen?style=flat-square)](tests/)
@@ -1036,6 +1036,7 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 | v7.2.0 | ✅ Done | Env validation on Vercel, approval scope creep fix (plan_version_id, consumption) |
 | v7.3.0 | ✅ Done | Redis distributed auth lockout, approval scope creep hardening, Vercel Analytics |
 | v7.4.0 | ✅ Done | Gemini 3.7 Flash support (latest-gen model, 1M context, 8192 max output) |
+| v7.6.0 | ✅ Done | Gemini 3.8 Flash support (next-gen flagship model, 1M context, 8192 max output) |
 | v7.5.0 | ✅ Done | Concurrency saturation policy (idempotent permit leases + HTTP 429 fail-closed direct replies), SSRF guard for `web.fetch`, requester/admin approval authorization, startup `APP_URL` validation, semantic message deduplication, self-host Dockerfile, expanded test suite (39 files / 477 cases) |
 
 ---

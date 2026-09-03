@@ -88,6 +88,7 @@ router.get('/status', requireDashboardAuth, async (req, res) => {
     dashboardPasswordRequired: !!DASHBOARD_PASSWORD,
     selectedModel: currentModel,
     availableModels: [
+      { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', description: 'Next-gen flagship model. Unmatched speed, reasoning, and state-of-the-art agentic capabilities.' },
       { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', description: 'Latest generation. Superior reasoning, planning, and advanced agentic capabilities.' },
       { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', description: 'Default. Extra fast, low latency, perfect for messaging workflows.' },
       { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', description: 'Next-generation model. Superior multimodal reasoning and advanced agentic capabilities.' },

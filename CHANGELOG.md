@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+* **Gemini 3.8 Flash support.** Added `gemini-3.8-flash` as a supported model option with full context-window (1M tokens) and output-token (8192 tokens) configuration. Available via the dashboard model selector and the `/api/model/select` endpoint.
 * **Gemini 3.7 Flash support.** Added `gemini-3.7-flash` as a supported model option with full context-window and output-token configuration. Available via the dashboard model selector and the `/api/model/select` endpoint. Maintains `gemini-3.1-flash-lite` as the user-facing default and `gemini-2.5-flash` as the safe fallback.
 * **Semantic message deduplication for Slack AI Agent.** `src/server/agent/dedup.ts` implements dual-strategy deduplication: exact SHA-256 hash matching for instant detection, plus Jaccard similarity over FNV-1a 32-bit bigram hashes for catching near-duplicate paraphrased messages. Fingerprints are stored in Redis with configurable TTL, falling back to an in-memory LRU `Map`. Integrated into `slack.replyInThread` so near-duplicate Slack replies are suppressed automatically. New environment variables: `SLACK_DEDUP_SIMILARITY_THRESHOLD` (0.75), `SLACK_DEDUP_WINDOW_SIZE` (5), `SLACK_DEDUP_TTL_SECONDS` (300).
 * **Self-host Dockerfile.** New `Dockerfile` provides a multi-stage Node 22 build producing a minimal, non-root production container. Also adds `.dockerignore` for clean build context.

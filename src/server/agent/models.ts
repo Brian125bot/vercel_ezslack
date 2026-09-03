@@ -9,6 +9,7 @@
  */
 
 export const ALLOWED_MODELS = [
+  'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
@@ -41,6 +42,7 @@ export function resolveModel(model: string | null | undefined): AllowedModel {
 /** Approximate context window, in tokens, per allowed model. Used to size the
  *  thread-history char budget proportionally instead of a fixed constant. */
 export const CONTEXT_WINDOW_TOKENS: Record<AllowedModel, number> = {
+  'gemini-3.8-flash': 1_000_000,
   'gemini-3.7-flash': 1_000_000,
   'gemini-3.6-flash': 1_000_000,
   'gemini-3.5-flash': 1_000_000,
@@ -67,6 +69,7 @@ export function getMaxOutputTokens(model: string | null | undefined): number {
   
   // Flash models typically have lower output limits than larger models
   const modelConfig = {
+    'gemini-3.8-flash': 8192,
     'gemini-3.7-flash': 8192,
     'gemini-3.6-flash': 8192,
   'gemini-3.5-flash': 8192,
