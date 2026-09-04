@@ -130,6 +130,13 @@ describe('isIpSafe', () => {
     expect(isIpSafe('abc').safe).toBe(false);
     expect(isIpSafe('999.999.999.999').safe).toBe(false);
     expect(isIpSafe('::ffff:1.2.3.abc').safe).toBe(false);
+    expect(isIpSafe('012.0.0.1').safe).toBe(false);
+  });
+
+  it('rejects ambiguous leading-zero octal IPv4 literals in URLs', async () => {
+    // Leading-zero octets like 012.0.0.1 resolve via DNS to internal IPs like 10.0.0.1
+    expect((await isUrlSafe('http://012.0.0.1')).safe).toBe(false);
+    expect((await isUrlSafe('http://0177.0.0.1')).safe).toBe(false);
   });
 });
 
