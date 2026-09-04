@@ -20,7 +20,7 @@
 
 ## 🧪 Test Suite Verification
 
-39 test files / 477 cases total. Key suites (full matrix in the [README](../README.md#-test-suite)):
+39 test files / 478 cases total. Key suites (full matrix in the [README](../README.md#-test-suite)):
 
 | Suite | File | Cases | Status |
 |-------|------|:-----:|:------:|
@@ -35,7 +35,7 @@
 | Agent Extras (plan mutation, semaphore leases) | `tests/agent-extra.test.ts` | 27 | [x] |
 | Auth Lockout | `tests/auth.test.ts` | 13 | [x] |
 | Redis Client | `tests/redis.test.ts` | 40 | [x] |
-| SSRF Guard | `tests/ssrfGuard.test.ts` | 17 | [x] |
+| SSRF Guard | `tests/ssrfGuard.test.ts` | 18 | [x] |
 | Web Fetch Adapter SSRF | `tests/webFetch.test.ts` | 7 | [x] |
 | Email Adapter | `tests/tools/adapters/email.test.ts` | 8 | [x] |
 | GitHub Issue Adapter | `tests/tools/adapters/githubIssue.test.ts` | 8 | [x] |

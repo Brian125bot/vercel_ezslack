@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [7.6.0] - P0 Dependency Security Remediation - 2026-09-04
+
+### Security
+
+* **Remediated All P0 & Transitive Dependency Vulnerabilities.** Upgraded direct and parent dependencies and introduced explicit, scoped npm overrides to resolve all vulnerabilities reported by `npm audit --omit=dev`.
+  * **`ip-address` (<=10.3.0):** Fixed GHSA-mwp4-54f8-5fhr and IPv4 octal / CIDR misclassification vulnerabilities by upgrading `express-rate-limit` to `8.7.0` and applying a `^10.3.1` override (resolving to `10.7.0`). Added security regression tests in `tests/ssrfGuard.test.ts` for ambiguous leading-zero octal IPv4 literals.
+  * **`undici` (7.28.0):** Fixed `Cache-Control` response disclosure by upgrading `@ai-sdk/sandbox-vercel` to `1.0.101` and enforcing override `^7.29.1` (resolving to `7.29.1`).
+  * **`postcss` (<=8.5.22) & `nanoid` (<=3.3.17):** Fixed path traversal in source map loading (GHSA-fxqj-rqcc-2cmp) and infinite loop vulnerabilities by upgrading `vite` (`^6.4.3`), `autoprefixer` (`^10.5.5`), and applying overrides for `postcss` (`^8.5.23`, resolving to `8.5.28`) and `nanoid` (`^3.3.18`, resolving to `3.3.18`).
+  * **`protobufjs` (7.5.0-7.6.4):** Fixed DoS infinite loop in `.proto` option parsing (GHSA-j3f2-48v5-ccww) by upgrading `@google/genai` (`^2.21.0`) and `@google-cloud/cloud-sql-connector` (`^1.12.0`), plus override `^7.6.5` (resolving to `7.6.6`).
+  * **`qs` (2.2.5-6.15.3) & `body-parser` (<=1.20.6):** Fixed array-limit bypass DoS (GHSA-x5fp-wj9c-mxmx) and size limit bypass (GHSA-v422-hmwv-36x6) by applying overrides for `qs` (`^6.16.0`) and `body-parser` (`^1.20.6`).
+  * **`browserslist` (<=4.28.2) & `brace-expansion` (2.0.0-2.1.3):** Resolved build and coverage tooling vulnerabilities with scoped overrides for `glob` (`brace-expansion@^2.1.4`) and default `brace-expansion` (`^5.0.8`, resolving to `5.0.9`).
+
 ## [7.5.0] - Concurrency Saturation Policy, SSRF Guard & Test Suite Expansion - 2026-08-23
 
 ### Security
