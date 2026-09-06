@@ -1,6 +1,8 @@
 import type { AgentPipelineInput, AgentPipelineResult, ToolExecutionContext } from './types.js';
 import { classifyIntent } from './intent.js';
 import { agentStore } from '../storage/agentStore.js';
+import { requireDurableDependencies, isDurableStateRequired } from '../storage/readiness.js';
+import { DurableStateError } from '../storage/errors.js';
 import {
   handleDirectReply,
   handleStatusQuery,
@@ -11,6 +13,7 @@ import {
 } from './handlers/index.js';
 
 export async function resumeAgentPipeline(runId: string): Promise<void> {
+  await requireDurableDependencies();
   const run = await agentStore.getRun(runId);
   await agentStore.updateRunStatus(run.id, 'queued', {
     claimed_by: null,
@@ -45,6 +48,13 @@ export async function resumeAgentPipeline(runId: string): Promise<void> {
 }
 
 export async function runAgentPipeline(input: AgentPipelineInput): Promise<AgentPipelineResult> {
+  // Universal orchestration precondition: verify required durable dependencies
+  await requireDurableDependencies();
+
+  if (isDurableStateRequired() && !input.dbAvailable) {
+    throw new DurableStateError('Database unavailable during pipeline execution', 'DATABASE_UNAVAILABLE', 'database', 503);
+  }
+
   let intentResult = input.intentResult;
   if (!intentResult) {
     const hasPendingApproval = input.dbAvailable ? await agentStore.hasPendingApproval(input.workspaceId, input.channelId) : false;

@@ -1,6 +1,8 @@
 import type { Store } from 'express-rate-limit';
 import { getRedisClient } from './redis.js';
 import { slog } from './agent/log.js';
+import { DurableStateError } from './storage/errors.js';
+import { isRedisRequired } from './storage/readiness.js';
 
 type Hit = { totalHits: number; resetTime: Date | undefined };
 
@@ -23,6 +25,9 @@ export class KvRateLimitStore implements Store {
           key,
           error: 'KV rate-limit store unavailable'
         });
+        if (isRedisRequired()) {
+          throw new DurableStateError('Distributed rate limit store unavailable', 'REDIS_UNAVAILABLE', 'redis', 503);
+        }
         return {
           totalHits: 1,
           resetTime: new Date(Date.now() + (this.windowMs ?? 60_000))
@@ -48,7 +53,7 @@ export class KvRateLimitStore implements Store {
 
       // Handle unexpected state: key exists but has no TTL
       if (pttl === -1) {
-        console.warn(`[RateLimit] Key ${redisKey} has no TTL - this is unexpected, resetting`);
+        console.warn(`[RateLimit] Key ${redisKey} has no TTL - resetting`);
         await client.pexpire(redisKey, this.windowMs);
       }
 
@@ -57,10 +62,21 @@ export class KvRateLimitStore implements Store {
 
       return { totalHits: total, resetTime };
     } catch (error) {
+      if (error instanceof DurableStateError) {
+        throw error;
+      }
       slog('rate-limit', 'store_unreachable', {
         key,
         error: error instanceof Error ? error.message : String(error)
       });
+      if (isRedisRequired()) {
+        throw new DurableStateError(
+          'Distributed rate limit store failure: ' + (error instanceof Error ? error.message : String(error)),
+          'REDIS_UNAVAILABLE',
+          'redis',
+          503
+        );
+      }
       return {
         totalHits: 1,
         resetTime: new Date(Date.now() + (this.windowMs ?? 60_000))

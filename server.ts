@@ -6,7 +6,8 @@ import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { router as apiRoutes } from "./src/server/routes.js";
-import { ensureSchemaReady } from "./src/server/storage/readiness.js";
+import { requireDurableDependencies, isRedisRequired } from "./src/server/storage/readiness.js";
+import { DurableStateError } from "./src/server/storage/errors.js";
 import { closeDb } from "./src/server/storage/db.js";
 import { KvRateLimitStore } from "./src/server/rateLimitStore.js";
 import { validateEnv } from "./src/server/env.js";
@@ -73,36 +74,40 @@ app.use(helmet({
 }));
 
 // Security: Cross-Origin Resource Sharing (CORS)
-// In non-production environments (development and local testing), allowing all origins ('*')
-// is acceptable and standard because it facilitates testing, frontend/backend integration from different ports,
-// and doesn't pose production risks since production handles CORS restrictions securely based on APP_URL.
 app.use(cors({
   origin: process.env.APP_URL || (process.env.NODE_ENV === 'production' ? false : '*'),
   methods: ["GET", "POST"]
 }));
 
 // Security: Global API Rate Limiting to prevent DoS attacks.
-// Uses Vercel KV (Upstash Redis) when configured so the counter is shared
-// across all serverless instances; falls back to per-process memory otherwise.
 let apiLimiterStore: import('express-rate-limit').Store | undefined;
-if (process.env.NODE_ENV === 'production' && (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)) {
-  try {
-    apiLimiterStore = new KvRateLimitStore();
-  } catch (err) {
-    console.warn('[RateLimit] Falling back to in-memory store:', err);
-  }
+if (isRedisRequired() || (process.env.NODE_ENV === 'production' && (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL))) {
+  apiLimiterStore = new KvRateLimitStore();
 }
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 2000,
-  store: apiLimiterStore, // undefined => default MemoryStore (dev / in-memory)
+  store: apiLimiterStore, // KvRateLimitStore in strict/production mode
   message: "Too many requests from this IP, please try again after 15 minutes",
   standardHeaders: true,
   legacyHeaders: false,
   validate: { xForwardedForHeader: false, trustProxy: false, default: true }
 });
-app.use("/api", apiLimiter);
+
+app.use("/api", (req, res, next) => {
+  apiLimiter(req, res, (err: any) => {
+    if (err) {
+      if (err instanceof DurableStateError || err?.name === 'DurableStateError') {
+        return res.status(err.status || 503).json({
+          error: 'Service temporarily unavailable due to storage outage.'
+        });
+      }
+      return next(err);
+    }
+    next();
+  });
+});
 
 // Preserve raw buffer body for Slack signature verify
 app.use(express.json({
@@ -123,25 +128,22 @@ app.use(express.urlencoded({
   }
 }));
 
-// Liveness must always be able to report that this process can respond. The
-// readiness endpoint deliberately performs the gate itself so it can distinguish
-// an uninitialized or failed schema from a healthy durable-state service.
 const readinessBypassPaths = new Set(['/health', '/readiness']);
 
 // Every other API route is fail-closed: the request reaches route and agent code
-// only after the shared schema gate has completed successfully. Concurrent cold
-// start requests share one in-process migration attempt in readiness.ts.
+// only after the shared durable readiness gate has completed successfully.
 app.use('/api', async (req, res, next) => {
   if (readinessBypassPaths.has(req.path)) {
     return next();
   }
 
   try {
-    await ensureSchemaReady();
+    await requireDurableDependencies();
     return next();
-  } catch {
-    return res.status(503).json({
-      error: 'Service temporarily unavailable while database schema is preparing'
+  } catch (err: any) {
+    const isDurable = err instanceof DurableStateError || err?.name === 'DurableStateError';
+    return res.status(isDurable ? (err.status || 503) : 503).json({
+      error: 'Service temporarily unavailable due to storage outage.'
     });
   }
 });
@@ -151,16 +153,9 @@ app.use('/api', apiRoutes);
 
 let server: ReturnType<typeof app.listen> | null = null;
 
-// Configure Vite middleware or static paths based on environment
 async function initServer() {
-  // Validate critical environment variables first, before any async work.
-  // This ensures fail-hard behavior if required vars are missing/invalid on all platforms
-  // including Vercel, preventing silent security failures.
   validateEnv();
-
-  // A standalone process is not allowed to begin serving durable routes until
-  // its idempotent schema migrations complete successfully.
-  await ensureSchemaReady();
+  await requireDurableDependencies();
 
   if (process.env.NODE_ENV !== "production") {
     console.log(`[Vite Dev] Hosting express full-stack server with Vite middleware mode...`);
@@ -188,7 +183,6 @@ async function initServer() {
 
 if (process.env.VERCEL !== '1') {
   initServer().catch(() => {
-    // The readiness gate has already emitted a sanitized migration failure.
     console.error('[FATAL] Server startup failed.');
     process.exit(1);
   });

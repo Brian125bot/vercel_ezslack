@@ -1,3 +1,5 @@
+import { isRedisConfigured } from './redis.js';
+
 const PLACEHOLDER_PATTERNS = [
   'MY_GEMINI_API_KEY', 'xoxb-myslackbottoken',
   'my_slack_signing_secret', 'MY_SIGNING_SECRET',
@@ -51,6 +53,16 @@ const OPTIONAL_WARN_VARS: Array<{ key: string; desc: string }> = [
   { key: 'SANDBOX_API_KEY', desc: 'Code sandbox adapter' },
 ];
 
+function isRedisRequiredEnv(): boolean {
+  if (process.env.REQUIRE_REDIS === 'false' || process.env.REQUIRE_REDIS === '0') {
+    return false;
+  }
+  if (process.env.REQUIRE_REDIS === 'true' || process.env.REQUIRE_REDIS === '1') {
+    return true;
+  }
+  return process.env.NODE_ENV === 'production';
+}
+
 export function validateEnv(): void {
   const vars = readCriticalVars();
   const isProduction = process.env.NODE_ENV === 'production';
@@ -97,6 +109,19 @@ export function validateEnv(): void {
     }
   }
 
+  // Redis distributed state requirement:
+  if (isRedisRequiredEnv()) {
+    if (!isRedisConfigured()) {
+      missing.push({ name: 'KV_REST_API_URL / UPSTASH_REDIS_REST_URL', reason: 'missing' });
+    } else {
+      const url = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL)?.trim() || '';
+      const token = (process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN)?.trim() || '';
+      if (isPlaceholder(url) || isPlaceholder(token)) {
+        missing.push({ name: 'KV_REST_API_URL / UPSTASH_REDIS_REST_URL', reason: 'placeholder' });
+      }
+    }
+  }
+
   if (isProduction) {
     if (!vars.APP_URL) {
       missing.push({ name: 'APP_URL', reason: 'missing' });
@@ -111,6 +136,7 @@ export function validateEnv(): void {
       'SLACK_BOT_TOKEN': 'Slack bot authentication (required for Slack integration)',
       'SLACK_SIGNING_SECRET': 'Slack request verification (required for request security)',
       'DATABASE_URL / CLOUD_SQL_CONNECTION_NAME / SQL_HOST': 'Database connection (required for durable state)',
+      'KV_REST_API_URL / UPSTASH_REDIS_REST_URL': 'Redis REST API connection (required for distributed state in production)',
       'APP_URL': 'Application URL (required for webhook callbacks)',
     };
 
