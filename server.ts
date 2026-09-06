@@ -142,6 +142,12 @@ app.use('/api', async (req, res, next) => {
     return next();
   } catch (err: any) {
     const isDurable = err instanceof DurableStateError || err?.name === 'DurableStateError';
+    const isSlackIngress = req.path === '/slack/events' || req.path.startsWith('/slack/events');
+    if (isDurable && isSlackIngress) {
+      console.error('[Ingress] Persistence unavailable, failing closed for Slack retry', { operation: (err as any).operation || (err as any).code || 'unknown', error: err.message });
+      res.set('Retry-After', '5');
+      return res.status(503).json({ error: 'persistence_unavailable', retry_after: 5 });
+    }
     return res.status(isDurable ? (err.status || 503) : 503).json({
       error: 'Service temporarily unavailable due to storage outage.'
     });

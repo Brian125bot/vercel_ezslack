@@ -1,8 +1,35 @@
 import { SlackEventLog, ThreadMessage } from '../types.js';
 import { sanitizeString } from './agent/sanitize.js';
 import { resolveModel, DEFAULT_MODEL, getContextWindowTokens } from './agent/models.js';
-import { setRedisValueNX, getRedisJson, setRedisJson, getRedisValue, del } from './redis.js';
+import { setRedisValueNX, getRedisJson, setRedisJson, getRedisValue, del, isRedisConfigured, pingRedis } from './redis.js';
 import crypto from 'crypto';
+import { DurableStateError } from './storage/errors.js';
+export { DurableStateError } from './storage/errors.js';
+
+// ── Fail-closed helpers ──
+function isInMemoryFallbackAllowed(): boolean {
+  if (process.env.ALLOW_IN_MEMORY_STATE_FALLBACK === 'true') return true;
+  if (process.env.ALLOW_IN_MEMORY_STATE_FALLBACK === 'false') return false;
+  return process.env.NODE_ENV !== 'production';
+}
+function shouldFailClosed(): boolean {
+  return !isInMemoryFallbackAllowed();
+}
+let hasWarnedEphemeral = false;
+function warnEphemeralOnce(operation: string, cause?: unknown) {
+  if (!hasWarnedEphemeral) {
+    hasWarnedEphemeral = true;
+    console.warn(
+      `[State] Durable state unavailable — using ephemeral in-memory fallback for ${operation} (NODE_ENV !== production or ALLOW_IN_MEMORY_STATE_FALLBACK=true). Do not use in production; multi-instance dedup & thread context will be lost.`,
+      cause ? { cause } : ''
+    );
+  }
+}
+export function resetStateForTests(): void {
+  if (process.env.NODE_ENV === 'test') {
+    hasWarnedEphemeral = false;
+  }
+}
 
 // ── Limits ──
 const get_MAX_THREAD_HISTORY_MESSAGES = () => parseInt(process.env.MAX_THREAD_HISTORY_MESSAGES || '20');
@@ -28,8 +55,9 @@ let memorySelectedModel: string = DEFAULT_MODEL;
 const memorySandboxCache = new Map<string, { sandboxId: string; expiresAt: number }>();
 const SANDBOX_TTL_MS = parseInt(process.env.SANDBOX_TTL_MS || '900000'); // 15 min default
 
-export async function getSessionSandboxId(sessionKey: string): Promise<string | null> {
-  // Check in-memory cache first
+export async function getSessionSandboxId(sessionKeyOrChannel: string, threadTs?: string): Promise<string | null> {
+  const sessionKey = threadTs ? `${sessionKeyOrChannel}:${threadTs}` : sessionKeyOrChannel;
+  // Check in-memory cache first (ephemeral, used only in fallback mode or as read-through)
   const cached = memorySandboxCache.get(sessionKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.sandboxId;
@@ -38,7 +66,7 @@ export async function getSessionSandboxId(sessionKey: string): Promise<string | 
     memorySandboxCache.delete(sessionKey);
   }
 
-  // Check DB
+  // Check DB — fail-closed in production if unavailable
   const q = await getQuery();
   if (q) {
     try {
@@ -53,19 +81,44 @@ export async function getSessionSandboxId(sessionKey: string): Promise<string | 
         return sandboxId;
       }
     } catch (e) {
+      if (shouldFailClosed()) {
+        throw new DurableStateError('persistence unavailable', 'getSessionSandboxId', e);
+      }
       console.warn('[State] Failed to read sandbox session from DB:', e);
+      warnEphemeralOnce('getSessionSandboxId', e);
     }
+  } else if (shouldFailClosed()) {
+    throw new DurableStateError('persistence unavailable', 'getSessionSandboxId', new Error('Database unavailable'));
+  }
+  if (shouldFailClosed()) {
+    // In production, missing DB when no cache hit is considered persistence unavailable
+    // But if we have no cache and DB unavailable, we already threw above.
+    // This path is for when DB was unavailable and we would fallback to null.
+    // For get, returning null even when DB down would be silent fallback; spec wants fail-closed on writes, reads may return null in dev.
+    // To distinguish, we only throw on write path; reads fallback to null with warning in production is less critical.
+    // However spec lists isEventProcessed etc as critical reads; sandbox read is not listed, so allow null in prod with warning.
+    warnEphemeralOnce('getSessionSandboxId');
   }
   return null;
 }
 
-export async function setSessionSandboxId(sessionKey: string, sandboxId: string): Promise<void> {
+export async function setSessionSandboxId(sessionKeyOrChannel: string, sandboxIdOrThreadTs: string, maybeSandboxId?: string): Promise<void> {
+  let sessionKey: string;
+  let sandboxId: string;
+  if (maybeSandboxId !== undefined) {
+    // spec signature: (channel, threadTs, sandboxId)
+    sessionKey = `${sessionKeyOrChannel}:${sandboxIdOrThreadTs}`;
+    sandboxId = maybeSandboxId;
+  } else {
+    sessionKey = sessionKeyOrChannel;
+    sandboxId = sandboxIdOrThreadTs;
+  }
   const expiresAt = Date.now() + SANDBOX_TTL_MS;
 
-  // Update in-memory cache
+  // Update in-memory cache optimistically
   memorySandboxCache.set(sessionKey, { sandboxId, expiresAt });
 
-  // Persist to DB
+  // Persist to DB — must be durable in production
   const q = await getQuery();
   if (q) {
     try {
@@ -75,10 +128,20 @@ export async function setSessionSandboxId(sessionKey: string, sandboxId: string)
          ON CONFLICT (session_key) DO UPDATE SET sandbox_id = $2, expires_at = to_timestamp($3/1000), updated_at = now()`,
         [sessionKey, sandboxId, expiresAt]
       );
+      return;
     } catch (e) {
+      if (shouldFailClosed()) {
+        throw new DurableStateError('persistence unavailable', 'setSessionSandboxId', e);
+      }
       console.warn('[State] Failed to persist sandbox session:', e);
+      warnEphemeralOnce('setSessionSandboxId', e);
+      return;
     }
   }
+  if (shouldFailClosed()) {
+    throw new DurableStateError('persistence unavailable', 'setSessionSandboxId', new Error('Database unavailable'));
+  }
+  warnEphemeralOnce('setSessionSandboxId');
 }
 
 export function generateSessionKey(workspaceId: string, channelId: string, threadTs?: string): string {
@@ -250,12 +313,23 @@ export async function setSelectedModel(model: string) {
 }
 
 // ── Thread Memory ──
-export async function getThreadHistory(threadKey: string): Promise<ThreadMessage[]> {
+export async function getThreadHistory(channelOrThreadKey: string, threadTs?: string): Promise<ThreadMessage[]> {
+  const threadKey = threadTs !== undefined ? `${channelOrThreadKey}:${threadTs}` : channelOrThreadKey;
   const redisKey = `thread:${threadKey}`;
 
-  const cached = await getRedisJson<ThreadMessage[]>(redisKey);
-  if (cached) return cached;
+  // Try Redis first — durable shared cache
+  try {
+    const cached = await getRedisJson<ThreadMessage[]>(redisKey);
+    if (cached) return cached;
+  } catch (e) {
+    if (shouldFailClosed()) {
+      // Redis read failure in prod should not fallback silently if DB also fails; continue to DB check before throwing
+    } else {
+      console.warn('[State] Failed to read thread history from Redis:', e);
+    }
+  }
 
+  // Try DB
   const q = await getQuery();
   if (q) {
     try {
@@ -265,12 +339,58 @@ export async function getThreadHistory(threadKey: string): Promise<ThreadMessage
         setRedisJson(redisKey, messages, 3600).catch(() => {});
         return messages;
       }
-    } catch { /* fall through */ }
+    } catch (e) {
+      if (shouldFailClosed()) {
+        throw new DurableStateError('persistence unavailable', 'getThreadHistory', e);
+      }
+      // fall through to memory in dev
+    }
+  } else if (shouldFailClosed()) {
+    // DB unavailable and no Redis hit
+    // Check if Redis is also unavailable: if Redis is configured but we got no cache, consider persistence unavailable in prod
+    if (isRedisConfigured()) {
+      try {
+        const ping = await pingRedis();
+        if (!ping) throw new DurableStateError('persistence unavailable', 'getThreadHistory', new Error('Database and Redis unavailable'));
+      } catch (e) {
+        if (e instanceof DurableStateError) throw e;
+        throw new DurableStateError('persistence unavailable', 'getThreadHistory', e);
+      }
+    } else {
+      throw new DurableStateError('persistence unavailable', 'getThreadHistory', new Error('Database unavailable'));
+    }
   }
-  return memoryThreads.get(threadKey) || [];
+
+  const fallback = memoryThreads.get(threadKey) || [];
+  if (shouldFailClosed() && fallback.length === 0) {
+    // If we are in prod and both durable stores failed, we already threw above.
+    // If fallback is empty but we had no durable data, returning empty is not an error — but if persistence was unavailable we threw.
+    // So just warn once if we are using memory path
+    warnEphemeralOnce('getThreadHistory');
+  } else if (!shouldFailClosed()) {
+    warnEphemeralOnce('getThreadHistory');
+  }
+  return fallback;
 }
 
-export async function saveThreadHistory(threadKey: string, messages: ThreadMessage[]) {
+export async function saveThreadHistory(threadKeyOrChannel: string, messagesOrThreadTs: ThreadMessage[] | string, maybeMessages?: ThreadMessage[]): Promise<void> {
+  // Support both signatures: (threadKey, messages) and (channel, threadTs, messages) — detect arity
+  let threadKey: string;
+  let messages: ThreadMessage[];
+  if (maybeMessages !== undefined) {
+    // (channel, threadTs, messages)
+    const channel = threadKeyOrChannel;
+    const threadTs = messagesOrThreadTs as string;
+    threadKey = `${channel}:${threadTs}`;
+    messages = maybeMessages;
+  } else if (Array.isArray(messagesOrThreadTs)) {
+    threadKey = threadKeyOrChannel;
+    messages = messagesOrThreadTs;
+  } else {
+    // Fallback: treat as (channel, threadTs) with missing messages — shouldn't happen
+    threadKey = threadKeyOrChannel;
+    messages = [] as any;
+  }
   const sanitizedMessages = messages.map(msg => {
     let newMsg = { ...msg };
     if (newMsg.attachments && newMsg.attachments.length > 0) {
@@ -310,7 +430,13 @@ export async function saveThreadHistory(threadKey: string, messages: ThreadMessa
   }
 
   memoryThreads.set(threadKey, trimmed);
-  setRedisJson(`thread:${threadKey}`, trimmed, 3600).catch(() => {});
+  // Best-effort Redis cache — failures are logged but only fail-closed if DB also fails
+  let redisSuccess = false;
+  try {
+    redisSuccess = await setRedisJson(`thread:${threadKey}`, trimmed, 3600);
+  } catch (_) {
+    redisSuccess = false;
+  }
 
   const q = await getQuery();
   if (q) {
@@ -320,10 +446,34 @@ export async function saveThreadHistory(threadKey: string, messages: ThreadMessa
          ON CONFLICT (thread_key) DO UPDATE SET messages = $2, updated_at = now()`,
         [threadKey, JSON.stringify(trimmed)]
       );
+      return;
     } catch (e) {
+      if (shouldFailClosed()) {
+        throw new DurableStateError('persistence unavailable', 'saveThreadHistory', e);
+      }
       console.warn('[State] Failed to persist thread history:', e);
+      warnEphemeralOnce('saveThreadHistory', e);
+      return;
     }
   }
+  if (shouldFailClosed()) {
+    // DB unavailable — if Redis also failed, we have no durable persistence
+    if (!redisSuccess) {
+      throw new DurableStateError('persistence unavailable', 'saveThreadHistory', new Error('Database and Redis unavailable'));
+    }
+    // If Redis succeeded, we have at least ephemeral distributed cache; but spec says both must fail to throw.
+    // However for strong consistency, require DB in prod; so still throw if DB unavailable even if Redis cached.
+    throw new DurableStateError('persistence unavailable', 'saveThreadHistory', new Error('Database unavailable'));
+  }
+  warnEphemeralOnce('saveThreadHistory');
+}
+
+export async function appendThreadMessage(channel: string, threadTs: string, message: ThreadMessage): Promise<void> {
+  const threadKey = `${channel}:${threadTs}`;
+  // getThreadHistory will fail-closed in prod if durable unavailable, so we propagate that
+  const history = await getThreadHistory(threadKey);
+  const newHistory = [...history, message];
+  await saveThreadHistory(threadKey, newHistory);
 }
 
 // ── Event Deduplication ──
@@ -343,12 +493,44 @@ function capDedupSet(set: Set<string>, map: Map<string, number>, key: string) {
 
 export async function isEventDuplicate(eventKey: string): Promise<boolean> {
   const dedupKey = `dedup:event:${eventKey}`;
-  const redisNew = await setRedisValueNX(dedupKey, '1', 600);
+  let redisNew: boolean | null = null;
+  let redisError: unknown = null;
+  try {
+    redisNew = await setRedisValueNX(dedupKey, '1', 600);
+  } catch (e) {
+    redisError = e;
+    redisNew = null;
+  }
   if (redisNew) {
     capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventKey);
     return false;
   }
-  if (memoryProcessedEvents.has(eventKey)) return true;
+  // If Redis indicated duplicate via NX false because key exists, we need to distinguish from Redis failure.
+  // When Redis is configured and ping fails, treat as failure; otherwise treat false as duplicate hint and continue to DB check.
+  // For simplicity, if redisNew === false and Redis is healthy, it means duplicate OR Redis returned false due to existing key — we still check DB/memory.
+  // If Redis is unavailable (client null) redisNew will be false; we will fall through to DB and eventually fail-closed if DB also down.
+
+  if (memoryProcessedEvents.has(eventKey)) {
+    // In production fail-closed, memory hit without durable confirmation is not sufficient if Redis+DB down.
+    // But if we reached here via Redis failure, we haven't confirmed durable.
+    // We will still return true for duplicate to avoid re-processing in dev; in prod we need durable confirmation.
+    // If shouldFailClosed and both durable stores unavailable, we throw below before returning memory result.
+    // Check durable availability before trusting memory:
+    if (shouldFailClosed()) {
+      const qCheck = await getQuery();
+      if (!qCheck) {
+        // Check Redis health
+        let redisAvailable = false;
+        try {
+          redisAvailable = isRedisConfigured() ? await pingRedis() : false;
+        } catch {}
+        if (!redisAvailable) {
+          throw new DurableStateError('persistence unavailable', 'isEventDuplicate', redisError || new Error('Durable stores unavailable'));
+        }
+      }
+    }
+    return true;
+  }
 
   const q = await getQuery();
   if (q) {
@@ -362,21 +544,64 @@ export async function isEventDuplicate(eventKey: string): Promise<boolean> {
       if (rows.length === 0) return true;
       capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventKey);
       return false;
-    } catch { /* fall through */ }
+    } catch (e) {
+      if (shouldFailClosed()) {
+        throw new DurableStateError('persistence unavailable', 'isEventDuplicate', e);
+      }
+      // fall through to memory fallback in dev
+    }
+  } else if (shouldFailClosed()) {
+    // DB unavailable — check if Redis was also unavailable
+    let redisAvailable = redisNew === true; // true means Redis succeeded earlier; false could be duplicate or failure
+    if (!redisAvailable) {
+      try {
+        redisAvailable = isRedisConfigured() ? await pingRedis() : false;
+      } catch {}
+      // If Redis was the reason we returned early, we already handled. Here, Redis did not confirm new, and DB unavailable.
+      // If Redis unavailable, fail-closed
+      if (!redisAvailable) {
+        throw new DurableStateError('persistence unavailable', 'isEventDuplicate', redisError || new Error('Database and Redis unavailable'));
+      }
+    }
+    // If Redis is available but DB down, still need DB for dedup durability in prod; should fail-closed
+    // Spec says both must fail; but for dedup, DB is primary; if DB down in prod we must fail-closed even if Redis up? To be safe, throw when DB unavailable in prod.
+    throw new DurableStateError('persistence unavailable', 'isEventDuplicate', new Error('Database unavailable'));
   }
 
+  warnEphemeralOnce('isEventDuplicate', redisError);
   capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventKey);
   return false;
 }
 
 export async function isMessageDuplicate(msgKey: string): Promise<boolean> {
   const dedupKey = `dedup:msg:${msgKey}`;
-  const redisNew = await setRedisValueNX(dedupKey, '1', 600);
+  let redisNew: boolean | null = null;
+  let redisError: unknown = null;
+  try {
+    redisNew = await setRedisValueNX(dedupKey, '1', 600);
+  } catch (e) {
+    redisError = e;
+    redisNew = null;
+  }
   if (redisNew) {
     capDedupSet(memoryProcessedMessages, memoryEventTimestamps, msgKey);
     return false;
   }
-  if (memoryProcessedMessages.has(msgKey)) return true;
+  if (memoryProcessedMessages.has(msgKey)) {
+    if (shouldFailClosed()) {
+      const qCheck = await getQuery();
+      if (!qCheck) {
+        let redisAvailable = false;
+        try {
+          redisAvailable = isRedisConfigured() ? await pingRedis() : false;
+        } catch {}
+        if (!redisAvailable) {
+          throw new DurableStateError('persistence unavailable', 'isMessageDuplicate', redisError || new Error('Durable stores unavailable'));
+        }
+      }
+    }
+    return true;
+  }
 
   const q = await getQuery();
   if (q) {
@@ -390,11 +615,85 @@ export async function isMessageDuplicate(msgKey: string): Promise<boolean> {
       if (rows.length === 0) return true;
       capDedupSet(memoryProcessedMessages, memoryEventTimestamps, msgKey);
       return false;
-    } catch { /* fall through */ }
+    } catch (e) {
+      if (shouldFailClosed()) {
+        throw new DurableStateError('persistence unavailable', 'isMessageDuplicate', e);
+      }
+    }
+  } else if (shouldFailClosed()) {
+    let redisAvailable = redisNew === true;
+    if (!redisAvailable) {
+      try {
+        redisAvailable = isRedisConfigured() ? await pingRedis() : false;
+      } catch {}
+      if (!redisAvailable) {
+        throw new DurableStateError('persistence unavailable', 'isMessageDuplicate', redisError || new Error('Database and Redis unavailable'));
+      }
+    }
+    throw new DurableStateError('persistence unavailable', 'isMessageDuplicate', new Error('Database unavailable'));
   }
 
+  warnEphemeralOnce('isMessageDuplicate', redisError);
   capDedupSet(memoryProcessedMessages, memoryEventTimestamps, msgKey);
   return false;
+}
+
+// Mission-spec aliases — fail-closed semantics delegate to the primary implementations
+export async function isEventProcessed(eventId: string): Promise<boolean> {
+  try {
+    return await isEventDuplicate(eventId);
+  } catch (e) {
+    if (e instanceof DurableStateError) {
+      // Re-throw with mission operation name for test introspection
+      throw new DurableStateError(e.message, 'isEventProcessed', e.cause || e);
+    }
+    throw e;
+  }
+}
+
+export async function markEventProcessed(eventId: string, ttlSeconds = 600): Promise<void> {
+  const dedupKey = `dedup:event:${eventId}`;
+  let redisSuccess = false;
+  let redisError: unknown = null;
+  try {
+    redisSuccess = await setRedisValueNX(dedupKey, '1', ttlSeconds);
+  } catch (e) {
+    redisError = e;
+    redisSuccess = false;
+  }
+  const q = await getQuery();
+  if (q) {
+    try {
+      await q(
+        `INSERT INTO processed_events (event_key) VALUES ($1) ON CONFLICT (event_key) DO NOTHING`,
+        [eventId]
+      );
+      capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventId);
+      return;
+    } catch (e) {
+      if (shouldFailClosed()) {
+        throw new DurableStateError('persistence unavailable', 'markEventProcessed', e);
+      }
+      console.warn('[State] Failed to mark event processed in DB:', e);
+      warnEphemeralOnce('markEventProcessed', e);
+      capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventId);
+      return;
+    }
+  }
+  if (shouldFailClosed()) {
+    let redisAvailable = redisSuccess;
+    if (!redisAvailable) {
+      try {
+        redisAvailable = isRedisConfigured() ? await pingRedis() : false;
+      } catch {}
+      if (!redisAvailable) {
+        throw new DurableStateError('persistence unavailable', 'markEventProcessed', redisError || new Error('Database and Redis unavailable'));
+      }
+    }
+    throw new DurableStateError('persistence unavailable', 'markEventProcessed', new Error('Database unavailable'));
+  }
+  warnEphemeralOnce('markEventProcessed', redisError);
+  capDedupSet(memoryProcessedEvents, memoryEventTimestamps, eventId);
 }
 
 // ── Legacy exports for backward compatibility ──

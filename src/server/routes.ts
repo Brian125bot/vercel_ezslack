@@ -470,16 +470,47 @@ router.post('/slack/events', async (req: any, res: any) => {
       return res.status(401).send(`Unauthorized: ${signatureError}`);
     }
 
-    // Shared durable-dependency gate
-    await requireDurableDependencies();
+    // Shared durable-dependency gate + deduplication with fail-closed boundary
+    const eventId = req.body?.event_id;
+    try {
+      await requireDurableDependencies();
 
-    const eventId = req.body.event_id;
-    if (eventId) {
-      const isDup = await isEventDuplicate(eventId);
-      if (isDup) {
-        console.log(`[Deduplication] Dropping duplicate event: ${eventId}`);
-        return res.status(200).send('OK (Duplicate event ignored)');
+      if (eventId) {
+        const isDup = await isEventDuplicate(eventId);
+        if (isDup) {
+          console.log(`[Deduplication] Dropping duplicate event: ${eventId}`);
+          return res.status(200).send('OK (Duplicate event ignored)');
+        }
       }
+
+      const { event: eventForDedup } = req.body;
+      if (!eventForDedup) {
+        return res.status(400).send('Bad Request: Missing event container');
+      }
+
+      if (eventForDedup.bot_id || eventForDedup.user === undefined) {
+        console.log(`[Loop Prevention] Ignoring bot-originated message (bot_id: ${eventForDedup.bot_id || 'unspecified'})`);
+        return res.status(200).send('OK (Self-event and bot-events skipped)');
+      }
+
+      const dedupMsgKey = eventForDedup.client_msg_id ? `msgid-${eventForDedup.client_msg_id}` : (eventForDedup.channel && eventForDedup.ts ? `msgts-${eventForDedup.channel}-${eventForDedup.ts}` : null);
+      if (dedupMsgKey) {
+        const isMsgDup = await isMessageDuplicate(dedupMsgKey);
+        if (isMsgDup) {
+          console.log(`[Deduplication] Dropping duplicate event message: ${dedupMsgKey}`);
+          return res.status(200).send('OK (Duplicate event message ignored)');
+        }
+      }
+      // Deduplication succeeded — continue to main event handling below
+    } catch (err: any) {
+      if (err instanceof DurableStateError || err?.name === 'DurableStateError') {
+        console.error('[Ingress] Persistence unavailable, failing closed for Slack retry', { operation: (err as any).operation || (err as any).code || 'unknown', error: err.message });
+        if (!res.headersSent) {
+          res.set('Retry-After', '5');
+          return res.status(503).json({ error: 'persistence_unavailable', retry_after: 5 });
+        }
+      }
+      throw err;
     }
 
     const { event } = req.body;
@@ -490,15 +521,6 @@ router.post('/slack/events', async (req: any, res: any) => {
     if (event.bot_id || event.user === undefined) {
       console.log(`[Loop Prevention] Ignoring bot-originated message (bot_id: ${event.bot_id || 'unspecified'})`);
       return res.status(200).send('OK (Self-event and bot-events skipped)');
-    }
-
-    const msgKey = event.client_msg_id ? `msgid-${event.client_msg_id}` : (event.channel && event.ts ? `msgts-${event.channel}-${event.ts}` : null);
-    if (msgKey) {
-      const isMsgDup = await isMessageDuplicate(msgKey);
-      if (isMsgDup) {
-        console.log(`[Deduplication] Dropping duplicate event message: ${msgKey}`);
-        return res.status(200).send('OK (Duplicate event message ignored)');
-      }
     }
 
     const logItem: SlackEventLog = {
@@ -561,7 +583,9 @@ router.post('/slack/events', async (req: any, res: any) => {
     console.error(`[Synchronous Processing Crash] `, syncErr);
     if (!res.headersSent) {
       if (syncErr instanceof DurableStateError || syncErr?.name === 'DurableStateError') {
-        return res.status(syncErr.status || 503).json({ error: 'Service temporarily unavailable due to storage outage.' });
+        console.error('[Ingress] Persistence unavailable, failing closed for Slack retry', { operation: (syncErr as any).operation || (syncErr as any).code || 'unknown', error: syncErr.message });
+        res.set('Retry-After', '5');
+        return res.status(503).json({ error: 'persistence_unavailable', retry_after: 5 });
       }
       res.status(400).send(`Exception caught: ${syncErr.message || String(syncErr)}`);
     }
