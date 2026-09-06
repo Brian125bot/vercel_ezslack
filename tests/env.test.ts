@@ -30,6 +30,8 @@ describe('validateEnv', () => {
     process.env.DASHBOARD_PASSWORD = 'strong-password';
     process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
     process.env.APP_URL = 'https://example.com';
+    process.env.KV_REST_API_URL = 'https://example.upstash.io';
+    process.env.KV_REST_API_TOKEN = 'test-kv-token';
   }
 
   // ── Critical: missing vars ──────────────────────────────────────────────
@@ -286,6 +288,18 @@ describe('validateEnv', () => {
     const { validateEnv } = await import('../src/server/env.js');
     expect(() => validateEnv()).not.toThrow();
     expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing Redis configuration in production', async () => {
+    setAllVars();
+    process.env.NODE_ENV = 'production';
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    const { validateEnv } = await import('../src/server/env.js');
+    expect(() => validateEnv()).toThrow('process.exit(1)');
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('KV_REST_API_URL'));
   });
 
   // ── Vercel guard ────────────────────────────────────────────────────────

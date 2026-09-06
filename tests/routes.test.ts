@@ -20,6 +20,7 @@ const {
   Semaphore,
   ensureSchemaReady,
   getSchemaReadiness,
+  requireDurableDependencies,
 } = vi.hoisted(() => ({
   selectedModel: 'gemini-3.1-flash-lite',
   setSelectedModel: vi.fn(),
@@ -49,6 +50,7 @@ const {
   Semaphore: class { acquire() {} release() {} },
   ensureSchemaReady: vi.fn().mockResolvedValue(undefined),
   getSchemaReadiness: vi.fn().mockReturnValue({ state: 'ready', ready: true, lastFailureAt: null }),
+  requireDurableDependencies: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../src/server/auth.js', () => ({
@@ -83,6 +85,7 @@ vi.mock('../src/server/storage/db.js', () => ({ isDbAvailable }));
 vi.mock('../src/server/storage/readiness.js', () => ({
   ensureSchemaReady,
   getSchemaReadiness,
+  requireDurableDependencies,
 }));
 
 vi.mock('../src/server/agent/orchestrator.js', () => ({ runAgentPipeline }));
@@ -136,6 +139,7 @@ describe('Dashboard routes — Gemini 3.8 Flash support', () => {
     delete process.env.CLOUD_SQL_CONNECTION_NAME;
     delete process.env.SQL_HOST;
     ensureSchemaReady.mockResolvedValue(undefined);
+    requireDurableDependencies.mockResolvedValue(undefined);
     getSchemaReadiness.mockReturnValue({ state: 'ready', ready: true, lastFailureAt: null });
   });
 
@@ -160,7 +164,7 @@ describe('Dashboard routes — Gemini 3.8 Flash support', () => {
 
     await handler(req, res);
 
-    expect(ensureSchemaReady).toHaveBeenCalledTimes(1);
+    expect(requireDurableDependencies).toHaveBeenCalledTimes(1);
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       status: 'ready',
@@ -169,7 +173,7 @@ describe('Dashboard routes — Gemini 3.8 Flash support', () => {
   });
 
   it('GET /api/readiness reports a retryable unavailable state after a migration failure', async () => {
-    ensureSchemaReady.mockRejectedValueOnce(new Error('migration failed'));
+    requireDurableDependencies.mockRejectedValueOnce(new Error('migration failed'));
     getSchemaReadiness.mockReturnValueOnce({ state: 'failed', ready: false, lastFailureAt: '2026-08-22T00:00:00.000Z' });
     const { router } = await import('../src/server/routes.js');
     const handler = findRoute(router, 'GET', '/readiness');

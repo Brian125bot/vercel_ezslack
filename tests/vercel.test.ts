@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ensureSchemaReady } from '../src/server/storage/readiness.js';
+import { requireDurableDependencies } from '../src/server/storage/readiness.js';
+import { DurableStateError } from '../src/server/storage/errors.js';
 import { pollScheduledTriggers } from '../src/server/agent/scheduler.js';
 
 // ---- Mocks ----
@@ -10,6 +11,10 @@ vi.mock('../src/server/storage/migrations.js', () => ({
 vi.mock('../src/server/storage/readiness.js', () => ({
   ensureSchemaReady: vi.fn().mockResolvedValue(undefined),
   getSchemaReadiness: vi.fn().mockReturnValue({ state: 'ready', ready: true, lastFailureAt: null }),
+  requireDurableDependencies: vi.fn().mockResolvedValue(undefined),
+  isDurableStateRequired: vi.fn().mockReturnValue(false),
+  isRedisRequired: vi.fn().mockReturnValue(false),
+  resetSchemaReadinessForTests: vi.fn(),
 }));
 
 vi.mock('../src/server/agent/scheduler.js', () => ({
@@ -18,8 +23,21 @@ vi.mock('../src/server/agent/scheduler.js', () => ({
   stopScheduler: vi.fn()
 }));
 
+vi.mock('../src/server/agent/maintenance.js', () => ({
+  runSystemMaintenance: vi.fn().mockImplementation(async () => {
+    const { agentStore } = await import('../src/server/storage/agentStore.js');
+    const { pollScheduledTriggers } = await import('../src/server/agent/scheduler.js');
+    await agentStore.recoverStaleClaims();
+    await agentStore.reapExpiredApprovals();
+    await pollScheduledTriggers();
+    return { recovered: 0, expiredApprovals: 0 };
+  })
+}));
+
 vi.mock('../src/server/storage/db.js', () => ({
-  isDbAvailable: vi.fn().mockResolvedValue(true)
+  isDbAvailable: vi.fn().mockResolvedValue(true),
+  query: vi.fn().mockResolvedValue([]),
+  closeDb: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../src/server/state.js', () => ({
@@ -80,6 +98,7 @@ describe('Vercel Migration Integration Tests', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+    vi.mocked(requireDurableDependencies).mockResolvedValue(undefined);
     process.env = {
       ...originalEnv, VERCEL: '1',
       GEMINI_API_KEY: 'test-ai-key',
@@ -107,7 +126,7 @@ describe('Vercel Migration Integration Tests', () => {
       const layer = stack.find((s: any) => 
         s.handle &&
         s.handle.length === 3 &&
-        s.handle.toString().includes('ensureSchemaReady')
+        s.handle.toString().includes('requireDurableDependencies')
       );
       return layer ? layer.handle : null;
     }
@@ -120,7 +139,7 @@ describe('Vercel Migration Integration Tests', () => {
 
       await middleware(mockReq as any, mockRes as any, next);
 
-      expect(ensureSchemaReady).not.toHaveBeenCalled();
+      expect(requireDurableDependencies).not.toHaveBeenCalled();
       expect(next).toHaveBeenCalledTimes(1);
     });
 
@@ -134,7 +153,7 @@ describe('Vercel Migration Integration Tests', () => {
 
       await middleware(mockReq as any, mockRes as any, next);
 
-      expect(ensureSchemaReady).toHaveBeenCalledTimes(1);
+      expect(requireDurableDependencies).toHaveBeenCalledTimes(1);
       expect(next).toHaveBeenCalledTimes(1);
     });
 
@@ -159,14 +178,16 @@ describe('Vercel Migration Integration Tests', () => {
         middleware(mockReq3 as any, mockRes as any, next3)
       ]);
 
-      expect(ensureSchemaReady).toHaveBeenCalledTimes(3);
+      expect(requireDurableDependencies).toHaveBeenCalledTimes(3);
       expect(next1).toHaveBeenCalled();
       expect(next2).toHaveBeenCalled();
       expect(next3).toHaveBeenCalled();
     });
 
     it('returns 503 and does not invoke downstream routing when schema readiness fails', async () => {
-      vi.mocked(ensureSchemaReady).mockRejectedValueOnce(new Error('migration unavailable'));
+      vi.mocked(requireDurableDependencies).mockRejectedValueOnce(
+        new DurableStateError('migration unavailable', 'SCHEMA_NOT_READY', 'schema', 503)
+      );
       const middleware = await getMiddleware();
       const mockReq = { path: '/status', ip: '127.0.0.1', headers: {}, get: vi.fn().mockReturnValue('') };
       const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn() };
@@ -176,7 +197,7 @@ describe('Vercel Migration Integration Tests', () => {
 
       expect(mockRes.status).toHaveBeenCalledWith(503);
       expect(mockRes.json).toHaveBeenCalledWith({
-        error: 'Service temporarily unavailable while database schema is preparing'
+        error: 'Service temporarily unavailable due to storage outage.'
       });
       expect(next).not.toHaveBeenCalled();
     });
@@ -240,7 +261,9 @@ describe('Vercel Migration Integration Tests', () => {
 
     it('returns 503 and skips maintenance when schema readiness fails', async () => {
       process.env.CRON_SECRET = 'super-secret-cron-key';
-      vi.mocked(ensureSchemaReady).mockRejectedValueOnce(new Error('migration unavailable'));
+      vi.mocked(requireDurableDependencies).mockRejectedValueOnce(
+        new DurableStateError('migration unavailable', 'SCHEMA_NOT_READY', 'schema', 503)
+      );
       const { default: cronHandler } = await import('../api/cron/poll.js');
       const mockReq = { headers: { authorization: 'Bearer super-secret-cron-key' } };
       const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn() };
@@ -249,7 +272,7 @@ describe('Vercel Migration Integration Tests', () => {
 
       expect(mockRes.status).toHaveBeenCalledWith(503);
       expect(mockRes.json).toHaveBeenCalledWith({
-        error: 'Service temporarily unavailable while database schema is preparing'
+        error: 'Service temporarily unavailable due to storage outage.'
       });
       expect(pollScheduledTriggers).not.toHaveBeenCalled();
     });
@@ -389,7 +412,9 @@ describe('Vercel Migration Integration Tests', () => {
 
   describe('4. Vercel Workflow Handler - Direct Reply Concurrency & Error Release', () => {
     it('returns 503 before model resolution or agent work when schema readiness fails', async () => {
-      vi.mocked(ensureSchemaReady).mockRejectedValueOnce(new Error('migration unavailable'));
+      vi.mocked(requireDurableDependencies).mockRejectedValueOnce(
+        new DurableStateError('migration unavailable', 'SCHEMA_NOT_READY', 'schema', 503)
+      );
       const { default: workflowHandler } = await import('../api/workflows/agentRun.js');
       const { getSelectedModel } = await import('../src/server/state.js');
       const { runAgentPipeline } = await import('../src/server/agent/orchestrator.js');
@@ -407,7 +432,7 @@ describe('Vercel Migration Integration Tests', () => {
 
       expect(mockRes.status).toHaveBeenCalledWith(503);
       expect(mockRes.json).toHaveBeenCalledWith({
-        error: 'Service temporarily unavailable while database schema is preparing'
+        error: 'Service temporarily unavailable due to storage outage.'
       });
       expect(getSelectedModel).not.toHaveBeenCalled();
       expect(runAgentPipeline).not.toHaveBeenCalled();

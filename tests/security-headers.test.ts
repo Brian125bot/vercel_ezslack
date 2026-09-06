@@ -20,6 +20,12 @@ describe('default (development) security headers', () => {
     process.env.DASHBOARD_PASSWORD = 'strong-password';
     process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
     process.env.APP_URL = 'https://example.com';
+    process.env.REQUIRE_REDIS = 'false';
+    process.env.REQUIRE_DURABLE_STATE = 'false';
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
     vi.resetModules();
     const mod = await import('../server.js');
     const app: Express = mod.default;
@@ -92,6 +98,12 @@ describe('production security headers', () => {
     process.env.DASHBOARD_PASSWORD = 'strong-password';
     process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
     process.env.APP_URL = 'https://example.com';
+    process.env.REQUIRE_REDIS = 'false';
+    process.env.REQUIRE_DURABLE_STATE = 'false';
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
     vi.resetModules();
     const mod = await import('../server.js');
     const app: Express = mod.default;
@@ -132,6 +144,12 @@ describe('HTTPS redirect (production)', () => {
     process.env.DASHBOARD_PASSWORD = 'strong-password';
     process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
     process.env.APP_URL = 'https://example.com';
+    process.env.REQUIRE_REDIS = 'false';
+    process.env.REQUIRE_DURABLE_STATE = 'false';
+    delete process.env.KV_REST_API_URL;
+    delete process.env.KV_REST_API_TOKEN;
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
     delete process.env.DISABLE_HTTPS_REDIRECT;
     vi.resetModules();
     const mod = await import('../server.js');
@@ -214,6 +232,8 @@ describe('HTTPS redirect (production)', () => {
     });
     try {
       process.env.NODE_ENV = 'production';
+      process.env.REQUIRE_REDIS = 'false';
+      process.env.REQUIRE_DURABLE_STATE = 'false';
       process.env.APP_URL = 'not-a-url';
       vi.resetModules();
 

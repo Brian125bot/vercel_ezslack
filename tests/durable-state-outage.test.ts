@@ -52,48 +52,78 @@ vi.mock('../src/server/agent/handlers/index.js', () => ({
 describe('P0 Item 2 Durable-State Remediation Suite', () => {
   const originalEnv = { ...process.env };
 
-  beforeEach(() => {
+  async function resetDependencyMocks() {
+    const { isDbAvailable } = await import('../src/server/storage/db.js');
+    const { isRedisConfigured, pingRedis } = await import('../src/server/redis.js');
+    vi.mocked(isDbAvailable).mockReset();
+    vi.mocked(isDbAvailable).mockResolvedValue(true);
+    vi.mocked(isRedisConfigured).mockReset();
+    vi.mocked(isRedisConfigured).mockReturnValue(true);
+    vi.mocked(pingRedis).mockReset();
+    vi.mocked(pingRedis).mockResolvedValue(true);
+  }
+
+  beforeEach(async () => {
     vi.clearAllMocks();
+    process.env = { ...originalEnv, NODE_ENV: 'test' };
+    delete process.env.REQUIRE_DURABLE_STATE;
+    delete process.env.REQUIRE_REDIS;
+    delete process.env.DATABASE_URL;
+    delete process.env.CLOUD_SQL_CONNECTION_NAME;
+    delete process.env.SQL_HOST;
+    await resetDependencyMocks();
     resetSchemaReadinessForTests();
-    process.env = { ...originalEnv };
   });
 
   afterEach(() => {
-    process.env = { ...originalEnv };
+    process.env = { ...originalEnv, NODE_ENV: 'test' };
     resetSchemaReadinessForTests();
   });
 
   describe('1. Readiness Gate & Dependency Checks', () => {
     it('throws DurableStateError when database is unreachable in strict mode', async () => {
       process.env.REQUIRE_DURABLE_STATE = 'true';
+      process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
       const { isDbAvailable } = await import('../src/server/storage/db.js');
-      vi.mocked(isDbAvailable).mockResolvedValueOnce(false);
+      vi.mocked(isDbAvailable).mockResolvedValue(false);
 
-      await expect(requireDurableDependencies()).rejects.toThrow(DurableStateError);
-      await expect(requireDurableDependencies()).rejects.toThrow('Database is unreachable or unavailable');
+      await expect(requireDurableDependencies()).rejects.toMatchObject({
+        name: 'DurableStateError',
+        message: 'Database is unreachable or unavailable',
+        code: 'DATABASE_UNAVAILABLE',
+      });
     });
 
     it('throws DurableStateError when Redis is unconfigured in strict mode', async () => {
       process.env.REQUIRE_REDIS = 'true';
+      process.env.REQUIRE_DURABLE_STATE = 'false';
       const { isRedisConfigured } = await import('../src/server/redis.js');
-      vi.mocked(isRedisConfigured).mockReturnValueOnce(false);
+      vi.mocked(isRedisConfigured).mockReturnValue(false);
 
-      await expect(requireDurableDependencies()).rejects.toThrow(DurableStateError);
-      await expect(requireDurableDependencies()).rejects.toThrow('Redis configuration is missing');
+      await expect(requireDurableDependencies()).rejects.toMatchObject({
+        name: 'DurableStateError',
+        message: expect.stringContaining('Redis configuration is missing'),
+        code: 'REDIS_UNAVAILABLE',
+      });
     });
 
     it('throws DurableStateError when Redis ping fails in strict mode', async () => {
       process.env.REQUIRE_REDIS = 'true';
+      process.env.REQUIRE_DURABLE_STATE = 'false';
       const { pingRedis } = await import('../src/server/redis.js');
-      vi.mocked(pingRedis).mockResolvedValueOnce(false);
+      vi.mocked(pingRedis).mockResolvedValue(false);
 
-      await expect(requireDurableDependencies()).rejects.toThrow(DurableStateError);
-      await expect(requireDurableDependencies()).rejects.toThrow('Redis store is unreachable or unavailable');
+      await expect(requireDurableDependencies()).rejects.toMatchObject({
+        name: 'DurableStateError',
+        message: 'Redis store is unreachable or unavailable',
+        code: 'REDIS_UNAVAILABLE',
+      });
     });
 
     it('passes successfully when both DB and Redis are healthy', async () => {
       process.env.REQUIRE_DURABLE_STATE = 'true';
       process.env.REQUIRE_REDIS = 'true';
+      process.env.DATABASE_URL = 'postgres://user:pass@host:5432/db';
 
       await expect(requireDurableDependencies()).resolves.toBeUndefined();
     });
