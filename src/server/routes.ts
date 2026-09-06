@@ -8,7 +8,8 @@ import { classifyIntent } from './agent/intent.js';
 import { SlackEventLog } from '../types.js';
 import { agentStore } from './storage/agentStore.js';
 import { isDbAvailable } from './storage/db.js';
-import { ensureSchemaReady, getSchemaReadiness } from './storage/readiness.js';
+import { ensureSchemaReady, getSchemaReadiness, requireDurableDependencies } from './storage/readiness.js';
+import { DurableStateError } from './storage/errors.js';
 import { runAgentPipeline } from './agent/orchestrator.js';
 import { Semaphore } from './agent/semaphore.js';
 import { ALLOWED_MODELS } from './agent/models.js';
@@ -183,6 +184,7 @@ router.get('/agent/audit', requireDashboardAuth, async (req, res) => {
 
 router.post('/agent/approvals/:id/resolve', requireDashboardAuth, async (req, res) => {
   try {
+    await requireDurableDependencies();
     const { status } = req.body;
     if (status !== 'approved' && status !== 'rejected') {
       return res.status(400).json({ error: 'Status must be approved or rejected' });
@@ -227,6 +229,9 @@ router.post('/agent/approvals/:id/resolve', requireDashboardAuth, async (req, re
 
     res.json({ success: true, approval });
   } catch (error: any) {
+    if (error instanceof DurableStateError || error?.name === 'DurableStateError') {
+      return res.status(error.status || 503).json({ error: 'Service temporarily unavailable due to storage outage.' });
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -308,24 +313,27 @@ router.get('/health', (_req, res) => {
 // ── Readiness endpoint (no auth, verifies durable schema state) ──
 router.get('/readiness', async (_req, res) => {
   try {
-    await ensureSchemaReady();
+    await requireDurableDependencies();
     return res.status(200).json({ status: 'ready', schema: getSchemaReadiness() });
   } catch {
     return res.status(503).json({ status: 'not_ready', schema: getSchemaReadiness() });
   }
 });
 
-// ── W3-C: Slack interactivity endpoint (Block Kit button callbacks) ──
+// ── Slack interactivity endpoint (Block Kit button callbacks) ──
 router.post('/slack/interactivity', async (req: any, res: any) => {
   try {
-    // W3-F7: Verify Slack signature before processing interactivity payloads
+    // 1. Verify Slack signature before processing interactivity payloads
     const sigResult = verifySlackSignature(req);
     if (!sigResult.valid) {
       console.log(`[Interactivity Signature Error] ${sigResult.error}`);
       return res.status(401).send(`Unauthorized: ${sigResult.error}`);
     }
 
-    // Slack sends the payload as a URL-encoded `payload` field
+    // 2. Shared durable-dependency gate: fail closed if DB/Redis unavailable
+    await requireDurableDependencies();
+
+    // 3. Slack sends the payload as a URL-encoded `payload` field
     const rawPayload = req.body?.payload || req.body;
     const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;
     
@@ -333,31 +341,40 @@ router.post('/slack/interactivity', async (req: any, res: any) => {
       return res.status(200).send('OK');
     }
 
-    // ACK immediately
-    res.status(200).send('');
+    const action = payload.actions[0];
+    const actionId: string = action.action_id || '';
+    const approvalId: string = action.value || '';
+    const userId: string = payload.user?.id || '';
+    const channelId: string = payload.channel?.id || '';
 
-    // W3-C: Wrap post-response async work in waitUntil so Vercel
-    // serverless doesn't terminate the function before it completes.
-    waitUntil((async () => {
-      try {
-        const action = payload.actions[0];
-        const actionId: string = action.action_id || '';
-        const approvalId: string = action.value || '';
-        const userId: string = payload.user?.id || '';
-        const channelId: string = payload.channel?.id || '';
+    if (!approvalId || (!actionId.startsWith('approval_approve') && !actionId.startsWith('approval_reject'))) {
+      return res.status(200).send('OK');
+    }
 
-        if (!approvalId || (!actionId.startsWith('approval_approve') && !actionId.startsWith('approval_reject'))) {
-          return;
-        }
+    const newStatus: 'approved' | 'rejected' = actionId.includes('approve') ? 'approved' : 'rejected';
 
-        const newStatus: 'approved' | 'rejected' = actionId.includes('approve') ? 'approved' : 'rejected';
+    // 4. Authorization & lookup check in DB
+    const loadedApproval = await agentStore.getApprovalById(approvalId);
+    if (!loadedApproval) {
+      return res.status(200).send('OK');
+    }
 
-        const loadedApproval = await agentStore.getApprovalById(approvalId);
-        if (!loadedApproval) {
-          return;
-        }
+    if (userId !== loadedApproval.requested_from_user_id && !SLACK_APPROVAL_ADMIN_IDS.includes(userId)) {
+      if (loadedApproval.run_id) {
+        const trace = await agentStore.getRunTrace(loadedApproval.run_id);
+        await agentStore.appendAuditEvent({
+          workspace_id: trace.goal.workspace_id,
+          goal_id: loadedApproval.goal_id!,
+          run_id: loadedApproval.run_id,
+          type: 'approval.unauthorized_attempt',
+          actor: userId,
+          summary: `User ${userId} attempted to resolve an approval requested by ${loadedApproval.requested_from_user_id}`,
+          payload: { approvalId: loadedApproval.id, attemptedBy: userId, requestedFrom: loadedApproval.requested_from_user_id }
+        });
+      }
 
-        if (userId !== loadedApproval.requested_from_user_id && !SLACK_APPROVAL_ADMIN_IDS.includes(userId)) {
+      waitUntil((async () => {
+        try {
           const { WebClient } = await import('@slack/web-api');
           const client = new WebClient(process.env.SLACK_BOT_TOKEN);
           await client.chat.postEphemeral({
@@ -365,51 +382,47 @@ router.post('/slack/interactivity', async (req: any, res: any) => {
             user: userId,
             text: `Only <@${loadedApproval.requested_from_user_id}> or an authorized admin can approve or reject this request.`
           });
+        } catch { /* ignore */ }
+      })());
 
-          if (loadedApproval.run_id) {
-            const trace = await agentStore.getRunTrace(loadedApproval.run_id);
-            await agentStore.appendAuditEvent({
-              workspace_id: trace.goal.workspace_id,
-              goal_id: loadedApproval.goal_id!,
-              run_id: loadedApproval.run_id,
-              type: 'approval.unauthorized_attempt',
-              actor: userId,
-              summary: `User ${userId} attempted to resolve an approval requested by ${loadedApproval.requested_from_user_id}`,
-              payload: { approvalId: loadedApproval.id, attemptedBy: userId, requestedFrom: loadedApproval.requested_from_user_id }
-            });
-          }
-          return;
+      return res.status(200).send('OK');
+    }
+
+    // 5. Synchronous atomic durable resolution in DB before returning 200
+    const approval = await agentStore.resolveApproval(approvalId, newStatus);
+
+    if (approval.run_id) {
+      const trace = await agentStore.getRunTrace(approval.run_id);
+      await agentStore.appendAuditEvent({
+        workspace_id: trace.goal.workspace_id,
+        goal_id: approval.goal_id!,
+        run_id: approval.run_id,
+        type: `approval.${newStatus}`,
+        actor: userId,
+        summary: `User ${newStatus} execution via Block Kit button`,
+        payload: { approvalId: approval.id }
+      });
+
+      if (newStatus === 'rejected') {
+        await agentStore.updateRunStatus(approval.run_id, 'cancelled', { failure_reason: 'User rejected via Slack button.' });
+        if (approval.goal_id) {
+          await agentStore.updateGoalStatus(approval.goal_id, 'cancelled');
         }
+      }
+    }
 
-        const approval = await agentStore.resolveApproval(approvalId, newStatus);
+    // 6. Return HTTP 200 only AFTER durable acceptance in DB
+    res.status(200).send('');
 
-        // Update the original Block Kit message to remove buttons
+    // 7. Background UI update & workflow resume via waitUntil
+    waitUntil((async () => {
+      try {
         const { updateApprovalMessage } = await import('./tools/slack.js');
         await updateApprovalMessage(approval, newStatus, channelId);
 
-        // Create audit event
-        if (approval.run_id) {
-          const trace = await agentStore.getRunTrace(approval.run_id);
-          await agentStore.appendAuditEvent({
-            workspace_id: trace.goal.workspace_id,
-            goal_id: approval.goal_id!,
-            run_id: approval.run_id,
-            type: `approval.${newStatus}`,
-            actor: userId,
-            summary: `User ${newStatus} execution via Block Kit button`,
-            payload: { approvalId: approval.id }
-          });
-        }
-
-        // Resume or cancel based on outcome
         if (newStatus === 'approved' && approval.run_id) {
           const { resumeAgentPipeline } = await import('./agent/orchestrator.js');
           await resumeAgentPipeline(approval.run_id);
-        } else if (newStatus === 'rejected' && approval.run_id) {
-          await agentStore.updateRunStatus(approval.run_id, 'cancelled', { failure_reason: 'User rejected via Slack button.' });
-          if (approval.goal_id) {
-            await agentStore.updateGoalStatus(approval.goal_id, 'cancelled');
-          }
         }
       } catch (e: any) {
         console.error('[Interactivity waitUntil Error]', e.message);
@@ -418,7 +431,10 @@ router.post('/slack/interactivity', async (req: any, res: any) => {
   } catch (err: any) {
     console.error('[Interactivity Error]', err.message);
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message });
+      const isDurable = err instanceof DurableStateError || err?.name === 'DurableStateError';
+      return res.status(isDurable ? (err.status || 503) : 503).json({
+        error: 'Service temporarily unavailable due to storage outage.'
+      });
     }
   }
 });
@@ -454,6 +470,9 @@ router.post('/slack/events', async (req: any, res: any) => {
       return res.status(401).send(`Unauthorized: ${signatureError}`);
     }
 
+    // Shared durable-dependency gate
+    await requireDurableDependencies();
+
     const eventId = req.body.event_id;
     if (eventId) {
       const isDup = await isEventDuplicate(eventId);
@@ -473,8 +492,6 @@ router.post('/slack/events', async (req: any, res: any) => {
       return res.status(200).send('OK (Self-event and bot-events skipped)');
     }
 
-    // Message-level deduplication: Slack can fire both `app_mention` and `message.channels` for the same user message.
-    // They have different event_id values but identical event.client_msg_id and/or event.channel + event.ts
     const msgKey = event.client_msg_id ? `msgid-${event.client_msg_id}` : (event.channel && event.ts ? `msgts-${event.channel}-${event.ts}` : null);
     if (msgKey) {
       const isMsgDup = await isMessageDuplicate(msgKey);
@@ -499,9 +516,6 @@ router.post('/slack/events', async (req: any, res: any) => {
 
     res.status(200).send('OK');
 
-    // Instead of setImmediate (which freezes on Vercel Serverless), we trigger the Workflow.
-    // In a real Vercel Workflow setup, this might use a specific SDK client.
-    // For now, we'll asynchronously invoke our own workflow endpoint.
     const runPayload = {
       event,
       eventId,
@@ -520,7 +534,6 @@ router.post('/slack/events', async (req: any, res: any) => {
           'Content-Type': 'application/json'
         };
 
-        // Support Vercel Deployment Protection bypass for preview testing
         const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
         if (bypassSecret) {
           headers['x-vercel-protection-bypass'] = bypassSecret;
@@ -546,8 +559,11 @@ router.post('/slack/events', async (req: any, res: any) => {
 
   } catch (syncErr: any) {
     console.error(`[Synchronous Processing Crash] `, syncErr);
-    res.status(400).send(`Exception caught: ${syncErr.message || String(syncErr)}`);
+    if (!res.headersSent) {
+      if (syncErr instanceof DurableStateError || syncErr?.name === 'DurableStateError') {
+        return res.status(syncErr.status || 503).json({ error: 'Service temporarily unavailable due to storage outage.' });
+      }
+      res.status(400).send(`Exception caught: ${syncErr.message || String(syncErr)}`);
+    }
   }
 });
-
-

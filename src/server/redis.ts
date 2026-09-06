@@ -32,6 +32,27 @@ export async function getRedisClient(): Promise<RedisClient | null> {
   }
 }
 
+export async function pingRedis(): Promise<boolean> {
+  if (!isRedisConfigured()) {
+    return false;
+  }
+  const client = await getRedisClient();
+  if (!client) {
+    return false;
+  }
+  try {
+    const res = await client.ping();
+    return res === 'PONG' || res === 'pong' || res != null;
+  } catch (error) {
+    console.warn('[Redis] Ping failed:', error);
+    return false;
+  }
+}
+
+export function resetRedisClientForTests(): void {
+  redisClient = null;
+}
+
 export async function getRedisValue(key: string): Promise<string | null> {
   const client = await getRedisClient();
   if (!client) return null;

@@ -1,5 +1,6 @@
 import { runSystemMaintenance } from '../../src/server/agent/maintenance.js';
-import { ensureSchemaReady } from '../../src/server/storage/readiness.js';
+import { requireDurableDependencies } from '../../src/server/storage/readiness.js';
+import { DurableStateError } from '../../src/server/storage/errors.js';
 
 function isCronAuthorized(authHeader: string | undefined): boolean {
   const cronSecret = process.env.CRON_SECRET;
@@ -23,10 +24,11 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    await ensureSchemaReady();
-  } catch {
+    await requireDurableDependencies();
+  } catch (err: any) {
+    const isDurable = err instanceof DurableStateError || err.name === 'DurableStateError';
     return res.status(503).json({
-      error: 'Service temporarily unavailable while database schema is preparing'
+      error: 'Service temporarily unavailable due to storage outage.'
     });
   }
 
